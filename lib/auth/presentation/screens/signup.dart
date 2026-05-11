@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:commutr_main/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:commutr_main/auth/presentation/screens/pin_map/location_data.dart';
 import 'package:commutr_main/auth/presentation/screens/pin_map/pin_map_screen.dart';
@@ -19,21 +21,25 @@ class _SignupScreenState extends State<SignupScreen> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
   String _selectedGender = 'Male';
-  final TextEditingController _companyCodeController = TextEditingController();
+  final TextEditingController companyCodeController = TextEditingController();
   final TextEditingController _fullNameController = TextEditingController();
   final TextEditingController _mobileController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _stateController = TextEditingController();
   final TextEditingController _pincodeController = TextEditingController();
-  String? _selectedOfficeHub;
-
+  final TextEditingController _officeHubController = TextEditingController();
   bool _isLoading = false;
+  double? _empLat;
+  double? _empLng;
   final Dio _dio = Dio(BaseOptions(
-    baseUrl: 'http://16.112.166.152:5001',
+    baseUrl: 'http://13.235.144.192:5001',
     connectTimeout: const Duration(seconds: 30),
     receiveTimeout: const Duration(seconds: 30),
-    headers: {'Content-Type': 'application/json'},
+    headers: {
+      'Content-Type': 'application/json',
+    },
+
   ));
 
   static const Color _primaryGreen = Color(0xFF1A5C45);
@@ -55,18 +61,21 @@ class _SignupScreenState extends State<SignupScreen> {
       if (pin.isNotEmpty && pin != 'N/A') {
         _pincodeController.text = pin;
       }
+      _empLat = loc.latitude;
+      _empLng = loc.longitude;
     }
   }
 
   @override
   void dispose() {
-    _companyCodeController.dispose();
+    companyCodeController.dispose();
     _fullNameController.dispose();
     _mobileController.dispose();
     _emailController.dispose();
     _cityController.dispose();
     _stateController.dispose();
     _pincodeController.dispose();
+    _officeHubController.dispose();
     _dio.close();
     super.dispose();
   }
@@ -127,7 +136,7 @@ class _SignupScreenState extends State<SignupScreen> {
         "depCode": null,
         "proCode": null,
         "lobCode": null,
-        "gender": _selectedGender,
+        "gender": selectedGender(_selectedGender) ,
         "city": _cityController.text.trim(),
         "pin": _pincodeController.text.trim(),
         "state": _stateController.text.trim(),
@@ -143,16 +152,14 @@ class _SignupScreenState extends State<SignupScreen> {
         "nodalPick": null,
         "nodalDrop": null,
         "geocodeId": null,
-        "empLat": null,
-        "empLng": null,
-        "locationName": _selectedOfficeHub,
+        "empLat": _empLat,
+        "empLng": _empLng,
+        "locationName": _officeHubController.text.trim(),
         "employeeId": null,
         "firstName": nameParts['firstName'],
         "middleName": null,
         "lastName": nameParts['lastName'],
-        "mobileNo": _mobileController.text
-            .trim()
-            .replaceAll(RegExp(r'\s'), ''),
+        "mobileNo": _mobileController.text.trim().replaceAll(RegExp(r'\s'), ''),
         "emailId": _emailController.text.trim(),
         "specialNeeds": null,
         "supEmployeeId": null,
@@ -167,45 +174,39 @@ class _SignupScreenState extends State<SignupScreen> {
         "ipAddress": null
       };
 
+      // ─── DEBUG LOGS ───────────────────────────────────────────────
+      debugPrint('┌─────────────────────────────────────────');
+      debugPrint('│ 🌐 URL     : ${_dio.options.baseUrl}$_apiPath');
+      debugPrint('│ 📤 HEADERS : X-CorporateCode = ${companyCodeController.text}');
+      debugPrint('│ 📦 REQUEST : ${jsonEncode(requestBody)}');
+      debugPrint('└─────────────────────────────────────────');
+      // ─────────────────────────────────────────────────────────────
+
       // Make POST request using Dio
       final response = await _dio.post(
         _apiPath,
         data: requestBody,
+        options: Options(
+          headers: {
+            'X-CorporateCode': companyCodeController.text,
+          },
+        ),
       );
+
+      // ─── DEBUG LOGS ───────────────────────────────────────────────
+      debugPrint('┌─────────────────────────────────────────');
+      debugPrint('│ ✅ STATUS  : ${response.statusCode}');
+      debugPrint('│ 📥 RESPONSE: ${jsonEncode(response.data)}');
+      debugPrint('└─────────────────────────────────────────');
+      // ─────────────────────────────────────────────────────────────
 
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        final responseData = response.data;
-        final userStageId = responseData['userStage_Id'] ?? 'N/A';
-        final tempEmpId = responseData['tempEmpId']?.toString() ?? 'N/A';
-
-        // Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '✅ Registration Successful!',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 4),
-                Text('Temp ID: $tempEmpId'),
-                Text('Stage ID: ${userStageId.substring(0, 8)}...'),
-              ],
-            ),
-            backgroundColor: _primaryGreen,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-
-        // Clear form after success
-        Navigator.push(
+        Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder :(context) => SignupSuccessScreen()),
+          MaterialPageRoute(builder: (context) => SignupSuccessScreen()),
+          (route) => false,
         );
         _clearForm();
       } else {
@@ -213,6 +214,15 @@ class _SignupScreenState extends State<SignupScreen> {
       }
     } on DioException catch (e) {
       if (!mounted) return;
+
+      // ─── DEBUG LOGS ───────────────────────────────────────────────
+      debugPrint('┌─────────────────────────────────────────');
+      debugPrint('│ ❌ DIO ERROR TYPE   : ${e.type}');
+      debugPrint('│ ❌ DIO ERROR MSG    : ${e.message}');
+      debugPrint('│ ❌ DIO STATUS CODE  : ${e.response?.statusCode}');
+      debugPrint('│ ❌ DIO RESPONSE DATA: ${jsonEncode(e.response?.data)}');
+      debugPrint('└─────────────────────────────────────────');
+      // ─────────────────────────────────────────────────────────────
 
       String errorMessage = 'Network error';
       if (e.type == DioExceptionType.connectionTimeout) {
@@ -230,6 +240,13 @@ class _SignupScreenState extends State<SignupScreen> {
       _showSnackBar(errorMessage);
     } catch (e) {
       if (!mounted) return;
+
+      // ─── DEBUG LOGS ───────────────────────────────────────────────
+      debugPrint('┌─────────────────────────────────────────');
+      debugPrint('│ 💥 UNEXPECTED ERROR: ${e.toString()}');
+      debugPrint('└─────────────────────────────────────────');
+      // ─────────────────────────────────────────────────────────────
+
       _showSnackBar('Unexpected error: ${e.toString()}');
     } finally {
       if (mounted) {
@@ -239,19 +256,16 @@ class _SignupScreenState extends State<SignupScreen> {
       }
     }
   }
-
   void _clearForm() {
-    _companyCodeController.clear();
+    companyCodeController.clear();
     _fullNameController.clear();
     _mobileController.clear();
     _emailController.clear();
     _cityController.clear();
     _stateController.clear();
     _pincodeController.clear();
-    setState(() {
-      _selectedGender = 'Male';
-      _selectedOfficeHub = null;
-    });
+    _officeHubController.clear();
+    setState(() => _selectedGender = 'Male');
   }
 
   @override
@@ -314,7 +328,7 @@ class _SignupScreenState extends State<SignupScreen> {
                           child: Column(
                             children: [
                               _buildTextField(
-                                controller: _companyCodeController,
+                                controller: companyCodeController,
                                 label: 'Company Code',
                               ),
                               const SizedBox(height: 4),
@@ -490,8 +504,24 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   String? _validateOfficeHub(String? value) {
-    if (value == null || value.isEmpty) return 'Please select office hub';
+    if (value == null || value.trim().isEmpty) return 'Please enter office hub';
     return null;
+  }
+
+  String selectedGender(String gender) {
+    switch (gender) {
+      case 'Male':
+        return 'M';
+
+      case 'Female':
+        return 'F';
+
+      case 'Other':
+        return 'O';
+
+      default:
+        return '';
+    }
   }
 
   Widget _buildCard({
@@ -633,41 +663,10 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Widget _buildDropdown() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        DropdownButtonFormField<String>(
-          value: _selectedOfficeHub,
-          hint: Text(
-            'Select Office Hub',
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
-          ),
-          icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade600),
-          decoration: InputDecoration(
-            border: InputBorder.none,
-            enabledBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: _dividerColor, width: 1),
-            ),
-            focusedBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: _primaryGreen, width: 1.5),
-            ),
-            errorBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Colors.red.shade400, width: 1),
-            ),
-            focusedErrorBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Colors.red.shade700, width: 1.5),
-            ),
-            errorStyle: TextStyle(color: Colors.red.shade700, fontSize: 12),
-            contentPadding: const EdgeInsets.only(bottom: 4),
-            isDense: true,
-          ),
-          validator: _validateOfficeHub,
-          items: ['Hub A', 'Hub B', 'Hub C'].map((hub) {
-            return DropdownMenuItem(value: hub, child: Text(hub));
-          }).toList(),
-          onChanged: (val) => setState(() => _selectedOfficeHub = val),
-        ),
-      ],
+    return _buildTextField(
+      controller: _officeHubController,
+      label: 'Office Hub',
+      validator: _validateOfficeHub,
     );
   }
 
@@ -704,13 +703,23 @@ class _SignupScreenState extends State<SignupScreen> {
               // Pin on Map button
               InkWell(
                 splashColor: Colors.transparent,
-                onTap: (){
-                  Navigator.push(
+                onTap: () async {
+                  final loc = await Navigator.push<LocationData>(
                     context,
-                    MaterialPageRoute(
-                      builder: (context) => PinMapScreen(),
-                    ),
+                    MaterialPageRoute(builder: (_) => const PinMapScreen()),
                   );
+                  if (loc != null) {
+                    _cityController.text = loc.city;
+                    _stateController.text = loc.state;
+                    final pin = loc.pincode.trim();
+                    if (pin.isNotEmpty && pin != 'N/A') {
+                      _pincodeController.text = pin;
+                    }
+                    setState(() {
+                      _empLat = loc.latitude;
+                      _empLng = loc.longitude;
+                    });
+                  }
                 },
                 child: Container(
                   padding:

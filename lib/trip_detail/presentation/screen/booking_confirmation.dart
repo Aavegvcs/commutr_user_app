@@ -1,3 +1,4 @@
+import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/material.dart';
 
 class BookingConfirmedScreen extends StatefulWidget {
@@ -167,8 +168,12 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                   child: ElevatedButton(
                     onPressed: () {
                       // Navigate back to home
-                      Navigator.of(context).popUntil((route) => route.isFirst);
-                    },
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => Welcome(),
+                        ),
+                      );                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E7A3C),
                       foregroundColor: Colors.white,

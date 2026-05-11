@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:commutr_main/ride_tracking/trip_progress_bottom_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -547,20 +548,31 @@ class _ExpandedInfo extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: const Color(0xFF1A6B4A),
-                  width: 1.5,
+            InkWell(
+              splashColor: Colors.transparent,
+              onTap: (){
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => const TripProgressBottomSheet(),
+                );
+              },
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF1A6B4A),
+                    width: 1.5,
+                  ),
                 ),
-              ),
-              child: const Icon(
-                Icons.chevron_right_rounded,
-                color: Color(0xFF1A6B4A),
-                size: 22,
+                child: const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFF1A6B4A),
+                  size: 22,
+                ),
               ),
             ),
           ],

@@ -1,14 +1,12 @@
 import 'dart:math' as math;
+import 'package:commutr_main/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:flutter/material.dart';
-
-
 
 class SignupSuccessScreen extends StatefulWidget {
   const SignupSuccessScreen({super.key});
 
   @override
-  State<SignupSuccessScreen> createState() =>
-      _SignupSuccessScreenState();
+  State<SignupSuccessScreen> createState() => _SignupSuccessScreenState();
 }
 
 class _SignupSuccessScreenState extends State<SignupSuccessScreen>
@@ -70,6 +68,14 @@ class _SignupSuccessScreenState extends State<SignupSuccessScreen>
     }
     if (mounted) {
       setState(() => _secondsRemaining = 0);
+      if (_secondsRemaining == 0) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MobileNoVerification(),
+          ),
+        );
+      }
     }
   }
 
@@ -83,199 +89,223 @@ class _SignupSuccessScreenState extends State<SignupSuccessScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _lightGreenBg,
-      body: Stack(
-        children: [
-          // Background wave decoration
-          Positioned.fill(
-            child: CustomPaint(painter: _WavePainter()),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MobileNoVerification(),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 28.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Spacer(flex: 2),
-
-                  // Animated Check Icon
-                  ScaleTransition(
-                    scale: _checkAnimation,
-                    child: AnimatedBuilder(
-                      animation: _pulseAnimation,
-                      builder: (context, child) {
-                        return Container(
-                          width: 110,
-                          height: 110,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: _glowGreen.withOpacity(
-                                  0.5 * _pulseAnimation.value,
-                                ),
-                                blurRadius: 40 * _pulseAnimation.value,
-                                spreadRadius: 10 * _pulseAnimation.value,
-                              ),
-                            ],
-                          ),
-                          child: child,
-                        );
-                      },
-                      child: Container(
-                        width: 110,
-                        height: 110,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [_mediumGreen, _darkGreen],
-                          ),
-                          border: Border.all(
-                            color: _glowGreen.withOpacity(0.6),
-                            width: 3,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.check,
-                          color: Colors.white,
-                          size: 52,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 40),
-
-                  // Title
-                  const Text(
-                    'Your details have been\nsubmitted',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF0D2B20),
-                      height: 1.25,
-                      letterSpacing: -0.3,
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Subtitle
-                  Text(
-                    'Your account verification is now in\nprogress. We\'ll verify your details shortly.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.black.withOpacity(0.55),
-                      height: 1.55,
-                    ),
-                  ),
-
-                  const Spacer(flex: 2),
-
-                  // Redirect countdown box
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 22,
-                      vertical: 16,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: Colors.black.withOpacity(0.08),
-                        width: 1,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
-                          blurRadius: 16,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Redirecting to Login...',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.black.withOpacity(0.65),
-                          ),
-                        ),
-                        // Countdown circle
-                        SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              AnimatedBuilder(
-                                animation: _countdownAnimation,
-                                builder: (context, _) {
-                                  return CustomPaint(
-                                    size: const Size(40, 40),
-                                    painter: _CountdownRingPainter(
-                                      progress: _countdownAnimation.value,
-                                      color: _accentGreen,
-                                    ),
-                                  );
-                                },
-                              ),
-                              Text(
-                                '$_secondsRemaining',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF2D6A52),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Go Back to Login button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 58,
-                    child: ElevatedButton(
-                      onPressed: () {},
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _darkGreen,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(32),
-                        ),
-                      ),
-                      child: const Text(
-                        'Go Back to Login',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.2,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 32),
-                ],
-              ),
+        );
+      },
+      child: Scaffold(
+        backgroundColor: _lightGreenBg,
+        body: Stack(
+          children: [
+            // Background wave decoration
+            Positioned.fill(
+              child: CustomPaint(painter: _WavePainter()),
             ),
-          ),
-        ],
+            SafeArea(
+                child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 28.0),
+                    child: LayoutBuilder(builder: (context, constraints) {
+                      return SingleChildScrollView(
+                          child: ConstrainedBox(
+                        constraints:
+                            BoxConstraints(minHeight: constraints.maxHeight),
+                        child: IntrinsicHeight(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Spacer(flex: 2),
+
+                              // Animated Check Icon
+                              ScaleTransition(
+                                scale: _checkAnimation,
+                                child: AnimatedBuilder(
+                                  animation: _pulseAnimation,
+                                  builder: (context, child) {
+                                    return Container(
+                                      width: 110,
+                                      height: 110,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: _glowGreen.withOpacity(
+                                              0.5 * _pulseAnimation.value,
+                                            ),
+                                            blurRadius:
+                                                40 * _pulseAnimation.value,
+                                            spreadRadius:
+                                                10 * _pulseAnimation.value,
+                                          ),
+                                        ],
+                                      ),
+                                      child: child,
+                                    );
+                                  },
+                                  child: Container(
+                                    width: 110,
+                                    height: 110,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [_mediumGreen, _darkGreen],
+                                      ),
+                                      border: Border.all(
+                                        color: _glowGreen.withOpacity(0.6),
+                                        width: 3,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.check,
+                                      color: Colors.white,
+                                      size: 52,
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 40),
+
+                              // Title
+                              const Text(
+                                'Your details have been\nsubmitted',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF0D2B20),
+                                  height: 1.25,
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Subtitle
+                              Text(
+                                'Your account verification is now in\nprogress. We\'ll verify your details shortly.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: Colors.black.withOpacity(0.55),
+                                  height: 1.55,
+                                ),
+                              ),
+
+                              const Spacer(flex: 2),
+
+                              // Redirect countdown box
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 22,
+                                  vertical: 16,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(
+                                    color: Colors.black.withOpacity(0.08),
+                                    width: 1,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.04),
+                                      blurRadius: 16,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Redirecting to Login...',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w500,
+                                        color: Colors.black.withOpacity(0.65),
+                                      ),
+                                    ),
+                                    // Countdown circle
+                                    SizedBox(
+                                      width: 40,
+                                      height: 40,
+                                      child: Stack(
+                                        alignment: Alignment.center,
+                                        children: [
+                                          AnimatedBuilder(
+                                            animation: _countdownAnimation,
+                                            builder: (context, _) {
+                                              return CustomPaint(
+                                                size: const Size(40, 40),
+                                                painter: _CountdownRingPainter(
+                                                  progress:
+                                                      _countdownAnimation.value,
+                                                  color: _accentGreen,
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                          Text(
+                                            '$_secondsRemaining',
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFF2D6A52),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Go Back to Login button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 58,
+                                child: ElevatedButton(
+                                  onPressed: () {},
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _darkGreen,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(32),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'Go Back to Login',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 32),
+                            ],
+                          ),
+                        ),
+                      ));
+                    })))
+          ],
+        ),
       ),
     );
   }

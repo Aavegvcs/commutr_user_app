@@ -1,8 +1,13 @@
 import 'dart:math' show pi;
 
+import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
 import 'package:commutr_main/trip_detail/presentation/screen/trip_detail.dart';
+import 'package:commutr_main/trip_summary/trip_summary.dart';
+import 'package:commutr_main/weekly_off/weekly_off.dart';
 import 'package:flutter/material.dart';
+
+enum _TripHistoryStatus { completed, noShow, cancelled }
 
 class Welcome extends StatefulWidget {
   const Welcome({super.key});
@@ -15,6 +20,8 @@ class _WelcomeState extends State<Welcome> {
   int _selectedIndex = 0;
   bool _loginExpanded = false;
   bool _logoutExpanded = false;
+  /// Keys for which trip-history cards are expanded (e.g. `"0"`, `"1"`).
+  final Set<String> _tripHistoryExpanded = {};
 
   void _showCancelRideDialog(BuildContext context) {
     showDialog(
@@ -29,19 +36,35 @@ class _WelcomeState extends State<Welcome> {
     double fabSize = 100.0;
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
-      drawer: const AppDrawer(),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      floatingActionButton: Transform.translate(
-        offset: const Offset(0.0, -15.0),
-        child: SizedBox(
-          width: fabSize,
-          height: fabSize,
-          child: Image.asset(
-            'assets/images/welcome_add.png',
-            fit: BoxFit.cover,
-          ),
-        ),
+      drawer: AppDrawer(
+        onTripHistoryTap: () {
+          Navigator.pop(context);
+          setState(() => _selectedIndex = 1);
+        },
       ),
+      // floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      // floatingActionButton: InkWell(
+      //   splashColor: Colors.transparent,
+      //   onTap: (){
+      //     Navigator.push(
+      //       context,
+      //       MaterialPageRoute(
+      //         builder: (context) => TripDetailsScreen(),
+      //       ),
+      //     );
+      //   },
+      //   child: Transform.translate(
+      //     offset: const Offset(0.0, -15.0),
+      //     child: SizedBox(
+      //       width: fabSize,
+      //       height: fabSize,
+      //       child: Image.asset(
+      //         'assets/images/welcome_add.png',
+      //         fit: BoxFit.cover,
+      //       ),
+      //     ),
+      //   ),
+      // ),
       body: Stack(
         children: [
           Column(
@@ -76,12 +99,12 @@ class _WelcomeState extends State<Welcome> {
           ),
 
           // FAB image (sits above the notch)
-          // Positioned(
-          //   bottom: 28,
-          //   left: 0,
-          //   right: 0,
-          //   child: Center(child: _buildFAB()),
-          // ),
+          Positioned(
+            bottom: 36,
+            left: 0,
+            right: 0,
+            child: Center(child: _buildFAB()),
+          ),
 
           // // Left lc.png decoration
           // Positioned(
@@ -131,37 +154,332 @@ class _WelcomeState extends State<Welcome> {
   }
 
   Widget _buildTripHistorySection() {
+    const loginGreen = Color(0xFF3E9B73);
+    const logoutMaroon = Color(0xFFB40D1A);
+    const completedBlue = Color(0xFF2563EB);
+
+    Widget dateRow(String label) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF333333),
+          ),
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(
-              child: Text(
-                'Trip History',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF222222),
+          dateRow('9th Mar, Monday'),
+          _buildTripHistoryCard(
+            cardId: 'th0',
+            isLogin: true,
+            time: '2:03 AM',
+            status: _TripHistoryStatus.completed,
+            accentLogin: loginGreen,
+            accentLogout: logoutMaroon,
+            completedBlue: completedBlue,
+            onTap: (){
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TripSummaryScreen(),
                 ),
-              ),
-            ),
+              );
+            }
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'No trips recorded yet.',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
-            ),
+          const SizedBox(height: 10),
+          _buildTripHistoryCard(
+            cardId: 'th1',
+            isLogin: false,
+            time: '6:30 PM',
+            status: _TripHistoryStatus.noShow,
+            accentLogin: loginGreen,
+            accentLogout: logoutMaroon,
+            completedBlue: completedBlue,
+            onTap: (){}
+          ),
+          const SizedBox(height: 10),
+          _buildTripHistoryCard(
+            cardId: 'th2',
+            isLogin: false,
+            time: '7:15 PM',
+            status: _TripHistoryStatus.cancelled,
+            accentLogin: loginGreen,
+            accentLogout: logoutMaroon,
+            completedBlue: completedBlue,
+            onTap: (){}
+          ),
+          dateRow('8th Mar, Monday'),
+          _buildTripHistoryCard(
+            cardId: 'th3',
+            isLogin: true,
+            time: '2:03 AM',
+            status: _TripHistoryStatus.completed,
+            accentLogin: loginGreen,
+            accentLogout: logoutMaroon,
+            completedBlue: completedBlue,
+            onTap: (){
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TripSummaryScreen(),
+                ),
+              );
+            }
+          ),
+          const SizedBox(height: 10),
+          _buildTripHistoryCard(
+            cardId: 'th4',
+            isLogin: false,
+            time: '5:45 PM',
+            status: _TripHistoryStatus.completed,
+            accentLogin: loginGreen,
+            accentLogout: logoutMaroon,
+            completedBlue: completedBlue,
+            onTap: (){
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TripSummaryScreen(),
+                ),
+              );
+            }
           ),
         ],
       ),
     );
   }
 
+  Widget _buildTripHistoryCard({
+    required String cardId,
+    required bool isLogin,
+    required String time,
+    required _TripHistoryStatus status,
+    required Color accentLogin,
+    required Color accentLogout,
+    required Color completedBlue,
+    required void Function()? onTap
+  }) {
+    final accentColor = isLogin ? accentLogin : accentLogout;
+    final Color tagBgColor =
+        isLogin ? const Color(0xFFE8F5EE) : const Color(0xFFFFF0EE);
+    final Color tagTextColor = accentColor;
+    final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
+    final label = isLogin ? 'Login' : 'Logout';
+    final isExpanded = _tripHistoryExpanded.contains(cardId);
+
+    late final String statusLabel;
+    late final IconData statusIcon;
+    late final Color statusColor;
+    switch (status) {
+      case _TripHistoryStatus.completed:
+        statusLabel = 'Trip Completed';
+        statusIcon = Icons.check_circle_outline;
+        statusColor = completedBlue;
+        break;
+      case _TripHistoryStatus.noShow:
+        statusLabel = 'No Show';
+        statusIcon = Icons.error_outline;
+        statusColor = const Color(0xFFDC2626);
+        break;
+      case _TripHistoryStatus.cancelled:
+        statusLabel = 'Trip Cancelled';
+        statusIcon = Icons.cancel_outlined;
+        statusColor = const Color(0xFFDC2626);
+        break;
+    }
+
+    void toggle() {
+      setState(() {
+        if (isExpanded) {
+          _tripHistoryExpanded.remove(cardId);
+        } else {
+          _tripHistoryExpanded.add(cardId);
+        }
+      });
+    }
+
+    return InkWell(
+      splashColor: Colors.transparent,
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border(left: BorderSide(color: accentColor, width: 4)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              InkWell(
+                splashColor: Colors.transparent,
+                onTap: toggle,
+                child: Row(
+                  children: [
+                    Icon(arrowIcon, color: accentColor, size: 22),
+                    const SizedBox(width: 10),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: tagTextColor,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: tagBgColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        time,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: tagTextColor,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    AnimatedRotation(
+                      turns: isExpanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: const Icon(
+                        Icons.keyboard_arrow_down,
+                        color: Color(0xff596064),
+                        size: 22,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              InkWell(
+                splashColor: Colors.transparent,
+                onTap: toggle,
+                child: Row(
+                  children: [
+                    const SizedBox(width: 32),
+                    Icon(statusIcon, size: 16, color: statusColor),
+                    const SizedBox(width: 6),
+                    Text(
+                      statusLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: statusColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isExpanded) ...[
+                const SizedBox(height: 14),
+                Container(height: 1, color: const Color(0xFFE8E8E8)),
+                const SizedBox(height: 12),
+                const Padding(
+                  padding: EdgeInsets.only(left: 4),
+                  child: Text(
+                    'Route and timing details will appear here when connected to your trip data.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Color(0xff596064),
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static const Color _tripHistoryPrimaryGreen = Color(0xFF1A6B3C);
+
+  Widget _buildTripHistoryAppBar() {
+    return Material(
+      color: const Color(0xFFF5F5F4),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 16, 12),
+          child: Row(
+            children: [
+              Builder(
+                builder: (scaffoldContext) => IconButton(
+                  icon: const Icon(Icons.menu, color: _tripHistoryPrimaryGreen, size: 26),
+                  onPressed: () => Scaffold.of(scaffoldContext).openDrawer(),
+                ),
+              ),
+              const Expanded(
+                child: Text(
+                  'Trip History',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: _tripHistoryPrimaryGreen,
+                  ),
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Filters coming soon')),
+                  );
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF444444),
+                  backgroundColor: Colors.white,
+                  side: const BorderSide(color: Color(0xFFD1D5DB)),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+                icon: const Icon(Icons.filter_list_rounded, size: 18),
+                label: const Text(
+                  'Filter',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader() {
+    if (_selectedIndex == 1) {
+      return _buildTripHistoryAppBar();
+    }
     return Container(
       height: 150,
       child: Stack(
@@ -176,7 +494,14 @@ class _WelcomeState extends State<Welcome> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  const Icon(Icons.menu, color: Colors.white, size: 26),
+                  Builder(                              // ← add this
+                    builder: (scaffoldContext) => InkWell(
+                      onTap: () {
+                        Scaffold.of(scaffoldContext).openDrawer();  // ← use scaffoldContext
+                      },
+                      child: const Icon(Icons.menu, color: Colors.white, size: 26),
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -788,20 +1113,20 @@ class _WelcomeState extends State<Welcome> {
     );
   }
 
-  // Widget _buildFAB() {
-  //   const fabSize = 100.0;
-  //   return GestureDetector(
-  //     onTap: () {},
-  //     child: SizedBox(
-  //       width: fabSize,
-  //       height: fabSize,
-  //       child: Image.asset(
-  //         'assets/images/welcome_add.png',
-  //         fit: BoxFit.cover,
-  //       ),
-  //     ),
-  //   );
-  // }
+  Widget _buildFAB() {
+    const fabSize = 100.0;
+    return GestureDetector(
+      onTap: () {},
+      child: SizedBox(
+        width: fabSize,
+        height: fabSize,
+        child: Image.asset(
+          'assets/images/welcome_add.png',
+          fit: BoxFit.cover,
+        ),
+      ),
+    );
+  }
 
   Widget _buildBottomNav() {
     // The FAB image is 115px tall, positioned bottom: 28
@@ -1141,7 +1466,9 @@ class CancelRideDialog extends StatelessWidget {
 
 
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+  const AppDrawer({super.key, this.onTripHistoryTap});
+
+  final VoidCallback? onTripHistoryTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1174,12 +1501,17 @@ class AppDrawer extends StatelessWidget {
               _DrawerItem(
                 icon: Icons.calendar_month_outlined,
                 label: 'Weekly Offs',
-                onTap: () => Navigator.pop(context),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => WeeklyOffScreen(),
+                  ),
+                ),
               ),
               _DrawerItem(
                 icon: Icons.history,
                 label: 'Trip History',
-                onTap: () => Navigator.pop(context),
+                onTap: () => onTripHistoryTap?.call(),
               ),
               _DrawerItem(
                 icon: Icons.people_outline,
@@ -1263,18 +1595,29 @@ class _DrawerHeader extends StatelessWidget {
       child: Row(
         children: [
           // Avatar
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFFE8F5F0),
-              border: Border.all(color: const Color(0xFF8DCFB8), width: 2),
-            ),
-            child: const Icon(
-              Icons.person_outline,
-              color: Color(0xFF8DCFB8),
-              size: 30,
+          InkWell(
+            splashColor: Colors.transparent,
+            onTap: (){
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ProfileScreen(),
+                ),
+              );
+            },
+            child: Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFE8F5F0),
+                border: Border.all(color: const Color(0xFF8DCFB8), width: 2),
+              ),
+              child: const Icon(
+                Icons.person_outline,
+                color: Color(0xFF8DCFB8),
+                size: 30,
+              ),
             ),
           ),
           const SizedBox(width: 14),
@@ -1284,7 +1627,7 @@ class _DrawerHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
                 Text(
-                  'Rahul Kumar',
+                  'Yash Khare',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
