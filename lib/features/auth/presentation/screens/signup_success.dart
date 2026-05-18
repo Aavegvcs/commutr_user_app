@@ -1,6 +1,7 @@
 import 'dart:math' as math;
-import 'package:commutr_main/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:flutter/material.dart';
+
+import 'mobile_no_verification.dart';
 
 class SignupSuccessScreen extends StatefulWidget {
   const SignupSuccessScreen({super.key});

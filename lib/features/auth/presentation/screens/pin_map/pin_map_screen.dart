@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'location_data.dart';
 
@@ -14,10 +15,19 @@ class PinMapScreen extends StatefulWidget {
 
 class _PinMapScreenState extends State<PinMapScreen>
     with SingleTickerProviderStateMixin {
+  static const LatLng _kFallbackMapCenter = LatLng(28.6139, 77.2090);
+  static const double _kInitialMapZoom = 16;
+
   GoogleMapController? _mapController;
-  LatLng _pinnedLocation = const LatLng(28.6139, 77.2090); // Default: Delhi
+
+  /// Device GPS when available, otherwise [_kFallbackMapCenter] — set in [_bootstrapPinnedLocation].
+  late LatLng _pinnedLocation;
   bool _isPinned = false;
   bool _isLoading = false;
+  bool _locationBootstrapComplete = false;
+
+  /// Single in-flight resolve so [onMapCreated] and FAB share one GPS attempt.
+  late final Future<LatLng?> _userLocationFuture;
 
   /// Human-readable preview at crosshair (reverse geocode on idle).
   String _placePreview = '';
@@ -28,14 +38,11 @@ class _PinMapScreenState extends State<PinMapScreen>
   late AnimationController _pinAnimationController;
   late Animation<double> _pinDropAnimation;
 
-  static const CameraPosition _initialCamera = CameraPosition(
-    target: LatLng(28.6139, 77.2090),
-    zoom: 14,
-  );
-
   @override
   void initState() {
     super.initState();
+    _userLocationFuture = _resolveUserLatLng();
+    _bootstrapPinnedLocation();
     _pinAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
@@ -44,6 +51,28 @@ class _PinMapScreenState extends State<PinMapScreen>
       parent: _pinAnimationController,
       curve: Curves.bounceOut,
     );
+  }
+
+  /// Assigns [_pinnedLocation] from [_userLocationFuture] before [GoogleMap] mounts so the pin matches GPS.
+  void _bootstrapPinnedLocation() {
+    _runPinnedLocationBootstrap();
+  }
+
+  Future<void> _runPinnedLocationBootstrap() async {
+    LatLng? ll;
+    try {
+      ll = await _userLocationFuture.timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => null,
+      );
+    } catch (_) {
+      ll = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _pinnedLocation = ll ?? _kFallbackMapCenter;
+      _locationBootstrapComplete = true;
+    });
   }
 
   @override
@@ -128,6 +157,97 @@ class _PinMapScreenState extends State<PinMapScreen>
     _placePreviewGeocodeToken++;
   }
 
+  /// Resolves a usable [LatLng] for the device user (permission, last known, then GPS).
+  Future<LatLng?> _resolveUserLatLng() async {
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.unableToDetermine) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+
+      Position? lastKnown;
+      try {
+        lastKnown = await Geolocator.getLastKnownPosition();
+      } catch (_) {}
+
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (lastKnown != null) {
+          return LatLng(lastKnown.latitude, lastKnown.longitude);
+        }
+        return null;
+      }
+
+      try {
+        final current = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium,
+            timeLimit: Duration(seconds: 25),
+          ),
+        );
+        return LatLng(current.latitude, current.longitude);
+      } catch (_) {
+        if (lastKnown != null) {
+          return LatLng(lastKnown.latitude, lastKnown.longitude);
+        }
+        return null;
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Applies [latLng] to the map crosshair (prefer [move] on first paint — more reliable than animate).
+  Future<void> _applyMapCenter(LatLng latLng, {required bool move}) async {
+    final controller = _mapController;
+    if (controller == null) return;
+
+    final update = CameraUpdate.newLatLngZoom(latLng, 16);
+    if (move) {
+      await controller.moveCamera(update);
+    } else {
+      await controller.animateCamera(update);
+    }
+  }
+
+  /// Centers the map crosshair on the user's current coordinates.
+  Future<void> _centerMapOnUser({required bool showErrorSnack}) async {
+    final latLng = await _resolveUserLatLng();
+    if (!mounted) return;
+
+    if (latLng == null) {
+      if (showErrorSnack) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Could not get current location. Check permissions and GPS.',
+            ),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    await _applyMapCenter(latLng, move: false);
+  }
+
+  /// After the map has layout, moving the camera is reliable (avoids no-op on some devices).
+  void _scheduleApplyUserLocation(GoogleMapController controller, LatLng latLng) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 200), () async {
+        if (!mounted || _mapController != controller) return;
+        await _applyMapCenter(latLng, move: true);
+      });
+    });
+  }
+
   Future<void> _confirmLocation() async {
     setState(() => _isLoading = true);
 
@@ -186,17 +306,37 @@ class _PinMapScreenState extends State<PinMapScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (!_locationBootstrapComplete) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       body: Stack(
         children: [
           // ── Google Map ──────────────────────────────────────────
           GoogleMap(
-            initialCameraPosition: _initialCamera,
+            initialCameraPosition: CameraPosition(
+              target: _pinnedLocation,
+              zoom: _kInitialMapZoom,
+            ),
             mapType: MapType.normal,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
-            onMapCreated: (controller) => _mapController = controller,
+            onMapCreated: (controller) async {
+              _mapController = controller;
+              LatLng? latLng = await _userLocationFuture;
+              latLng ??= await _resolveUserLatLng();
+              if (!mounted || latLng == null) return;
+              final sameSpot =
+                  (latLng.latitude - _pinnedLocation.latitude).abs() < 1e-5 &&
+                  (latLng.longitude - _pinnedLocation.longitude).abs() < 1e-5;
+              if (!sameSpot) {
+                _scheduleApplyUserLocation(controller, latLng);
+              }
+            },
             onCameraMove: _onCameraMove,
             onCameraIdle: _onCameraIdle,
           ),
@@ -431,10 +571,7 @@ class _PinMapScreenState extends State<PinMapScreen>
             bottom: 170,
             child: FloatingActionButton.small(
               onPressed: () async {
-                // Center map on current position (requires location permission)
-                _mapController?.animateCamera(
-                  CameraUpdate.newLatLng(_pinnedLocation),
-                );
+                await _centerMapOnUser(showErrorSnack: true);
               },
               backgroundColor: Colors.white,
               foregroundColor: const Color(0xFF1A73E8),

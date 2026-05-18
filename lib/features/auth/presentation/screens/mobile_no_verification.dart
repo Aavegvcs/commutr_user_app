@@ -1,12 +1,14 @@
-import 'package:commutr_main/auth/bloc/auth_bloc.dart';
-import 'package:commutr_main/auth/bloc/auth_event.dart';
-import 'package:commutr_main/auth/bloc/auth_state.dart';
-import 'package:commutr_main/auth/presentation/screens/otp_verify_screen.dart';
+
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/features/auth/presentation/screens/signup.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:commutr_main/auth/presentation/screens/signup.dart';
+
+import '../../bloc/auth_bloc.dart';
+import '../../bloc/auth_event.dart';
+import '../../bloc/auth_state.dart';
+import 'otp_verify_screen.dart';
 
 class MobileNoVerification extends StatefulWidget {
   const MobileNoVerification({super.key});

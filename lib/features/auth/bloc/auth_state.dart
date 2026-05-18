@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
-import 'package:commutr_main/auth/data/model/otp_verify_response.dart';
 import 'package:commutr_main/core/error/failures.dart';
+
+import '../data/model/otp_verify_response.dart';
 
 abstract class AuthState extends Equatable {
   const AuthState();

@@ -1,12 +1,16 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:commutr_main/auth/bloc/auth_event.dart';
-import 'package:commutr_main/auth/bloc/auth_state.dart';
-import 'package:commutr_main/auth/data/repository/auth_repository.dart';
+import 'package:commutr_main/core/storage/auth_local_storage.dart';
+
+import '../data/repository/auth_repository.dart';
+import 'auth_event.dart';
+import 'auth_state.dart';
 
 class AuthBloc extends Bloc<AuthEvent, AuthState> {
   final AuthRepository authRepository;
+  final AuthLocalStorage authStorage;
 
-  AuthBloc({required this.authRepository}) : super(const AuthInitial()) {
+  AuthBloc({required this.authRepository, required this.authStorage})
+      : super(const AuthInitial()) {
     on<RequestOtpEvent>(_onRequestOtp);
     on<OtpVerifyEvent>(_onVerifyOtp);
   }
@@ -34,6 +38,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       emit(OtpVerifyFailure(
           message: result.failure!.message, failure: result.failure!));
     } else {
+      await authStorage.saveAuthData(result.data!);
       emit(OtpVerifySuccess(data: result.data!));
     }
   }

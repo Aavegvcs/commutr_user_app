@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
-import 'package:commutr_main/auth/data/model/otp_response_model.dart';
 import 'package:commutr_main/core/error/exceptions.dart';
 import 'package:commutr_main/core/error/failures.dart';
 import 'package:commutr_main/core/network/api_client.dart';
 
+import '../model/otp_response_model.dart';
 import '../model/otp_verify_response.dart';
 
 class AuthRepository {

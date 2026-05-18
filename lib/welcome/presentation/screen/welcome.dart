@@ -1,11 +1,15 @@
 import 'dart:math' show pi;
 
+import 'package:commutr_main/core/debug/api_logger_screen.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
 import 'package:commutr_main/trip_detail/presentation/screen/trip_detail.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
-import 'package:commutr_main/weekly_off/weekly_off.dart';
 import 'package:flutter/material.dart';
+
+import '../../../features/ai_chatbot/chat_popup.dart';
+import '../../../weekly_off/presentation/screen/weekly_off.dart';
 
 enum _TripHistoryStatus { completed, noShow, cancelled }
 
@@ -28,6 +32,14 @@ class _WelcomeState extends State<Welcome> {
       context: context,
       barrierColor: Colors.black.withOpacity(0.5),
       builder: (context) => const CancelRideDialog(),
+    );
+  }
+
+  void _openTransportAssistantChat() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const ChatPopup(),
+      ),
     );
   }
 
@@ -528,22 +540,48 @@ class _WelcomeState extends State<Welcome> {
                       ],
                     ),
                   ),
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(0.2),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(0.5),
-                        width: 1,
+                  Row(
+                    spacing: 16,
+                    children: [
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _openTransportAssistantChat,
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.2),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.5),
+                              width: 1,
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.assistant_outlined,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
                       ),
-                    ),
-                    child: const Icon(
-                      Icons.notification_add_outlined,
-                      color: Colors.white,
-                      size: 20,
-                    ),
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withOpacity(0.2),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.5),
+                            width: 1,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.notification_add_outlined,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1575,6 +1613,26 @@ class AppDrawer extends StatelessWidget {
                 label: 'Rate This App',
                 onTap: () => Navigator.pop(context),
               ),
+
+              if (kDebugMode) ...[
+                const SizedBox(height: 4),
+                _SectionLabel('DEBUG'),
+                _DrawerItem(
+                  icon: Icons.receipt_long_outlined,
+                  label: 'API Logger',
+                  iconColor: const Color(0xFF9C27B0),
+                  iconBgColor: const Color(0xFFF3E5F5),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const ApiLoggerScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ],
 
               const SizedBox(height: 16),
             ],

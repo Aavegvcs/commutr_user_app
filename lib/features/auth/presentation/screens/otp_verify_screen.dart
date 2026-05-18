@@ -1,12 +1,14 @@
 import 'dart:async';
-import 'package:commutr_main/auth/bloc/auth_bloc.dart';
-import 'package:commutr_main/auth/bloc/auth_event.dart';
-import 'package:commutr_main/auth/bloc/auth_state.dart';
+
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+
+import '../../bloc/auth_bloc.dart';
+import '../../bloc/auth_event.dart';
+import '../../bloc/auth_state.dart';
 
 class OtpVerifyScreen extends StatefulWidget {
   final String otp;
