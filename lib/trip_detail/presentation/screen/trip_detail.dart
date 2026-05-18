@@ -1,8 +1,6 @@
 import 'package:commutr_main/trip_detail/presentation/screen/select_office.dart';
 import 'package:flutter/material.dart';
 
-enum _DayRangeRole { none, single, start, middle, end, anchor }
-
 class TripDetailsScreen extends StatefulWidget {
   const TripDetailsScreen({super.key});
 
@@ -12,16 +10,12 @@ class TripDetailsScreen extends StatefulWidget {
 
 class _TripDetailsScreenState extends State<TripDetailsScreen> {
   bool isLogIn = true;
-  DateTime currentMonth = DateTime(DateTime.now().year, DateTime.now().month);
 
-  /// One-day selection (first tap, or confirmed with second tap on same day).
+  /// One-day selection (same start/end in the range picker).
   DateTime? _selectedSingleDate;
 
   /// Completed ranges (inclusive start/end, date-only).
   List<DateTimeRange> _selectedRanges = [];
-
-  /// First tap while building a range; second tap completes it.
-  DateTime? _rangeAnchor;
 
   // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
   Set<int> weeklyOffs = {0, 6}; // Sun & Sat by default
@@ -42,63 +36,34 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
   bool _isWeekOffForSet(DateTime date, Set<int> offs) =>
       offs.contains(date.weekday % 7);
 
-  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
-
-  bool _sameDay(DateTime a, DateTime b) =>
-      _dateOnly(a) == _dateOnly(b);
-
-  bool _isAnchor(DateTime date) =>
-      _rangeAnchor != null && _sameDay(_rangeAnchor!, date);
-
-  bool _isDateInRanges(DateTime date) {
-    final d = _dateOnly(date);
-    for (final r in _selectedRanges) {
-      final rs = _dateOnly(r.start);
-      final re = _dateOnly(r.end);
-      if (!d.isBefore(rs) && !d.isAfter(re)) return true;
+  bool _rangeContainsWeekOff(DateTimeRange range, Set<int> offs) {
+    var d = _dateOnly(range.start);
+    final end = _dateOnly(range.end);
+    while (!d.isAfter(end)) {
+      if (_isWeekOffForSet(d, offs)) return true;
+      d = d.add(const Duration(days: 1));
     }
     return false;
   }
 
-  _DayRangeRole _dayRangeRole(DateTime date) {
-    final d = _dateOnly(date);
-    if (_isAnchor(date)) return _DayRangeRole.anchor;
-    for (final r in _selectedRanges) {
-      final rs = _dateOnly(r.start);
-      final re = _dateOnly(r.end);
-      if (d.isBefore(rs) || d.isAfter(re)) continue;
-      if (_sameDay(rs, re)) return _DayRangeRole.single;
-      if (_sameDay(d, rs)) return _DayRangeRole.start;
-      if (_sameDay(d, re)) return _DayRangeRole.end;
-      return _DayRangeRole.middle;
-    }
-    if (_selectedSingleDate != null &&
-        _sameDay(_selectedSingleDate!, d) &&
-        !_isDateInRanges(date)) {
-      return _DayRangeRole.single;
-    }
-    return _DayRangeRole.none;
-  }
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      _dateOnly(a) == _dateOnly(b);
 
   int _totalSelectedDayCount() {
     int n = 0;
     for (final r in _selectedRanges) {
       n += r.end.difference(r.start).inDays + 1;
     }
-    if (_selectedRanges.isEmpty &&
-        _selectedSingleDate != null &&
-        _rangeAnchor == null) {
-      n = 1;
-    } else if (_rangeAnchor != null && _selectedRanges.isEmpty) {
+    if (_selectedRanges.isEmpty && _selectedSingleDate != null) {
       n = 1;
     }
     return n;
   }
 
   bool get _hasOnlySingleDate =>
-      _selectedSingleDate != null &&
-      _selectedRanges.isEmpty &&
-      _rangeAnchor == null;
+      _selectedSingleDate != null && _selectedRanges.isEmpty;
 
   String _formatShortDate(DateTime? date) {
     if (date == null) return '—';
@@ -111,74 +76,38 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
   }
 
   DateTime? get _rangeStartDisplay {
-    if (_rangeAnchor != null) return _rangeAnchor;
     if (_selectedRanges.isNotEmpty) return _selectedRanges.last.start;
     return _selectedSingleDate;
   }
 
   DateTime? get _rangeEndDisplay {
-    if (_rangeAnchor != null) return null;
     if (_selectedRanges.isNotEmpty) return _selectedRanges.last.end;
     return _selectedSingleDate;
   }
 
-  /// Merges overlapping or adjacent (touching) ranges.
-  List<DateTimeRange> _mergeRanges(List<DateTimeRange> ranges) {
-    if (ranges.isEmpty) return [];
-    final sorted = [...ranges]
-      ..sort((a, b) => a.start.compareTo(b.start));
-    final out = <DateTimeRange>[sorted.first];
-    for (var i = 1; i < sorted.length; i++) {
-      final cur = sorted[i];
-      final last = out.last;
-      final lastEndPlus1 = last.end.add(const Duration(days: 1));
-      if (!cur.start.isAfter(lastEndPlus1)) {
-        out.removeLast();
-        out.add(DateTimeRange(
-          start: last.start,
-          end: cur.end.isAfter(last.end) ? cur.end : last.end,
-        ));
-      } else {
-        out.add(cur);
-      }
+  DateTimeRange? get _initialPickerRange {
+    if (_selectedRanges.isNotEmpty) {
+      final r = _selectedRanges.last;
+      return DateTimeRange(start: _dateOnly(r.start), end: _dateOnly(r.end));
     }
-    return out;
+    if (_selectedSingleDate != null) {
+      final d = _dateOnly(_selectedSingleDate!);
+      return DateTimeRange(start: d, end: d);
+    }
+    return null;
   }
 
-  void _onCalendarDayTapped(DateTime date) {
-    final d = _dateOnly(date);
-
-    if (_rangeAnchor != null) {
-      final a = _dateOnly(_rangeAnchor!);
-      if (_sameDay(a, d)) {
-        setState(() {
-          _selectedSingleDate = d;
-          _selectedRanges = [];
-          _rangeAnchor = null;
-        });
-        return;
-      }
-      final start = d.isBefore(a) ? d : a;
-      final end = d.isBefore(a) ? a : d;
-      setState(() {
-        _selectedSingleDate = null;
-        _selectedRanges = _mergeRanges([
-          ..._selectedRanges,
-          DateTimeRange(start: start, end: end),
-        ]);
-        _rangeAnchor = null;
-      });
-      return;
-    }
-
-    if (_hasOnlySingleDate && _sameDay(_selectedSingleDate!, d)) {
-      setState(() => _selectedSingleDate = null);
-      return;
-    }
-
+  void _applyDateRange(DateTimeRange picked) {
+    final start = _dateOnly(picked.start);
+    final end = _dateOnly(picked.end);
     setState(() {
-      _rangeAnchor = d;
-      _selectedSingleDate = _selectedRanges.isEmpty ? d : null;
+      if (_sameDay(start, end)) {
+        _selectedSingleDate = start;
+        _selectedRanges = [];
+      } else {
+        _selectedSingleDate = null;
+        _selectedRanges = [DateTimeRange(start: start, end: end)];
+      }
     });
   }
 
@@ -186,7 +115,6 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
     setState(() {
       _selectedSingleDate = null;
       _selectedRanges = [];
-      _rangeAnchor = null;
     });
   }
 
@@ -383,9 +311,14 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
                       onPressed: () {
                         setState(() {
                           weeklyOffs = Set.from(tempOffs);
-                          if (_rangeAnchor != null &&
-                              _isWeekOffForSet(_rangeAnchor!, tempOffs)) {
-                            _rangeAnchor = null;
+                          _selectedRanges = _selectedRanges
+                              .where((r) =>
+                                  !_rangeContainsWeekOff(r, tempOffs))
+                              .toList();
+                          if (_selectedSingleDate != null &&
+                              _isWeekOffForSet(
+                                  _selectedSingleDate!, tempOffs)) {
+                            _selectedSingleDate = null;
                           }
                         });
                         Navigator.pop(ctx);
@@ -443,9 +376,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
                     const SizedBox(height: 16),
                     _buildWeeklyOffs(),
                     const SizedBox(height: 24),
-                    _buildDateFields(),
-                    const SizedBox(height: 16),
-                    _buildCalendar(),
+                    _buildDateRangeSection(),
                     const SizedBox(height: 16),
                     _buildStatus(),
                     const SizedBox(height: 16),
@@ -613,30 +544,76 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
     );
   }
 
-  Widget _buildDateFields() {
+  Widget _buildDateRangeSection() {
     final hasSelection =
         _rangeStartDisplay != null || _rangeEndDisplay != null;
-    return Row(
+    final today = _dateOnly(DateTime.now());
+    final lastDate = DateTime(today.year + 1, 12, 31);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: _dateFieldBox(
-            label: 'FROM',
-            value: _formatShortDate(_rangeStartDisplay),
-            isPlaceholder: _rangeStartDisplay == null,
-            isActive: hasSelection,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _dateFieldBox(
+                label: 'FROM',
+                value: _formatShortDate(_rangeStartDisplay),
+                isPlaceholder: _rangeStartDisplay == null,
+                isActive: hasSelection,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Icon(Icons.arrow_forward,
+                size: 18, color: primaryGreen.withValues(alpha: 0.6)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _dateFieldBox(
+                label: 'TO',
+                value: _formatShortDate(_rangeEndDisplay),
+                isPlaceholder: _rangeEndDisplay == null,
+                isActive: hasSelection,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 10),
-        Icon(Icons.arrow_forward, size: 18, color: primaryGreen.withOpacity(0.6)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _dateFieldBox(
-            label: 'TO',
-            value: _rangeAnchor != null
-                ? 'Select end'
-                : _formatShortDate(_rangeEndDisplay),
-            isPlaceholder: _rangeEndDisplay == null && _rangeAnchor == null,
-            isActive: hasSelection && _rangeAnchor == null,
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFF0F0F0)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                child: Text(
+                  'Select travel dates',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: primaryGreen.withValues(alpha: 0.85),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              SizedBox(
+                height: 268,
+                child: _HorizontalDateRangePicker(
+                  key: ValueKey(_initialPickerRange),
+                  initialRange: _initialPickerRange,
+                  firstDate: today,
+                  lastDate: lastDate,
+                  primaryColor: primaryGreen,
+                  lightColor: lightGreen,
+                  isSelectable: (day) =>
+                      !day.isBefore(today) && !_isWeekOff(day),
+                  onRangeSelected: _applyDateRange,
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -689,236 +666,9 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
     );
   }
 
-  Widget _buildCalendar() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Month + nav
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              _monthYear(currentMonth),
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1A1A1A),
-              ),
-            ),
-            Row(
-              children: [
-                GestureDetector(
-                  onTap: _prevMonth,
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: Icon(Icons.chevron_left,
-                        size: 24, color: Colors.grey[600]),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                GestureDetector(
-                  onTap: _nextMonth,
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: Icon(Icons.chevron_right,
-                        size: 24, color: Colors.grey[600]),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFF0F0F0), width: 1),
-          ),
-          child: Column(
-            children: [
-              const SizedBox(height: 12),
-              _buildDayHeaders(),
-              const SizedBox(height: 8),
-              _buildDayGrid(),
-              const SizedBox(height: 12),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDayHeaders() {
-    const letters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-    return Row(
-      children: List.generate(7, (i) {
-        final isOff = weeklyOffs.contains(i);
-        return Expanded(
-          child: Center(
-            child: Text(
-              letters[i],
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: isOff
-                    ? primaryGreen.withOpacity(0.45)
-                    : const Color(0xFF999999),
-              ),
-            ),
-          ),
-        );
-      }),
-    );
-  }
-
-  Widget _buildDayGrid() {
-    final firstDay = DateTime(currentMonth.year, currentMonth.month, 1);
-    final daysInMonth =
-        DateTime(currentMonth.year, currentMonth.month + 1, 0).day;
-    final startOffset = firstDay.weekday % 7; // 0=Sun
-    final prevMonthDays =
-        DateTime(currentMonth.year, currentMonth.month, 0).day;
-
-    // Normalize today to midnight for accurate date comparison
-    final today = DateTime.now();
-    final todayOnly = DateTime(today.year, today.month, today.day);
-
-    List<Widget> rows = [];
-    List<Widget> cells = [];
-
-    // Trailing days of prev month
-    for (int i = 0; i < startOffset; i++) {
-      cells.add(_dayCell(prevMonthDays - startOffset + 1 + i,
-          isOtherMonth: true));
-    }
-
-    // Current month
-    for (int day = 1; day <= daysInMonth; day++) {
-      final date = DateTime(currentMonth.year, currentMonth.month, day);
-      final off = _isWeekOff(date);
-      final isPast = date.isBefore(todayOnly);
-      final role = _dayRangeRole(date);
-
-      cells.add(_dayCell(
-        day,
-        role: role,
-        isWeekOff: off,
-        isPast: isPast,
-        onTap: (off || isPast) ? null : () => _onCalendarDayTapped(date),
-      ));
-
-      if (cells.length == 7) {
-        rows.add(Row(children: List.from(cells)));
-        cells = [];
-      }
-    }
-
-    // Leading days of next month
-    if (cells.isNotEmpty) {
-      int n = 1;
-      while (cells.length < 7) cells.add(_dayCell(n++, isOtherMonth: true));
-      rows.add(Row(children: List.from(cells)));
-    }
-
-    return Column(children: rows);
-  }
-
-  Widget _dayCell(
-    int day, {
-    bool isOtherMonth = false,
-    _DayRangeRole role = _DayRangeRole.none,
-    bool isWeekOff = false,
-    bool isPast = false,
-    VoidCallback? onTap,
-  }) {
-    final isDisabled = isOtherMonth || isWeekOff || isPast;
-    final inSelection = role != _DayRangeRole.none;
-    final isEndpoint = role == _DayRangeRole.single ||
-        role == _DayRangeRole.start ||
-        role == _DayRangeRole.end ||
-        role == _DayRangeRole.anchor;
-    final isAnchor = role == _DayRangeRole.anchor;
-
-    BorderRadius? stripRadius;
-    switch (role) {
-      case _DayRangeRole.start:
-        stripRadius = const BorderRadius.horizontal(left: Radius.circular(22));
-      case _DayRangeRole.end:
-        stripRadius = const BorderRadius.horizontal(right: Radius.circular(22));
-      case _DayRangeRole.middle:
-        stripRadius = BorderRadius.zero;
-      default:
-        stripRadius = null;
-    }
-
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: SizedBox(
-          height: 44,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              if (inSelection && stripRadius != null)
-                Positioned.fill(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    decoration: BoxDecoration(
-                      color: lightGreen,
-                      borderRadius: stripRadius,
-                    ),
-                  ),
-                ),
-              if (isEndpoint)
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: isAnchor
-                        ? primaryGreen.withOpacity(0.25)
-                        : primaryGreen,
-                    shape: BoxShape.circle,
-                    border: isAnchor
-                        ? Border.all(color: primaryGreen, width: 2)
-                        : null,
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '$day',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: isAnchor
-                          ? primaryGreen
-                          : Colors.white,
-                    ),
-                  ),
-                )
-              else
-                Text(
-                  '$day',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: inSelection ? FontWeight.w600 : FontWeight.w400,
-                    color: inSelection
-                        ? primaryGreen
-                        : isDisabled
-                            ? const Color(0xFFCCCCCC)
-                            : const Color(0xFF1A1A1A),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildStatus() {
     final count = _totalSelectedDayCount();
     final rangeCount = _selectedRanges.length;
-    final hasAnchor = _rangeAnchor != null;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -942,7 +692,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
                 ),
               ),
               const Spacer(),
-              if (count > 0 || hasAnchor)
+              if (count > 0)
                 TextButton(
                   onPressed: _clearAllDateSelections,
                   style: TextButton.styleFrom(
@@ -964,28 +714,17 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
           const SizedBox(height: 4),
           Text(
             count == 0
-                ? 'Tap a date to select'
+                ? 'Select travel dates below'
                 : _hasOnlySingleDate
                     ? 'Travel on ${_formatShortDate(_selectedSingleDate)}'
                     : '$count day${count == 1 ? '' : 's'} selected'
-                        '${rangeCount > 0 ? ' · $rangeCount range${rangeCount == 1 ? '' : 's'}' : ''}'
-                        '${hasAnchor ? ' · tap end date' : ''}',
+                        '${rangeCount > 0 ? ' · $rangeCount range${rangeCount == 1 ? '' : 's'}' : ''}',
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
               color: Color(0xFF1A1A1A),
             ),
           ),
-          if (hasAnchor) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Tap same date for one day, or another date for a range',
-              style: TextStyle(
-                fontSize: 12,
-                color: primaryGreen.withOpacity(0.85),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1026,21 +765,316 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
       ),
     );
   }
+}
 
-  String _monthYear(DateTime date) {
-    const months = [
-      'January', 'February', 'March', 'April',
-      'May', 'June', 'July', 'August',
-      'September', 'October', 'November', 'December',
-    ];
-    return '${months[date.month - 1]} ${date.year}';
+enum _PickerDayRole { none, single, start, middle, end }
+
+/// Horizontally scrollable month calendar for date range selection.
+class _HorizontalDateRangePicker extends StatefulWidget {
+  const _HorizontalDateRangePicker({
+    super.key,
+    required this.initialRange,
+    required this.firstDate,
+    required this.lastDate,
+    required this.primaryColor,
+    required this.lightColor,
+    required this.isSelectable,
+    required this.onRangeSelected,
+  });
+
+  final DateTimeRange? initialRange;
+  final DateTime firstDate;
+  final DateTime lastDate;
+  final Color primaryColor;
+  final Color lightColor;
+  final bool Function(DateTime day) isSelectable;
+  final ValueChanged<DateTimeRange> onRangeSelected;
+
+  @override
+  State<_HorizontalDateRangePicker> createState() =>
+      _HorizontalDateRangePickerState();
+}
+
+class _HorizontalDateRangePickerState extends State<_HorizontalDateRangePicker> {
+  static const _monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  static const _dayLetters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+  late final PageController _pageController;
+  late DateTime? _rangeStart;
+  late DateTime? _rangeEnd;
+
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  int get _monthCount {
+    final first = widget.firstDate;
+    final last = widget.lastDate;
+    return (last.year - first.year) * 12 + last.month - first.month + 1;
   }
 
-  void _prevMonth() => setState(() {
-    currentMonth = DateTime(currentMonth.year, currentMonth.month - 1);
-  });
+  int _monthIndex(DateTime date) {
+    final first = widget.firstDate;
+    return (date.year - first.year) * 12 + date.month - first.month;
+  }
 
-  void _nextMonth() => setState(() {
-    currentMonth = DateTime(currentMonth.year, currentMonth.month + 1);
-  });
+  DateTime _monthFromIndex(int index) {
+    final first = widget.firstDate;
+    return DateTime(first.year + index ~/ 12, first.month + (index % 12), 1);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _rangeStart = widget.initialRange?.start;
+    _rangeEnd = widget.initialRange?.end;
+    final initialPage = _monthIndex(
+      _rangeStart ?? _dateOnly(DateTime.now()),
+    ).clamp(0, _monthCount - 1);
+    _pageController = PageController(initialPage: initialPage);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  bool _sameDay(DateTime a, DateTime b) => _dateOnly(a) == _dateOnly(b);
+
+  _PickerDayRole _dayRole(DateTime date) {
+    final d = _dateOnly(date);
+    if (_rangeStart == null) return _PickerDayRole.none;
+    final start = _dateOnly(_rangeStart!);
+    if (_rangeEnd == null) {
+      return _sameDay(d, start) ? _PickerDayRole.single : _PickerDayRole.none;
+    }
+    final end = _dateOnly(_rangeEnd!);
+    if (d.isBefore(start) || d.isAfter(end)) return _PickerDayRole.none;
+    if (_sameDay(d, start) && _sameDay(d, end)) {
+      return _PickerDayRole.single;
+    }
+    if (_sameDay(d, start)) return _PickerDayRole.start;
+    if (_sameDay(d, end)) return _PickerDayRole.end;
+    return _PickerDayRole.middle;
+  }
+
+  void _onDayTap(DateTime day) {
+    if (!widget.isSelectable(day)) return;
+    final d = _dateOnly(day);
+
+    if (_rangeStart == null || (_rangeStart != null && _rangeEnd != null)) {
+      setState(() {
+        _rangeStart = d;
+        _rangeEnd = null;
+      });
+      return;
+    }
+
+    final start = _dateOnly(_rangeStart!);
+    if (_sameDay(start, d)) {
+      setState(() => _rangeEnd = d);
+      widget.onRangeSelected(DateTimeRange(start: d, end: d));
+      return;
+    }
+
+    final rangeStart = d.isBefore(start) ? d : start;
+    final rangeEnd = d.isBefore(start) ? start : d;
+    setState(() {
+      _rangeStart = rangeStart;
+      _rangeEnd = rangeEnd;
+    });
+    widget.onRangeSelected(DateTimeRange(start: rangeStart, end: rangeEnd));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SizedBox(
+          height: 36,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(7, (i) {
+              return Expanded(
+                child: Center(
+                  child: Text(
+                    _dayLetters[i],
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: widget.primaryColor.withValues(alpha: 0.45),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+        Expanded(
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: _monthCount,
+            itemBuilder: (context, index) {
+              return _buildMonthPage(_monthFromIndex(index));
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMonthPage(DateTime month) {
+    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+    final startOffset = DateTime(month.year, month.month, 1).weekday % 7;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 28,
+            child: Center(
+              child: Text(
+                '${_monthNames[month.month - 1]} ${month.year}',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1A1A1A),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const rows = 6;
+                final cellHeight = constraints.maxHeight / rows;
+                final cells = <Widget>[];
+
+                for (var i = 0; i < startOffset; i++) {
+                  cells.add(_emptyCell(cellHeight));
+                }
+                for (var day = 1; day <= daysInMonth; day++) {
+                  final date = _dateOnly(
+                    DateTime(month.year, month.month, day),
+                  );
+                  cells.add(_dayCell(date, day, cellHeight));
+                }
+                while (cells.length % 7 != 0) {
+                  cells.add(_emptyCell(cellHeight));
+                }
+
+                final rowWidgets = <Widget>[];
+                for (var r = 0; r < cells.length; r += 7) {
+                  rowWidgets.add(
+                    SizedBox(
+                      height: cellHeight,
+                      child: Row(
+                        children: cells.sublist(r, r + 7),
+                      ),
+                    ),
+                  );
+                }
+
+                return Column(children: rowWidgets);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyCell(double height) {
+    return Expanded(child: SizedBox(height: height));
+  }
+
+  Widget _dayCell(DateTime date, int day, double height) {
+    final d = _dateOnly(date);
+    final isPast = d.isBefore(_dateOnly(widget.firstDate));
+    final isFuture = d.isAfter(_dateOnly(widget.lastDate));
+    final isDisabled = isPast || isFuture || !widget.isSelectable(date);
+    final selectable = !isDisabled;
+    final role = selectable ? _dayRole(date) : _PickerDayRole.none;
+    final inRange = role != _PickerDayRole.none;
+    final isEndpoint = role == _PickerDayRole.single ||
+        role == _PickerDayRole.start ||
+        role == _PickerDayRole.end;
+
+    BorderRadius? stripRadius;
+    switch (role) {
+      case _PickerDayRole.start:
+        stripRadius =
+            const BorderRadius.horizontal(left: Radius.circular(18));
+      case _PickerDayRole.end:
+        stripRadius =
+            const BorderRadius.horizontal(right: Radius.circular(18));
+      case _PickerDayRole.middle:
+        stripRadius = BorderRadius.zero;
+      default:
+        stripRadius = null;
+    }
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: selectable ? () => _onDayTap(date) : null,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          height: height,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (inRange && stripRadius != null)
+                Positioned.fill(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 3),
+                    decoration: BoxDecoration(
+                      color: widget.lightColor,
+                      borderRadius: stripRadius,
+                    ),
+                  ),
+                ),
+              if (isEndpoint)
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: widget.primaryColor,
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$day',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  '$day',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: inRange ? FontWeight.w600 : FontWeight.w400,
+                    color: isDisabled
+                        ? const Color(0xFFCCCCCC)
+                        : inRange
+                            ? widget.primaryColor
+                            : const Color(0xFF1A1A1A),
+                    decoration: isPast
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.none,
+                    decorationColor: const Color(0xFFCCCCCC),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
