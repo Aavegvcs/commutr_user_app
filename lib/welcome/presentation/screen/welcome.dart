@@ -4,11 +4,11 @@ import 'package:commutr_main/core/debug/api_logger_screen.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
-import 'package:commutr_main/trip_detail/presentation/screen/trip_detail.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
 import 'package:flutter/material.dart';
 
 import '../../../features/ai_chatbot/chat_popup.dart';
+import '../../../features/trip_detail/presentation/screen/trip_detail.dart';
 import '../../../weekly_off/presentation/screen/weekly_off.dart';
 
 enum _TripHistoryStatus { completed, noShow, cancelled }
@@ -1154,7 +1154,14 @@ class _WelcomeState extends State<Welcome> {
   Widget _buildFAB() {
     const fabSize = 100.0;
     return GestureDetector(
-      onTap: () {},
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TripDetailsScreen(),
+          ),
+        );
+      },
       child: SizedBox(
         width: fabSize,
         height: fabSize,

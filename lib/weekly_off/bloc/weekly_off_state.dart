@@ -26,3 +26,13 @@ class WeeklyOffFailure extends WeeklyOffState {
 
   WeeklyOffFailure(this.message);
 }
+
+/// Emitted when the weekly-off API responds with HTTP 401 and the auth
+/// interceptor was unable to refresh the session.
+class WeeklyOffUnauthorized extends WeeklyOffState {
+  final String message;
+
+  WeeklyOffUnauthorized([
+    this.message = 'Your session has expired. Please log in again.',
+  ]);
+}

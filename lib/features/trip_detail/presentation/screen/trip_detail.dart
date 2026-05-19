@@ -1,14 +1,32 @@
-import 'package:commutr_main/trip_detail/presentation/screen/select_office.dart';
+import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
+import 'package:commutr_main/features/trip_detail/presentation/screen/select_office.dart';
+import 'package:commutr_main/weekly_off/bloc/weekly_off_bloc.dart';
+import 'package:commutr_main/weekly_off/bloc/weekly_off_event.dart';
+import 'package:commutr_main/weekly_off/bloc/weekly_off_state.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-class TripDetailsScreen extends StatefulWidget {
+class TripDetailsScreen extends StatelessWidget {
   const TripDetailsScreen({super.key});
 
   @override
-  State<TripDetailsScreen> createState() => _TripDetailsScreenState();
+  Widget build(BuildContext context) {
+    return BlocProvider(
+      create: (_) => sl<WeeklyOffBloc>()..add(LoadWeeklyOffEvent()),
+      child: const _TripDetailsView(),
+    );
+  }
 }
 
-class _TripDetailsScreenState extends State<TripDetailsScreen> {
+class _TripDetailsView extends StatefulWidget {
+  const _TripDetailsView();
+
+  @override
+  State<_TripDetailsView> createState() => _TripDetailsViewState();
+}
+
+class _TripDetailsViewState extends State<_TripDetailsView> {
   bool isLogIn = true;
 
   /// One-day selection (same start/end in the range picker).
@@ -354,10 +372,60 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
     return sorted.map((i) => _dayFull[i]).join(', ');
   }
 
+  String _weekOffsApiString(Set<int> offs) {
+    final sorted = offs.toList()..sort();
+    return sorted.map((i) => _dayLabels[i]).join(', ');
+  }
+
+  String _formatApiDate(DateTime date) {
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$m-$d';
+  }
+
+  Set<int> _parseWeeklyOff(String? weekOff) {
+    if (weekOff == null || weekOff.trim().isEmpty) return {0, 6};
+    final parsed = weekOff
+        .split(',')
+        .map((s) => _dayLabels.indexOf(s.trim().toUpperCase()))
+        .where((i) => i >= 0)
+        .toSet();
+    return parsed.isEmpty ? {0, 6} : parsed;
+  }
+
+  void _handleSessionExpired(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFB40D1A),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const MobileNoVerification()),
+      (route) => false,
+    );
+  }
+
   // ─── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return BlocListener<WeeklyOffBloc, WeeklyOffState>(
+      listener: (context, state) {
+        if (state is WeeklyOffLoaded) {
+          final row = state.response.result?.isNotEmpty == true
+              ? state.response.result!.first
+              : null;
+          if (!mounted) return;
+          setState(() => weeklyOffs = _parseWeeklyOff(row?.weekOff));
+        } else if (state is WeeklyOffUnauthorized) {
+          _handleSessionExpired(state.message);
+        }
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Column(
@@ -388,6 +456,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -396,7 +465,12 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          Icon(Icons.arrow_back, color: primaryGreen, size: 22),
+          InkWell(
+              splashColor: Colors.transparent,
+              onTap: (){
+                Navigator.of(context).pop();
+              },
+              child: Icon(Icons.arrow_back, color: primaryGreen, size: 22)),
           const SizedBox(width: 8),
           Text(
             'Trip Details',
@@ -458,7 +532,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
             boxShadow: isActive
                 ? [
               BoxShadow(
-                color: Colors.black.withOpacity(0.08),
+                color: Colors.black.withValues(alpha: 0.08),
                 blurRadius: 4,
                 offset: const Offset(0, 1),
               )
@@ -481,47 +555,61 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
 
   Widget _buildWeeklyOffs() {
     final sortedOffs = weeklyOffs.toList()..sort();
-    return GestureDetector(
-      onTap: _showEditWeeklyOffsSheet,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE5E5E5), width: 1),
-        ),
-        child: Row(
-          children: [
-            // Calendar icon
-            Container(
-              width: 38, height: 38,
-              decoration: BoxDecoration(
-                color: lightGreen,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(Icons.calendar_today_outlined,
-                  color: primaryGreen, size: 18),
+    return BlocBuilder<WeeklyOffBloc, WeeklyOffState>(
+      builder: (context, state) {
+        final isLoading = state is WeeklyOffLoading || state is WeeklyOffInitial;
+        return GestureDetector(
+          onTap: isLoading ? null : _showEditWeeklyOffsSheet,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE5E5E5), width: 1),
             ),
-            const SizedBox(width: 12),
-            const Text(
-              'Weekly Offs',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF1A1A1A),
-              ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: lightGreen,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.calendar_today_outlined,
+                      color: primaryGreen, size: 18),
+                ),
+                const SizedBox(width: 12),
+                const Text(
+                  'Weekly Offs',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF1A1A1A),
+                  ),
+                ),
+                const Spacer(),
+                if (isLoading)
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: primaryGreen,
+                    ),
+                  )
+                else
+                  Row(
+                    spacing: 6,
+                    children: sortedOffs
+                        .map((i) => _buildChip(_dayLabels[i]))
+                        .toList(),
+                  ),
+              ],
             ),
-            const Spacer(),
-            // Day chips (scrollable if many days)
-            Row(
-              spacing: 6,
-              children: sortedOffs
-                  .map((i) => _buildChip(_dayLabels[i]))
-                  .toList(),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -644,7 +732,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w600,
-              color: primaryGreen.withOpacity(0.7),
+              color: primaryGreen.withValues(alpha: 0.7),
               letterSpacing: 0.6,
             ),
           ),
@@ -738,10 +826,40 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
         height: 52,
         child: ElevatedButton(
           onPressed: () {
+            final start = _rangeStartDisplay;
+            final end = _rangeEndDisplay;
+            debugPrint(
+              '[TRIP_DETAIL] Next tapped → isLogIn=$isLogIn '
+              'start=$start end=$end weeklyOffs=$weeklyOffs',
+            );
+            if (start == null || end == null) {
+              debugPrint('[TRIP_DETAIL] Next blocked: no dates selected');
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text('Please select travel dates'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              return;
+            }
+            final fromDate = _formatApiDate(start);
+            final toDate = _formatApiDate(end);
+            final weekOffs = _weekOffsApiString(weeklyOffs);
+            debugPrint(
+              '[TRIP_DETAIL] → SelectOfficeScreen '
+              'fromDate=$fromDate toDate=$toDate weekOffs="$weekOffs"',
+            );
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => SelectOfficeScreen(),
+                builder: (context) => SelectOfficeScreen(
+                  isLogIn: isLogIn,
+                  fromDate: fromDate,
+                  toDate: toDate,
+                  weekOffs: weekOffs,
+                ),
               ),
             );
           },

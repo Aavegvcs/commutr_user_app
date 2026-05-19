@@ -8,6 +8,10 @@ import '../../app.dart';
 import '../../features/auth/bloc/auth_bloc.dart';
 import '../../features/auth/data/repository/auth_repository.dart';
 import '../../features/auth/presentation/screens/mobile_no_verification.dart';
+import '../../features/trip_detail/bloc/roaster_bloc.dart';
+import '../../features/trip_detail/bloc/shift_bloc.dart';
+import '../../features/trip_detail/data/repository/roaster_shift_repo.dart';
+import '../../features/trip_detail/data/repository/user_detail_detail_repo.dart';
 import '../../weekly_off/bloc/weekly_off_bloc.dart';
 import '../../weekly_off/data/repository/weekly_off_repository.dart';
 
@@ -23,6 +27,7 @@ void setupDependencies() {
   sl.registerLazySingleton<AuthLocalStorage>(() => AuthLocalStorage());
 
   void onLogout() {
+    clearBearerTokenFromApiClients();
     navigatorKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(
         builder: (_) => const MobileNoVerification(),
@@ -67,4 +72,42 @@ void setupDependencies() {
   sl.registerFactory<WeeklyOffBloc>(
     () => WeeklyOffBloc(repository: sl()),
   );
+
+  sl.registerLazySingleton<RosterRepository>(
+    () => RosterRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<RosterBloc>(
+    () => RosterBloc(sl()),
+  );
+
+  sl.registerLazySingleton<RoasterShiftRepo>(
+    () => RoasterShiftRepo(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<ShiftBloc>(
+    () => ShiftBloc(sl()),
+  );
+
+  syncBearerTokenToApiClients();
+}
+
+/// Sets `Authorization: Bearer <token>` on all registered [ApiClient] instances.
+void syncBearerTokenToApiClients() {
+  final token = sl<AuthLocalStorage>().getAccessToken();
+  final authClient = sl<ApiClient>(instanceName: authApiClientKey);
+  final appClient = sl<ApiClient>(instanceName: appApiClientKey);
+
+  if (token != null && token.isNotEmpty) {
+    authClient.setAuthToken(token);
+    appClient.setAuthToken(token);
+  } else {
+    authClient.clearAuthToken();
+    appClient.clearAuthToken();
+  }
+}
+
+void clearBearerTokenFromApiClients() {
+  sl<ApiClient>(instanceName: authApiClientKey).clearAuthToken();
+  sl<ApiClient>(instanceName: appApiClientKey).clearAuthToken();
 }

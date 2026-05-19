@@ -151,11 +151,25 @@ class ApiClient {
   }
 
   void setAuthToken(String token) {
-    _dio.options.headers['Authorization'] = 'Bearer $token';
+    final normalized = _normalizeBearerToken(token);
+    if (normalized.isEmpty) {
+      clearAuthToken();
+      return;
+    }
+    _dio.options.headers['Authorization'] = 'Bearer $normalized';
   }
 
   void clearAuthToken() {
     _dio.options.headers.remove('Authorization');
+  }
+
+  /// Strips a leading `Bearer ` if the stored value already includes it.
+  static String _normalizeBearerToken(String token) {
+    final trimmed = token.trim();
+    if (trimmed.toLowerCase().startsWith('bearer ')) {
+      return trimmed.substring(7).trim();
+    }
+    return trimmed;
   }
 }
 
@@ -196,7 +210,7 @@ class _AuthInterceptor extends Interceptor {
 
     if (token != null && token.isNotEmpty) {
       options.headers['Authorization'] =
-      'Bearer $token';
+          'Bearer ${ApiClient._normalizeBearerToken(token)}';
     }
 
     handler.next(options);
@@ -279,7 +293,7 @@ class _AuthInterceptor extends Interceptor {
       requestOptions.extra['_retry'] = true;
 
       requestOptions.headers['Authorization'] =
-      'Bearer $newToken';
+          'Bearer ${ApiClient._normalizeBearerToken(newToken)}';
 
       final retryResponse =
       await _dio.fetch<Map<String, dynamic>>(
@@ -364,6 +378,8 @@ class _AuthInterceptor extends Interceptor {
       }
 
       debugPrint('[AUTH] _refreshSession → SUCCESS: tokens saved');
+      _dio.options.headers['Authorization'] =
+          'Bearer ${ApiClient._normalizeBearerToken(newAccessToken)}';
     } on DioException catch (e) {
       debugPrint('[AUTH] _refreshSession → DioException: type=${e.type} status=${e.response?.statusCode}');
       debugPrint('[AUTH] _refreshSession → DioException body: ${e.response?.data}');

@@ -1,5 +1,6 @@
-import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../data/repository/auth_repository.dart';
 import 'auth_event.dart';
@@ -39,6 +40,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
           message: result.failure!.message, failure: result.failure!));
     } else {
       await authStorage.saveAuthData(result.data!);
+      syncBearerTokenToApiClients();
       emit(OtpVerifySuccess(data: result.data!));
     }
   }
