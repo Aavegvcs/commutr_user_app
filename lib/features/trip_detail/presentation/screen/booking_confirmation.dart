@@ -134,7 +134,7 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'Your ride schedule for March 2026 has\nbeen successfully booked.',
+                      'Your ride schedule has\nbeen successfully booked.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 15,

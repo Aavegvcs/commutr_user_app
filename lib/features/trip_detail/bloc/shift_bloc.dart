@@ -13,6 +13,7 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
   ShiftBloc(this._repository) : super(const ShiftInitial()) {
     on<FetchShifts>(_onFetch);
     on<UpdateShiftSchedules>(_onUpdateSchedules);
+    on<CancelSchedule>(_onCancelSchedule);
   }
 
   @override
@@ -28,7 +29,8 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
 
   Future<void> _onFetch(FetchShifts event, Emitter<ShiftState> emit) async {
     debugPrint(
-      '[SHIFT_BLOC] FetchShifts → locCode=${event.locCode} empId=${event.empId}',
+      '[SHIFT_BLOC] FetchShifts → locCode=${event.locCode} empId=${event.empId} '
+      '(401 ⇒ refresh-token flow handled transparently by ApiClient)',
     );
     emit(const ShiftLoading());
     try {
@@ -44,6 +46,10 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
     } catch (e) {
       debugPrint('[SHIFT_BLOC] FetchShifts ✖ $e');
       if (_isUnauthorized(e)) {
+        debugPrint(
+          '[SHIFT_BLOC] 401 reached bloc ⇒ refresh-token flow exhausted, '
+          'session ended.',
+        );
         emit(const ShiftUnauthorized());
       } else {
         emit(ShiftError(e.toString()));
@@ -63,7 +69,8 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
       'shiftStart="${event.shiftStart}" '
       'shiftEnd="${event.shiftEnd}" '
       'weekOffs="${event.weekOffs}" '
-      'userEmpIds="${event.userEmpIds}"',
+      'userEmpIds="${event.userEmpIds}" '
+      '(401 ⇒ refresh-token flow handled transparently by ApiClient)',
     );
     emit(const ShiftUpdateInProgress());
     try {
@@ -84,9 +91,52 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
     } catch (e) {
       debugPrint('[SHIFT_BLOC] UpdateShiftSchedules ✖ $e');
       if (_isUnauthorized(e)) {
+        debugPrint(
+          '[SHIFT_BLOC] 401 reached bloc ⇒ refresh-token flow exhausted, '
+          'session ended.',
+        );
         emit(const ShiftUnauthorized());
       } else {
         emit(ShiftUpdateError(_friendlyMessage(e)));
+      }
+    }
+  }
+
+  Future<void> _onCancelSchedule(
+    CancelSchedule event,
+    Emitter<ShiftState> emit,
+  ) async {
+    debugPrint(
+      '[SHIFT_BLOC] CancelSchedule → '
+      'locCode=${event.locCode} '
+      'empId="${event.empId}" '
+      'scheduleDate="${event.scheduleDate}" '
+      'tripType="${event.tripType}" '
+      '(401 ⇒ refresh-token flow handled transparently by ApiClient)',
+    );
+    emit(const ShiftCancelInProgress());
+    try {
+      final response = await _repository.cancelSchedules(
+        locCode: event.locCode,
+        empId: event.empId,
+        scheduleDate: event.scheduleDate,
+        tripType: event.tripType,
+      );
+      debugPrint(
+        '[SHIFT_BLOC] CancelSchedule ✓ '
+        'message="${response.message}" dbResponse="${response.dbResponse}"',
+      );
+      emit(ShiftCancelSuccess(response.displayMessage));
+    } catch (e) {
+      debugPrint('[SHIFT_BLOC] CancelSchedule ✖ $e');
+      if (_isUnauthorized(e)) {
+        debugPrint(
+          '[SHIFT_BLOC] 401 reached bloc ⇒ refresh-token flow exhausted, '
+          'session ended.',
+        );
+        emit(const ShiftUnauthorized());
+      } else {
+        emit(ShiftCancelError(_friendlyMessage(e)));
       }
     }
   }

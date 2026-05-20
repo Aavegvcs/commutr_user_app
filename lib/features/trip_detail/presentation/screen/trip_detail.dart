@@ -30,7 +30,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   bool isLogIn = true;
 
   /// One-day selection (same start/end in the range picker).
-  DateTime? _selectedSingleDate;
+  /// Defaults to today so the current date is pre-selected on first load.
+  DateTime? _selectedSingleDate = _dateOnly(DateTime.now());
 
   /// Completed ranges (inclusive start/end, date-only).
   List<DateTimeRange> _selectedRanges = [];
@@ -420,7 +421,16 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
               ? state.response.result!.first
               : null;
           if (!mounted) return;
-          setState(() => weeklyOffs = _parseWeeklyOff(row?.weekOff));
+          final newWeeklyOffs = _parseWeeklyOff(row?.weekOff);
+          setState(() {
+            weeklyOffs = newWeeklyOffs;
+            // If today (pre-selected by default) is a weekly off per the
+            // loaded config, drop the pre-selection so the picker stays valid.
+            if (_selectedSingleDate != null &&
+                _isWeekOffForSet(_selectedSingleDate!, newWeeklyOffs)) {
+              _selectedSingleDate = null;
+            }
+          });
         } else if (state is WeeklyOffUnauthorized) {
           _handleSessionExpired(state.message);
         }

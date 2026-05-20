@@ -47,3 +47,24 @@ class UpdateShiftSchedules extends ShiftEvent {
         userEmpIds,
       ];
 }
+
+/// Cancels a scheduled trip via `POST /TransRoster/CancelSchedules`.
+///
+/// [tripType] must be `"1"` for a Login (pickup) trip or `"2"` for a Logout
+/// (drop) trip per the API contract.
+class CancelSchedule extends ShiftEvent {
+  final int locCode;
+  final String empId;
+  final String scheduleDate;
+  final String tripType;
+
+  const CancelSchedule({
+    required this.locCode,
+    required this.empId,
+    required this.scheduleDate,
+    required this.tripType,
+  });
+
+  @override
+  List<Object?> get props => [locCode, empId, scheduleDate, tripType];
+}

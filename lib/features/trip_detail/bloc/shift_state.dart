@@ -69,3 +69,27 @@ class ShiftUpdateError extends ShiftState {
   @override
   List<Object?> get props => [message];
 }
+
+// ─── Cancel ride states ─────────────────────────────────────────────────────
+
+class ShiftCancelInProgress extends ShiftState {
+  const ShiftCancelInProgress();
+}
+
+class ShiftCancelSuccess extends ShiftState {
+  final String message;
+
+  const ShiftCancelSuccess([this.message = 'Ride cancelled successfully']);
+
+  @override
+  List<Object?> get props => [message];
+}
+
+class ShiftCancelError extends ShiftState {
+  final String message;
+
+  const ShiftCancelError(this.message);
+
+  @override
+  List<Object?> get props => [message];
+}

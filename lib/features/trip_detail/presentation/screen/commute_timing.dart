@@ -110,9 +110,9 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
 
   void _submitSchedule() {
     final shiftStart =
-        widget.isLogIn ? (selectedPickShift?.shiftTime ?? '') : '';
+        widget.isLogIn ? (selectedPickShift?.shiftTime ?? '') : "NA";
     final shiftEnd =
-        widget.isLogIn ? '' : (selectedDropShift?.shiftTime ?? '');
+        widget.isLogIn ? "NA" : (selectedDropShift?.shiftTime ?? '');
 
     debugPrint(
       '[COMMUTE_TIMING] Next tapped → '

@@ -163,6 +163,20 @@ class ApiClient {
     _dio.options.headers.remove('Authorization');
   }
 
+  /// Returns `true` when the auth interceptor attempted (or could not attempt)
+  /// the refresh-token flow for a 401 response and ultimately gave up — i.e.
+  /// the session is dead and the user must log in again.
+  ///
+  /// Returns `false` for a 401 that wasn't given the refresh-token treatment
+  /// (e.g. a non-401 error wrapped as 401 by something else, or a 401 reached
+  /// while the refresh was still being set up).
+  static bool refreshFailedFor(Object error) {
+    if (error is DioException) {
+      return error.requestOptions.extra['_refreshFailed'] == true;
+    }
+    return false;
+  }
+
   /// Strips a leading `Bearer ` if the stored value already includes it.
   static String _normalizeBearerToken(String token) {
     final trimmed = token.trim();
@@ -261,6 +275,7 @@ class _AuthInterceptor extends Interceptor {
     if (refreshToken == null ||
         contactNumber == null) {
       debugPrint('[AUTH] No session data — passing 401 through (no logout)');
+      requestOptions.extra['_refreshFailed'] = true;
       return handler.next(err);
     }
 
@@ -284,6 +299,7 @@ class _AuthInterceptor extends Interceptor {
       if (newToken == null ||
           newToken.isEmpty) {
         debugPrint('[AUTH] No new token after refresh — passing 401 through');
+        requestOptions.extra['_refreshFailed'] = true;
         return handler.next(err);
       }
 
@@ -295,16 +311,26 @@ class _AuthInterceptor extends Interceptor {
       requestOptions.headers['Authorization'] =
           'Bearer ${ApiClient._normalizeBearerToken(newToken)}';
 
+      /// IMPORTANT: do not constrain the response type here.
+      /// Different repos call the underlying Dio with `<List<dynamic>>`,
+      /// `<Map<String, dynamic>>`, or `<dynamic>` — forcing a generic type
+      /// causes a `TypeError` on the retry when the server response shape
+      /// doesn't match, which would otherwise silently drop the
+      /// successfully-refreshed session.
       final retryResponse =
-      await _dio.fetch<Map<String, dynamic>>(
+      await _dio.fetch<dynamic>(
         requestOptions,
       );
 
-      debugPrint('[AUTH] Retry succeeded: ${retryResponse.statusCode}');
+      debugPrint(
+        '[AUTH] Retry succeeded: ${retryResponse.statusCode} '
+        '(dataType=${retryResponse.data.runtimeType})',
+      );
 
       return handler.resolve(retryResponse);
     } catch (e) {
       debugPrint('[AUTH] Refresh/retry failed: $e — passing original 401 through');
+      requestOptions.extra['_refreshFailed'] = true;
       return handler.next(err);
     }
   }

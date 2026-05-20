@@ -1,6 +1,7 @@
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/error/exceptions.dart';
@@ -18,12 +19,22 @@ class RosterBloc extends Bloc<RosterEvent, RosterState> {
       FetchRosterUserDetails event,
       Emitter<RosterState> emit,
       ) async {
+    debugPrint('[ROSTER_BLOC] FetchRosterUserDetails →');
     emit(const RosterLoading());
     try {
       final details = await _repository.getUserDetailsForRoster();
+      debugPrint(
+        '[ROSTER_BLOC] FetchRosterUserDetails ✓ '
+        '(401 ⇒ refresh-token flow handled transparently by ApiClient)',
+      );
       emit(RosterLoaded(details));
     } catch (e) {
+      debugPrint('[ROSTER_BLOC] FetchRosterUserDetails ✖ $e');
       if (_isUnauthorized(e)) {
+        debugPrint(
+          '[ROSTER_BLOC] 401 reached bloc ⇒ refresh-token flow exhausted, '
+          'session ended.',
+        );
         emit(const RosterUnauthorized());
       } else {
         emit(RosterError(e.toString()));
@@ -34,6 +45,10 @@ class RosterBloc extends Bloc<RosterEvent, RosterState> {
   /// Detects 401 errors regardless of whether the repository uses the wrapped
   /// [ApiClient] helpers (throws [UnauthorizedException]) or raw [Dio]
   /// (throws [DioException] with `error` set to [UnauthorizedException]).
+  ///
+  /// Note: the refresh-token flow is owned by [ApiClient]'s auth interceptor.
+  /// If a 401 still reaches this bloc, it means the auth interceptor already
+  /// attempted (and exhausted) the refresh-token flow.
   bool _isUnauthorized(Object error) {
     if (error is UnauthorizedException) return true;
     if (error is DioException) {

@@ -1,4 +1,5 @@
 import 'package:commutr_main/core/network/api_client.dart';
+import 'package:commutr_main/features/trip_detail/data/model/cancel_schedules_response.dart';
 import 'package:commutr_main/features/trip_detail/data/model/roaster_shifts_response.dart';
 import 'package:commutr_main/features/trip_detail/data/model/update_schedules_response.dart';
 import 'package:flutter/foundation.dart';
@@ -131,6 +132,93 @@ class RoasterShiftRepo {
     } catch (e, st) {
       debugPrint('[UPDATE_SCHEDULES] ✖ exception=$e');
       debugPrint('[UPDATE_SCHEDULES] ✖ stack=$st');
+      rethrow;
+    }
+  }
+
+  /// Cancels a previously scheduled trip for the given date.
+  ///
+  /// Maps to:
+  /// ```
+  /// POST /TransRoster/CancelSchedules
+  /// {
+  ///   "LocCode": <locCode>,
+  ///   "Empid": "<empId>",
+  ///   "ScheduleDate": "<yyyy-MM-dd>",
+  ///   "TripType": "1"  // "1" = Login, "2" = Logout
+  /// }
+  /// ```
+  Future<CancelSchedulesResponse> cancelSchedules({
+    required int locCode,
+    required String empId,
+    required String scheduleDate,
+    required String tripType,
+  }) async {
+    final body = {
+      'LocCode': locCode,
+      'Empid': empId,
+      'ScheduleDate': scheduleDate,
+      'TripType': tripType,
+    };
+
+    debugPrint('[CANCEL_SCHEDULES] → POST /TransRoster/CancelSchedules');
+    debugPrint('[CANCEL_SCHEDULES] → body=$body');
+
+    try {
+      final response = await _apiClient.dio.post<dynamic>(
+        '/TransRoster/CancelSchedules',
+        data: body,
+      );
+
+      debugPrint(
+        '[CANCEL_SCHEDULES] ← status=${response.statusCode} '
+        'dataType=${response.data.runtimeType}',
+      );
+      debugPrint('[CANCEL_SCHEDULES] ← raw=${response.data}');
+
+      final raw = response.data;
+
+      Map<String, dynamic>? payload;
+      if (raw is Map<String, dynamic>) {
+        payload = raw;
+      } else if (raw is Map) {
+        payload = Map<String, dynamic>.from(raw);
+      } else if (raw is List &&
+          raw.isNotEmpty &&
+          raw.first is Map<String, dynamic>) {
+        payload = raw.first as Map<String, dynamic>;
+      } else if (raw is List && raw.isNotEmpty && raw.first is Map) {
+        payload = Map<String, dynamic>.from(raw.first as Map);
+      }
+
+      if (payload == null) {
+        debugPrint('[CANCEL_SCHEDULES] ✖ payload is null/unrecognized');
+        throw Exception('Unexpected response format');
+      }
+
+      final parsed = CancelSchedulesResponse.fromJson(payload);
+
+      debugPrint(
+        '[CANCEL_SCHEDULES] parsed → '
+        'envelopeSuccess=${parsed.envelopeSuccess} '
+        'message="${parsed.message}" '
+        'errorCode=${parsed.errorCode} '
+        'dbResponse="${parsed.dbResponse}" '
+        'isSuccess=${parsed.isSuccess}',
+      );
+
+      if (!parsed.isSuccess) {
+        throw Exception(
+          parsed.displayMessage.isNotEmpty
+              ? parsed.displayMessage
+              : 'Failed to cancel ride',
+        );
+      }
+
+      return parsed;
+    } catch (e, st) {
+      debugPrint('[CANCEL_SCHEDULES] ✖ exception=$e');
+      debugPrint('[CANCEL_SCHEDULES] ✖ stack=$st');
       rethrow;
     }
   }
