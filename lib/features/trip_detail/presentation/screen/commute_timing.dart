@@ -7,6 +7,7 @@ import '../../bloc/shift_bloc.dart';
 import '../../bloc/shift_event.dart';
 import '../../bloc/shift_state.dart';
 import '../../data/model/roaster_shifts_response.dart';
+import '../../model/trip_schedule_flow_args.dart';
 import 'booking_confirmation.dart';
 
 class CommuteTimingScreen extends StatelessWidget {
@@ -16,6 +17,7 @@ class CommuteTimingScreen extends StatelessWidget {
   final String fromDate;
   final String toDate;
   final String weekOffs;
+  final TripScheduleFlowArgs? flowArgs;
 
   const CommuteTimingScreen({
     super.key,
@@ -25,6 +27,7 @@ class CommuteTimingScreen extends StatelessWidget {
     required this.fromDate,
     required this.toDate,
     required this.weekOffs,
+    this.flowArgs,
   });
 
   @override
@@ -44,6 +47,7 @@ class CommuteTimingScreen extends StatelessWidget {
         fromDate: fromDate,
         toDate: toDate,
         weekOffs: weekOffs,
+        flowArgs: flowArgs,
       ),
     );
   }
@@ -56,6 +60,7 @@ class _CommuteTimingView extends StatefulWidget {
   final String fromDate;
   final String toDate;
   final String weekOffs;
+  final TripScheduleFlowArgs? flowArgs;
 
   const _CommuteTimingView({
     required this.locCode,
@@ -64,6 +69,7 @@ class _CommuteTimingView extends StatefulWidget {
     required this.fromDate,
     required this.toDate,
     required this.weekOffs,
+    this.flowArgs,
   });
 
   @override
@@ -74,6 +80,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
   PickShift? selectedPickShift;
   DropShift? selectedDropShift;
   ShiftResult? _cachedShifts;
+  bool _didApplyInitialShift = false;
 
   static const Color primaryGreen = Color(0xFF1A6B4A);
   static const Color lightGreen = Color(0xFFB2D8C8);
@@ -108,6 +115,52 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
       );
   }
 
+  void _applyPreselectedShift(ShiftResult result) {
+    if (_didApplyInitialShift) return;
+    _didApplyInitialShift = true;
+
+    final preset = widget.flowArgs?.preselectedShiftTime;
+
+    if (widget.isLogIn) {
+      PickShift? pick;
+      if (preset != null && preset.isNotEmpty) {
+        for (final s in result.pickShifts) {
+          if (shiftTimesMatch(s.shiftTime, preset)) {
+            pick = s;
+            break;
+          }
+        }
+      }
+      pick ??= result.pickShifts.isNotEmpty ? result.pickShifts.first : null;
+      if (pick != null && selectedPickShift?.shiftId != pick.shiftId) {
+        setState(() => selectedPickShift = pick);
+        debugPrint(
+          '[COMMUTE_TIMING] pre-selected pick '
+          'id=${pick.shiftId} time="${pick.shiftTime}"',
+        );
+      }
+      return;
+    }
+
+    DropShift? drop;
+    if (preset != null && preset.isNotEmpty) {
+      for (final s in result.dropShifts) {
+        if (shiftTimesMatch(s.shiftTime, preset)) {
+          drop = s;
+          break;
+        }
+      }
+    }
+    drop ??= result.dropShifts.isNotEmpty ? result.dropShifts.first : null;
+    if (drop != null && selectedDropShift?.shiftId != drop.shiftId) {
+      setState(() => selectedDropShift = drop);
+      debugPrint(
+        '[COMMUTE_TIMING] pre-selected drop '
+        'id=${drop.shiftId} time="${drop.shiftTime}"',
+      );
+    }
+  }
+
   void _submitSchedule() {
     final shiftStart =
         widget.isLogIn ? (selectedPickShift?.shiftTime ?? '') : "NA";
@@ -134,7 +187,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
             toDate: widget.toDate,
             shiftStart: shiftStart,
             shiftEnd: shiftEnd,
-            weekOffs: widget.weekOffs,
+            weekOffs: "",
             userEmpIds: widget.empId.toString(),
           ),
         );
@@ -152,28 +205,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
             );
             if (state is ShiftLoaded) {
               setState(() => _cachedShifts = state.result);
-              if (widget.isLogIn &&
-                  selectedPickShift == null &&
-                  state.result.pickShifts.isNotEmpty) {
-                setState(() =>
-                    selectedPickShift = state.result.pickShifts.first);
-                debugPrint(
-                  '[COMMUTE_TIMING] auto-selected pick '
-                  'id=${selectedPickShift?.shiftId} '
-                  'time="${selectedPickShift?.shiftTime}"',
-                );
-              }
-              if (!widget.isLogIn &&
-                  selectedDropShift == null &&
-                  state.result.dropShifts.isNotEmpty) {
-                setState(() =>
-                    selectedDropShift = state.result.dropShifts.first);
-                debugPrint(
-                  '[COMMUTE_TIMING] auto-selected drop '
-                  'id=${selectedDropShift?.shiftId} '
-                  'time="${selectedDropShift?.shiftTime}"',
-                );
-              }
+              _applyPreselectedShift(state.result);
             } else if (state is ShiftUnauthorized) {
               debugPrint('[COMMUTE_TIMING] session expired → ${state.message}');
               _handleSessionExpired(state.message);
@@ -185,7 +217,10 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => const BookingConfirmedScreen(),
+                  builder: (_) => BookingConfirmedScreen(
+                    isUpdate: widget.flowArgs?.isEdit == true,
+                    successMessage: state.message,
+                  ),
                 ),
               );
             } else if (state is ShiftUpdateError) {

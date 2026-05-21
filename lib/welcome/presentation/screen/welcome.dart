@@ -14,6 +14,7 @@ import 'package:commutr_main/features/trip_detail/bloc/shift_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_state.dart';
 import 'package:commutr_main/features/trip_detail/data/model/schedule_home_response.dart';
+import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
@@ -115,12 +116,73 @@ class _WelcomeState extends State<_WelcomeView> {
   /// `POST /TransRoster/CancelSchedules` expects `yyyy-MM-dd`.
   String? _scheduleDateIsoForCancel(ScheduleItem item, bool isLogin) {
     final raw = isLogin ? item.loginScheduleDate : item.logoutScheduleDate;
-    final dt = _parseScheduleDate(raw);
-    if (dt == null) return null;
-    final y = dt.year.toString().padLeft(4, '0');
-    final m = dt.month.toString().padLeft(2, '0');
-    final d = dt.day.toString().padLeft(2, '0');
-    return '$y-$m-$d';
+    return scheduleDateToIso(raw);
+  }
+
+  void _openEditRoster(
+    BuildContext context, {
+    required bool isLogin,
+    required ScheduleItem item,
+  }) {
+    final rosterState = context.read<RosterBloc>().state;
+    if (rosterState is RosterLoading || rosterState is RosterInitial) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Loading office details… try again in a moment.'),
+          ),
+        );
+      return;
+    }
+    if (rosterState is RosterUnauthorized) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(rosterState.message)));
+      return;
+    }
+    if (rosterState is! RosterLoaded) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not load office details.')),
+        );
+      return;
+    }
+
+    final args = TripScheduleFlowArgs.fromScheduleItem(
+      item: item,
+      isLogIn: isLogin,
+      locCode: rosterState.details.locCode,
+    );
+
+    if (!args.hasValidDates) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Schedule date is missing. Pull to refresh.'),
+          ),
+        );
+      return;
+    }
+    if (args.empId == 0) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Employee ID is missing. Pull to refresh.'),
+          ),
+        );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TripDetailsScreen(flowArgs: args),
+      ),
+    );
   }
 
   /// Prefer `EmployeeID` when non-empty; otherwise numeric `Empid`.
@@ -1430,12 +1492,11 @@ class _WelcomeState extends State<_WelcomeView> {
                   const SizedBox(width: 10),
                   InkWell(
                     splashColor: Colors.transparent,
-                    onTap: (){
-                      Navigator.push(
+                    onTap: () {
+                      _openEditRoster(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => TripDetailsScreen(),
-                        ),
+                        isLogin: isLogin,
+                        item: item,
                       );
                     },
                     child: Container(

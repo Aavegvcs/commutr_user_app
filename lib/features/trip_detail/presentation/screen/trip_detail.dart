@@ -1,5 +1,6 @@
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
+import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
 import 'package:commutr_main/features/trip_detail/presentation/screen/select_office.dart';
 import 'package:commutr_main/weekly_off/bloc/weekly_off_bloc.dart';
 import 'package:commutr_main/weekly_off/bloc/weekly_off_event.dart';
@@ -8,19 +9,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 class TripDetailsScreen extends StatelessWidget {
-  const TripDetailsScreen({super.key});
+  /// When set (edit from welcome), dates and trip type are pre-filled.
+  final TripScheduleFlowArgs? flowArgs;
+
+  const TripDetailsScreen({super.key, this.flowArgs});
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
       create: (_) => sl<WeeklyOffBloc>()..add(LoadWeeklyOffEvent()),
-      child: const _TripDetailsView(),
+      child: _TripDetailsView(flowArgs: flowArgs),
     );
   }
 }
 
 class _TripDetailsView extends StatefulWidget {
-  const _TripDetailsView();
+  final TripScheduleFlowArgs? flowArgs;
+
+  const _TripDetailsView({this.flowArgs});
 
   @override
   State<_TripDetailsView> createState() => _TripDetailsViewState();
@@ -32,6 +38,32 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   /// One-day selection (same start/end in the range picker).
   /// Defaults to today so the current date is pre-selected on first load.
   DateTime? _selectedSingleDate = _dateOnly(DateTime.now());
+
+  bool get _isEditFlow => widget.flowArgs?.isEdit == true;
+
+  @override
+  void initState() {
+    super.initState();
+    _applyFlowArgs(widget.flowArgs);
+  }
+
+  void _applyFlowArgs(TripScheduleFlowArgs? args) {
+    if (args == null) return;
+    isLogIn = args.isLogIn;
+    if (!args.hasValidDates) return;
+    final start = parseIsoDate(args.fromDate);
+    final end = parseIsoDate(args.toDate);
+    if (start == null || end == null) return;
+    final s = _dateOnly(start);
+    final e = _dateOnly(end);
+    if (s == e) {
+      _selectedSingleDate = s;
+      _selectedRanges = [];
+    } else {
+      _selectedSingleDate = null;
+      _selectedRanges = [DateTimeRange(start: s, end: e)];
+    }
+  }
 
   /// Completed ranges (inclusive start/end, date-only).
   List<DateTimeRange> _selectedRanges = [];
@@ -522,17 +554,19 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
       ),
       child: Row(
         children: [
-          _buildToggleBtn('Log In', isLogIn),
-          _buildToggleBtn('Logout', !isLogIn),
+          _buildToggleBtn('Log In', isLogIn, enabled: !_isEditFlow),
+          _buildToggleBtn('Logout', !isLogIn, enabled: !_isEditFlow),
         ],
       ),
     );
   }
 
-  Widget _buildToggleBtn(String label, bool isActive) {
+  Widget _buildToggleBtn(String label, bool isActive, {bool enabled = true}) {
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => isLogIn = label == 'Log In'),
+        onTap: enabled
+            ? () => setState(() => isLogIn = label == 'Log In')
+            : null,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           margin: const EdgeInsets.all(3),
@@ -869,6 +903,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                   fromDate: fromDate,
                   toDate: toDate,
                   weekOffs: weekOffs,
+                  flowArgs: widget.flowArgs,
                 ),
               ),
             );

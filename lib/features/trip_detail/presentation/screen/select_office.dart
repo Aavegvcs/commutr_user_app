@@ -4,6 +4,7 @@ import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
 import 'package:commutr_main/features/trip_detail/data/model/user_details_roaster_response.dart';
+import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -14,6 +15,7 @@ class SelectOfficeScreen extends StatelessWidget {
   final String fromDate;
   final String toDate;
   final String weekOffs;
+  final TripScheduleFlowArgs? flowArgs;
 
   const SelectOfficeScreen({
     super.key,
@@ -21,6 +23,7 @@ class SelectOfficeScreen extends StatelessWidget {
     required this.fromDate,
     required this.toDate,
     required this.weekOffs,
+    this.flowArgs,
   });
 
   @override
@@ -32,6 +35,7 @@ class SelectOfficeScreen extends StatelessWidget {
         fromDate: fromDate,
         toDate: toDate,
         weekOffs: weekOffs,
+        flowArgs: flowArgs,
       ),
     );
   }
@@ -42,12 +46,14 @@ class _SelectOfficeView extends StatefulWidget {
   final String fromDate;
   final String toDate;
   final String weekOffs;
+  final TripScheduleFlowArgs? flowArgs;
 
   const _SelectOfficeView({
     required this.isLogIn,
     required this.fromDate,
     required this.toDate,
     required this.weekOffs,
+    this.flowArgs,
   });
 
   @override
@@ -56,6 +62,7 @@ class _SelectOfficeView extends StatefulWidget {
 
 class _SelectOfficeViewState extends State<_SelectOfficeView> {
   int _selectedIndex = 0;
+  bool _didApplyInitialOffice = false;
 
   static const int _totalSteps = 4;
   static const int _completedSteps = 2;
@@ -217,6 +224,23 @@ class _SelectOfficeViewState extends State<_SelectOfficeView> {
 
                   if (state is RosterLoaded) {
                     final locations = state.details.locations;
+                    final initialLoc = widget.flowArgs?.locCode;
+                    if (!_didApplyInitialOffice &&
+                        initialLoc != null &&
+                        initialLoc != 0) {
+                      final idx = locations.indexWhere(
+                        (l) => l.locCode == initialLoc,
+                      );
+                      if (idx >= 0) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          setState(() {
+                            _selectedIndex = idx;
+                            _didApplyInitialOffice = true;
+                          });
+                        });
+                      }
+                    }
 
                     if (locations.isEmpty) {
                       return const Center(
@@ -268,16 +292,31 @@ class _SelectOfficeViewState extends State<_SelectOfficeView> {
                       'toDate=${widget.toDate} '
                       'weekOffs="${widget.weekOffs}"',
                     );
+                    final locations = state.details.locations;
+                    if (locations.isEmpty) return;
+                    final officeIndex = _selectedIndex < 0
+                        ? 0
+                        : (_selectedIndex >= locations.length
+                            ? locations.length - 1
+                            : _selectedIndex);
+                    final selected = locations[officeIndex];
+                    final flow = widget.flowArgs;
+                    final empId = flow != null &&
+                            flow.isEdit &&
+                            flow.empId != 0
+                        ? flow.empId
+                        : state.details.empId;
                     Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => CommuteTimingScreen(
-                          locCode: state.details.locCode,
-                          empId: state.details.empId,
+                          locCode: selected.locCode,
+                          empId: empId,
                           isLogIn: widget.isLogIn,
                           fromDate: widget.fromDate,
                           toDate: widget.toDate,
                           weekOffs: widget.weekOffs,
+                          flowArgs: widget.flowArgs,
                         ),
                       ),
                     );

@@ -2,7 +2,17 @@ import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/material.dart';
 
 class BookingConfirmedScreen extends StatefulWidget {
-  const BookingConfirmedScreen({super.key});
+  /// `true` when the user updated an existing schedule (edit from welcome).
+  final bool isUpdate;
+
+  /// Message from `UpdateSchedules` API (optional).
+  final String? successMessage;
+
+  const BookingConfirmedScreen({
+    super.key,
+    this.isUpdate = false,
+    this.successMessage,
+  });
 
   @override
   State<BookingConfirmedScreen> createState() => _BookingConfirmedScreenState();
@@ -121,10 +131,12 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                 },
                 child: Column(
                   children: [
-                    const Text(
-                      'Booking Confirmed!',
+                    Text(
+                      widget.isUpdate
+                          ? 'Schedule Updated!'
+                          : 'Booking Confirmed!',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w800,
                         color: Color(0xFF1A1A1A),
@@ -134,7 +146,11 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'Your ride schedule has\nbeen successfully booked.',
+                      widget.successMessage?.isNotEmpty == true
+                          ? widget.successMessage!
+                          : widget.isUpdate
+                              ? 'Your ride schedule has\nbeen successfully updated.'
+                              : 'Your ride schedule has\nbeen successfully booked.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 15,
