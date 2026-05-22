@@ -48,7 +48,7 @@ class _ChatPopupState extends State<ChatPopup> {
   @override
   void initState() {
     super.initState();
-    _fetchWeeklyOff();
+    // _fetchWeeklyOff();
   }
 
   Future<void> _fetchWeeklyOff() async {

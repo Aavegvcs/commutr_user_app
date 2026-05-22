@@ -75,7 +75,7 @@ class ScheduleDateGroup {
             .toList(growable: false)
         : const <ScheduleItem>[];
     return ScheduleDateGroup(
-      dateIn: json['DateIn']?.toString(),
+      dateIn: json['DateIn']?.toString() ?? json['DayName']?.toString(),
       data: items,
     );
   }
@@ -155,6 +155,33 @@ class ScheduleItem {
   bool get hasLogoutSchedule {
     final v = logoutScheduleDate?.trim() ?? '';
     return v.isNotEmpty;
+  }
+
+  bool get _hasLoginShiftTime {
+    final v = loginShiftTime?.trim() ?? '';
+    return v.isNotEmpty;
+  }
+
+  bool get _hasLogoutShiftTime {
+    final v = logoutShiftTime?.trim() ?? '';
+    return v.isNotEmpty;
+  }
+
+  /// Whether the login schedule card should appear on the home screen.
+  ///
+  /// The API often returns `"Today"` rows with `TripStatusName: Scheduled` but
+  /// without `LoginScheduleDate` (see observed `GetScheduleHomePage` payloads).
+  bool get shouldShowLoginCard {
+    if (hasLoginSchedule || _hasLoginShiftTime) return true;
+    if (isScheduledStatus && !hasLogoutSchedule && !_hasLogoutShiftTime) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Whether the logout schedule card should appear on the home screen.
+  bool get shouldShowLogoutCard {
+    return hasLogoutSchedule || _hasLogoutShiftTime;
   }
 
   /// `true` when the backend marks the trip as still `"Scheduled"` —

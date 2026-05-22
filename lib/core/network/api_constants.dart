@@ -5,9 +5,9 @@
 abstract final class ApiConstants {
   ApiConstants._();
 
-  static const String host = '13.235.144.192';
-  static const String baseHost = 'http://$host';
+  // static const String host = '13.235.144.192';
+  // static const String baseHost = 'http://$host';
 
-  static const String authBaseUrl = '$baseHost:5000/api/v1';
-  static const String appBaseUrl = '$baseHost:5001/api/v1';
+  static const String authBaseUrl = 'https://dev-auth.commutr.in/api/v1';
+  static const String appBaseUrl = 'https://dev-core.commutr.in/api/v1';
 }

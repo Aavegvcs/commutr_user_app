@@ -86,14 +86,14 @@ class _SignupScreenState extends State<SignupScreen> {
 
   /// Auth service (:5000) — [GET /Users/check-exists].
   static const String _checkExistsUrl =
-      'http://13.235.144.192:5000/api/v1/Users/check-exists';
+      'https://dev-auth.commutr.in/api/v1/Users/check-exists';
 
   /// Absolute URLs — passing absolute URLs to Dio overrides `baseUrl`,
   /// guaranteeing signup OTP always hits :5001 regardless of any other config.
   static const String _otpSendPath =
-      'http://13.235.144.192:5001/api/v1/Otp/send';
+      'https://dev-core.commutr.in/api/v1/Otp/send';
   static const String _otpVerifyPath =
-      'http://13.235.144.192:5001/api/v1/Otp/verify';
+      'https://dev-core.commutr.in/api/v1/Otp/verify';
 
   void _logApiRequest({
     required String tag,

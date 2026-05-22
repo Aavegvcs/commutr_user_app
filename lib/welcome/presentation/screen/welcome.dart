@@ -3,6 +3,7 @@ import 'dart:math' show pi;
 import 'package:commutr_main/core/debug/api_logger_screen.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
@@ -10,10 +11,14 @@ import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
 import 'package:commutr_main/features/trip_detail/bloc/schedule_home_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/schedule_home_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/schedule_home_state.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_home_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_home_event.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_home_state.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_state.dart';
 import 'package:commutr_main/features/trip_detail/data/model/schedule_home_response.dart';
+import 'package:commutr_main/features/trip_detail/data/model/trip_home_response.dart';
 import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
@@ -34,8 +39,12 @@ class Welcome extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
+        BlocProvider<TripHomeBloc>(
+          create: (_) => sl<TripHomeBloc>()..add(const FetchTripHome()),
+        ),
         BlocProvider<ScheduleHomeBloc>(
-          create: (_) => sl<ScheduleHomeBloc>()..add(const FetchScheduleHome()),
+          create: (_) =>
+              sl<ScheduleHomeBloc>()..add(const FetchScheduleHome()),
         ),
         BlocProvider<RosterBloc>(
           create: (_) => sl<RosterBloc>()..add(const FetchRosterUserDetails()),
@@ -55,6 +64,9 @@ class _WelcomeView extends StatefulWidget {
 
 class _WelcomeState extends State<_WelcomeView> {
   int _selectedIndex = 0;
+
+  /// Keys for which active-trip cards are expanded (prefix `trip_`).
+  final Set<String> _tripExpanded = {};
 
   /// Keys for which schedule cards are expanded
   /// (e.g. `"Today_login_0"`, `"Tomorrow_logout_0"`).
@@ -194,6 +206,10 @@ class _WelcomeState extends State<_WelcomeView> {
   }
 
   void _openTransportAssistantChat() {
+    context.read<TripHomeBloc>().add(const FetchTripHome());
+    context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
+
+    // Navigate – the API call runs in the background
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => const ChatPopup(),
@@ -751,63 +767,60 @@ class _WelcomeState extends State<_WelcomeView> {
   }
 
   Widget _buildSchedulesSection() {
-    return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
-      builder: (context, state) {
-        final body = _buildSchedulesBody(context, state);
-        return RefreshIndicator(
-          onRefresh: () async {
-            context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
-          },
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.only(bottom: 200),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Center(
-                    child: Text(
-                      'Schedules',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF222222),
+    return BlocBuilder<TripHomeBloc, TripHomeState>(
+      builder: (context, tripState) {
+        return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
+          builder: (context, scheduleState) {
+            return RefreshIndicator(
+              onRefresh: () async {
+                context.read<TripHomeBloc>().add(const FetchTripHome());
+                context
+                    .read<ScheduleHomeBloc>()
+                    .add(const FetchScheduleHome());
+              },
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 200),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: Text(
+                          'Schedules',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF222222),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                    _buildHomeTripAndScheduleBody(
+                      context,
+                      tripState,
+                      scheduleState,
+                    ),
+                  ],
                 ),
-                body,
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
   }
 
-  Widget _buildSchedulesBody(BuildContext context, ScheduleHomeState state) {
-    if (state is ScheduleHomeLoading || state is ScheduleHomeInitial) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 40),
-        child: Center(
-          child: SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                Color(0xFF1A6B3C),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-    if (state is ScheduleHomeUnauthorized) {
+  Widget _buildHomeTripAndScheduleBody(
+    BuildContext context,
+    TripHomeState tripState,
+    ScheduleHomeState scheduleState,
+  ) {
+    if (tripState is TripHomeUnauthorized) {
       return _buildSchedulesEmptyState(
         title: 'Session expired',
-        subtitle: state.message,
+        subtitle: tripState.message,
         onRetry: () => Navigator.of(context, rootNavigator: true)
             .pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const MobileNoVerification()),
@@ -816,83 +829,141 @@ class _WelcomeState extends State<_WelcomeView> {
         retryLabel: 'Sign in again',
       );
     }
-    if (state is ScheduleHomeError) {
+    if (scheduleState is ScheduleHomeUnauthorized) {
       return _buildSchedulesEmptyState(
-        title: 'Could not load schedules',
-        subtitle: state.message,
-        onRetry: () =>
-            context.read<ScheduleHomeBloc>().add(const FetchScheduleHome()),
-        retryLabel: 'Retry',
+        title: 'Session expired',
+        subtitle: scheduleState.message,
+        onRetry: () => Navigator.of(context, rootNavigator: true)
+            .pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const MobileNoVerification()),
+          (route) => false,
+        ),
+        retryLabel: 'Sign in again',
       );
     }
-    if (state is ScheduleHomeLoaded) {
-      final cards = _buildScheduleGroupWidgets(state.groups);
-      if (cards.isEmpty) {
-        return _buildSchedulesEmptyState(
-          title: 'No schedules yet',
-          subtitle:
-              'You have no trips scheduled. Pull down to refresh or create a schedule.',
-        );
+
+    final tripLoading =
+        tripState is TripHomeLoading || tripState is TripHomeInitial;
+    final scheduleLoading = scheduleState is ScheduleHomeLoading ||
+        scheduleState is ScheduleHomeInitial;
+
+    if (tripLoading && scheduleLoading) {
+      return _buildSectionLoader();
+    }
+
+    final children = <Widget>[];
+
+    if (tripLoading) {
+      children.add(_buildSectionLoader(compact: true));
+    } else if (tripState is TripHomeError) {
+      children.add(
+        _buildSchedulesEmptyState(
+          title: 'Could not load active trips',
+          subtitle: tripState.message,
+          onRetry: () =>
+              context.read<TripHomeBloc>().add(const FetchTripHome()),
+          retryLabel: 'Retry',
+        ),
+      );
+    } else if (tripState is TripHomeLoaded) {
+      final tripCards = _buildTripHomeGroupWidgets(tripState.groups);
+      if (tripCards.isNotEmpty) {
+        children.add(_buildSubsectionLabel('Active Trips'));
+        children.addAll(tripCards);
+        children.add(const SizedBox(height: 16));
       }
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: cards,
+    }
+
+    if (scheduleLoading) {
+      children.add(_buildSectionLoader(compact: true));
+    } else if (scheduleState is ScheduleHomeError) {
+      children.add(
+        _buildSchedulesEmptyState(
+          title: 'Could not load schedules',
+          subtitle: scheduleState.message,
+          onRetry: () => context
+              .read<ScheduleHomeBloc>()
+              .add(const FetchScheduleHome()),
+          retryLabel: 'Retry',
+        ),
+      );
+    } else if (scheduleState is ScheduleHomeLoaded) {
+      final scheduleCards =
+          _buildScheduleGroupWidgets(scheduleState.groups);
+      if (scheduleCards.isNotEmpty) {
+        children.add(_buildSubsectionLabel('Scheduled'));
+        children.addAll(scheduleCards);
+      }
+    }
+
+    if (children.isEmpty) {
+      return _buildSchedulesEmptyState(
+        title: 'No schedules yet',
+        subtitle:
+            'You have no active trips or scheduled rides. Pull down to refresh.',
       );
     }
-    return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
   }
 
-  /// Builds a flat list of date headings + login/logout cards from the API
-  /// response. Honors the visibility rules:
-  /// * Login card → only if `LoginScheduleDate` is non-null & non-empty.
-  /// * Logout card → only if `LogoutScheduleDate` is non-null & non-empty.
-  /// A group whose every item produces zero visible cards is skipped entirely
-  /// so we don't render an orphan date heading.
-  List<Widget> _buildScheduleGroupWidgets(List<ScheduleDateGroup> groups) {
+  Widget _buildSubsectionLabel(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF1A6B3C),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionLoader({bool compact = false}) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: compact ? 20 : 40),
+      child: const Center(
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF1A6B3C)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildTripHomeGroupWidgets(List<TripDayGroup> groups) {
     final widgets = <Widget>[];
 
     for (final group in groups) {
-      // Find the visible cards in this group first; if there are none we
-      // skip the heading too (cleaner UX than a dangling date label).
+      if (group.data.isEmpty) continue;
+
       final groupCards = <Widget>[];
       for (var i = 0; i < group.data.length; i++) {
         final item = group.data[i];
-        if (item.hasLoginSchedule) {
-          final key = '${group.dateIn ?? "_"}_login_$i';
-          groupCards.add(_buildScheduleCard(
-            type: 'login',
-            label: 'Login',
-            time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
-            isExpanded: _scheduleExpanded.contains(key),
-            onTap: () => _toggleScheduleExpansion(key),
-            isScheduled: item.isScheduledStatus,
-            item: item,
-          ));
-          groupCards.add(const SizedBox(height: 10));
-        }
-        if (item.hasLogoutSchedule) {
-          final key = '${group.dateIn ?? "_"}_logout_$i';
-          groupCards.add(_buildScheduleCard(
-            type: 'logout',
-            label: 'Logout',
-            time: _formatShiftTime(item.logoutShiftTime) ?? '--:--',
-            isExpanded: _scheduleExpanded.contains(key),
-            onTap: () => _toggleScheduleExpansion(key),
-            isScheduled: item.isScheduledStatus,
-            item: item,
-          ));
-          groupCards.add(const SizedBox(height: 10));
-        }
+        final typeKey = (item.tripType ?? 'trip').toLowerCase();
+        final key = 'trip_${group.dayName ?? "_"}_${typeKey}_$i';
+        groupCards.add(_buildTripCard(
+          item: item,
+          isExpanded: _tripExpanded.contains(key),
+          onTap: () => _toggleTripExpansion(key),
+        ));
+        groupCards.add(const SizedBox(height: 10));
       }
 
-      if (groupCards.isEmpty) continue;
-
-      // Trim trailing spacer.
       if (groupCards.last is SizedBox) {
         groupCards.removeLast();
       }
 
-      widgets.add(_buildScheduleDateHeader(group));
+      widgets.add(_buildTripDateHeader(group));
       widgets.add(const SizedBox(height: 12));
       widgets.addAll(groupCards);
       widgets.add(const SizedBox(height: 8));
@@ -901,10 +972,10 @@ class _WelcomeState extends State<_WelcomeView> {
     return widgets;
   }
 
-  Widget _buildScheduleDateHeader(ScheduleDateGroup group) {
-    final headerDate = _resolveGroupHeaderDate(group);
-    final relativeLabel = (group.dateIn?.trim().isNotEmpty ?? false)
-        ? group.dateIn!.trim()
+  Widget _buildTripDateHeader(TripDayGroup group) {
+    final headerDate = _resolveTripGroupHeaderDate(group);
+    final relativeLabel = (group.dayName?.trim().isNotEmpty ?? false)
+        ? group.dayName!.trim()
         : null;
 
     return Padding(
@@ -975,6 +1046,16 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
+  void _toggleTripExpansion(String key) {
+    setState(() {
+      if (_tripExpanded.contains(key)) {
+        _tripExpanded.remove(key);
+      } else {
+        _tripExpanded.add(key);
+      }
+    });
+  }
+
   void _toggleScheduleExpansion(String key) {
     setState(() {
       if (_scheduleExpanded.contains(key)) {
@@ -1001,18 +1082,14 @@ class _WelcomeState extends State<_WelcomeView> {
     'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
   ];
 
-  /// Tries to derive a friendly header date (`"21st May, Tuesday"`) for a
-  /// group. Falls back to whatever schedule date the items expose, then to
-  /// `DateIn` semantics (Today/Tomorrow) so we never render an empty header.
-  String? _resolveGroupHeaderDate(ScheduleDateGroup group) {
+  String? _resolveTripGroupHeaderDate(TripDayGroup group) {
     DateTime? candidate;
     for (final item in group.data) {
-      candidate ??= _parseScheduleDate(item.loginScheduleDate);
-      candidate ??= _parseScheduleDate(item.logoutScheduleDate);
+      candidate ??= _parseScheduleDate(item.tripDate);
       if (candidate != null) break;
     }
     if (candidate == null) {
-      final tag = group.dateIn?.toLowerCase().trim();
+      final tag = group.dayName?.toLowerCase().trim();
       final now = DateTime.now();
       if (tag == 'today') {
         candidate = DateTime(now.year, now.month, now.day);
@@ -1023,6 +1100,44 @@ class _WelcomeState extends State<_WelcomeView> {
     }
     if (candidate == null) return null;
     return _formatHeaderDate(candidate);
+  }
+
+  List<String> _otpDigits(String? otp) {
+    final cleaned = (otp ?? '').trim();
+    if (cleaned.isEmpty) {
+      return const ['—', '—', '—', '—'];
+    }
+    final chars = cleaned.split('');
+    while (chars.length < 4) {
+      chars.add('—');
+    }
+    return chars.take(4).toList(growable: false);
+  }
+
+  ({IconData icon, Color color}) _tripStatusStyle(
+    String? statusName,
+    bool isLogin,
+  ) {
+    final status = (statusName ?? '').trim().toLowerCase();
+    final accent = isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
+    if (status == 'scheduled') {
+      return (icon: Icons.access_time, color: const Color(0xFF596064));
+    }
+    if (status.contains('start') || status.contains('board')) {
+      return (icon: Icons.check_circle_outline, color: accent);
+    }
+    if (status == 'printed' || status.contains('alloc')) {
+      return (icon: Icons.check_circle_outline, color: accent);
+    }
+    return (icon: Icons.info_outline, color: accent);
+  }
+
+  String? _plannedPickupLabel(TripHomeItem item) {
+    final pickTime = item.pickTime?.trim();
+    if (pickTime != null && pickTime.isNotEmpty) {
+      return _formatShiftTime(pickTime) ?? pickTime;
+    }
+    return _formatShiftTime(item.pickShift);
   }
 
   /// Parses dates in the format the backend ships, e.g. `"21-May-2026"`.
@@ -1143,6 +1258,105 @@ class _WelcomeState extends State<_WelcomeView> {
     if (hour12 == 0) hour12 = 12;
     final mm = m.toString().padLeft(2, '0');
     return '$hour12:$mm $period';
+  }
+
+  List<Widget> _buildScheduleGroupWidgets(List<ScheduleDateGroup> groups) {
+    final widgets = <Widget>[];
+
+    for (final group in groups) {
+      // Find the visible cards in this group first; if there are none we
+      // skip the heading too (cleaner UX than a dangling date label).
+      final groupCards = <Widget>[];
+      for (var i = 0; i < group.data.length; i++) {
+        final item = group.data[i];
+        if (item.shouldShowLoginCard) {
+          final key = '${group.dateIn ?? "_"}_login_$i';
+          groupCards.add(_buildScheduleCard(
+            type: 'login',
+            label: 'Login',
+            time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
+            isExpanded: _scheduleExpanded.contains(key),
+            onTap: () => _toggleScheduleExpansion(key),
+            isScheduled: item.isScheduledStatus,
+            item: item,
+          ));
+          groupCards.add(const SizedBox(height: 10));
+        }
+        if (item.shouldShowLogoutCard) {
+          final key = '${group.dateIn ?? "_"}_logout_$i';
+          groupCards.add(_buildScheduleCard(
+            type: 'logout',
+            label: 'Logout',
+            time: _formatShiftTime(item.logoutShiftTime) ?? '--:--',
+            isExpanded: _scheduleExpanded.contains(key),
+            onTap: () => _toggleScheduleExpansion(key),
+            isScheduled: item.isScheduledStatus,
+            item: item,
+          ));
+          groupCards.add(const SizedBox(height: 10));
+        }
+
+        // Fallback: API row with status but no date/shift fields (common for "Today").
+        if (!item.shouldShowLoginCard &&
+            !item.shouldShowLogoutCard &&
+            item.isScheduledStatus) {
+          final key = '${group.dateIn ?? "_"}_login_$i';
+          groupCards.add(_buildScheduleCard(
+            type: 'login',
+            label: 'Login',
+            time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
+            isExpanded: _scheduleExpanded.contains(key),
+            onTap: () => _toggleScheduleExpansion(key),
+            isScheduled: true,
+            item: item,
+          ));
+          groupCards.add(const SizedBox(height: 10));
+        }
+      }
+
+      if (groupCards.isEmpty) continue;
+
+      // Trim trailing spacer.
+      if (groupCards.last is SizedBox) {
+        groupCards.removeLast();
+      }
+
+      widgets.add(_buildScheduleDateHeader(group));
+      widgets.add(const SizedBox(height: 12));
+      widgets.addAll(groupCards);
+      widgets.add(const SizedBox(height: 8));
+    }
+
+    return widgets;
+  }
+
+  Widget _buildScheduleDateHeader(ScheduleDateGroup group) {
+    final headerDate = _resolveGroupHeaderDate(group);
+    final relativeLabel = (group.dateIn?.trim().isNotEmpty ?? false)
+        ? group.dateIn!.trim()
+        : null;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            headerDate ?? (relativeLabel ?? ''),
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF333333),
+            ),
+          ),
+          if (relativeLabel != null)
+            Text(
+              relativeLabel,
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _buildScheduleCard({
@@ -1515,6 +1729,512 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ),
                   const SizedBox(width: 10),
+                  Expanded(
+                    child: Opacity(
+                      opacity: isScheduled ? 0.6 : 1.0,
+                      child: GestureDetector(
+                        onTap: trackVehicleAction,
+                        child: Container(
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: trackBg,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.my_location, size: 16, color: trackFg),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Track Vehicle',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: trackFg,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ] else if (!isScheduled) ...[
+              // ─── Collapsed details: OTP + Track Vehicle (Vehicle Allocated) ─
+              const SizedBox(height: 12),
+              Container(height: 1, color: const Color(0xFFE8E8E8)),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.only(left: 30.0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Boarding OTP',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: Color(0xFF282828),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: otpDigits
+                                .map(
+                                  (digit) => Container(
+                                margin: const EdgeInsets.only(right: 6),
+                                width: 23,
+                                height: 23,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE6F3ED),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  digit,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF002D1C),
+                                  ),
+                                ),
+                              ),
+                            )
+                                .toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Transform.translate(
+                      offset: const Offset(0.0, 10.0),
+                      child: GestureDetector(
+                        onTap: trackVehicleAction,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: tagBgColor,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.my_location,
+                                  size: 16, color: accentColor),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Track Vehicle',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: accentColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  /// Tries to derive a friendly header date for schedule groups.
+  String? _resolveGroupHeaderDate(ScheduleDateGroup group) {
+    DateTime? candidate;
+    for (final item in group.data) {
+      candidate ??= _parseScheduleDate(item.loginScheduleDate);
+      candidate ??= _parseScheduleDate(item.logoutScheduleDate);
+      if (candidate != null) break;
+    }
+    if (candidate == null) {
+      final tag = group.dateIn?.toLowerCase().trim();
+      final now = DateTime.now();
+      if (tag == 'today') {
+        candidate = DateTime(now.year, now.month, now.day);
+      } else if (tag == 'tomorrow') {
+        final tmrw = now.add(const Duration(days: 1));
+        candidate = DateTime(tmrw.year, tmrw.month, tmrw.day);
+      }
+    }
+    if (candidate == null) return null;
+    return _formatHeaderDate(candidate);
+  }
+
+  Widget _buildTripCard({
+    required TripHomeItem item,
+    required bool isExpanded,
+    required VoidCallback onTap,
+  }) {
+    final bool isLogin = item.isLogin;
+    final String label = item.tripType ?? (isLogin ? 'Login' : 'Logout');
+    final String time = _formatShiftTime(item.pickShift) ?? '--:--';
+    final bool isScheduled = item.isScheduledStatus;
+    final statusStyle = _tripStatusStyle(item.tripStatusName, isLogin);
+    final Color accentColor =
+        isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
+    final Color statusColor = statusStyle.color;
+    final Color tagBgColor =
+        isLogin ? const Color(0xFFE8F5EE) : const Color(0xFFFFF0EE);
+    final Color tagTextColor =
+        isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
+    final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
+    final IconData statusIcon = statusStyle.icon;
+    final String statusLabel = item.tripStatusName ?? '—';
+    final List<String> otpDigits = _otpDigits(item.otp);
+    final plannedPickup = _plannedPickupLabel(item) ?? '--:--';
+    final vehicleLabel = (item.vehicleInfo?.trim().isNotEmpty ?? false)
+        ? item.vehicleInfo!.trim()
+        : 'Not assigned';
+    final seqLabel = (item.paxOrder != null && item.paxCount != null)
+        ? 'Seq: ${item.paxOrder}/${item.paxCount}'
+        : null;
+    final ivr = item.userAppIvrNumber?.trim();
+
+    // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
+    final Color trackBg =
+        isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
+    final Color trackFg =
+        isScheduled ? const Color(0xFFB0B0B0) : accentColor;
+    final VoidCallback? trackVehicleAction = isScheduled
+        ? null
+        : () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => RideTrackingScreen(),
+              ),
+            );
+          };
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border(left: BorderSide(color: accentColor, width: 4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              splashColor: Colors.transparent,
+              onTap: onTap,
+              child: Row(
+                children: [
+                  Icon(arrowIcon, color: accentColor, size: 22),
+                  const SizedBox(width: 10),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: tagTextColor,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: tagBgColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      time,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: tagTextColor,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  AnimatedRotation(
+                    turns: isExpanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Icon(
+                      Icons.keyboard_arrow_down,
+                      color: Color(0xff596064),
+                      size: 22,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            InkWell(
+              splashColor: Colors.transparent,
+              onTap: onTap,
+              child: Row(
+                children: [
+                  const SizedBox(width: 32),
+                  Icon(statusIcon, size: 13, color: statusColor),
+                  const SizedBox(width: 4),
+                  Text(
+                    statusLabel,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: statusColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isExpanded) ...[
+              const SizedBox(height: 14),
+              Container(height: 1, color: const Color(0xFFE8E8E8)),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Text(
+                  'TRIP DETAIL',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xff596064),
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Column(
+                      children: [
+                        Image.asset(
+                          'assets/images/pre_location.png',
+                          width: 19,
+                          height: 88,
+                          fit: BoxFit.cover,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Pickup:
+                          //   Login  → user's home (UserAddress)
+                          //   Logout → office (OfficeAddress)
+                          _buildAddressBlock(
+                            label: 'PICKUP',
+                            address: isLogin
+                                ? item.userAddress
+                                : item.officeAddress,
+                          ),
+                          const SizedBox(height: 20),
+                          _buildAddressBlock(
+                            label: 'DROP',
+                            address: isLogin
+                                ? item.officeAddress
+                                : item.userAddress,
+                          ),
+                          if (seqLabel != null) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.event_seat_outlined,
+                                  size: 16,
+                                  color: Colors.grey[600],
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  seqLabel,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xff596064),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!isScheduled) ...[
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFFE8E8E8)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Planned Pickup',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Color(0xff6B7280),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              plannedPickup,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1A1A1A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFFE8E8E8)),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Vehicle Info.',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Color(0xff6B7280),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    vehicleLabel,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF1A1A1A),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (ivr != null && ivr.isNotEmpty)
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: tagBgColor,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.phone,
+                                  size: 18,
+                                  color: accentColor,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              // ─── Boarding OTP (hidden when "Scheduled") ───────────────────
+              if (!isScheduled) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFE8E8E8)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Boarding OTP',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Color(0xff6B7280),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: otpDigits
+                            .map(
+                              (digit) => Container(
+                            margin: const EdgeInsets.only(right: 8),
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE6F3ED),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              digit,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF002D1C),
+                              ),
+                            ),
+                          ),
+                        )
+                            .toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              Row(
+                children: [
                   Expanded(
                     child: Opacity(
                       opacity: isScheduled ? 0.6 : 1.0,
@@ -2131,6 +2851,123 @@ class AppDrawer extends StatelessWidget {
 
   final VoidCallback? onTripHistoryTap;
 
+  void _showLogoutDialog(BuildContext context) {
+    Navigator.pop(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFFF0EE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.logout_rounded,
+                    color: Color(0xFFBA1A1A),
+                    size: 30,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Logout?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xff181C1B),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Are you sure you want to logout from your account?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Color(0xFF888888),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFCC2222),
+                        side: const BorderSide(
+                          color: Color(0xFFFFCCCC),
+                          width: 1.5,
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                      ),
+                      onPressed: () async {
+                        await sl<AuthLocalStorage>().clearAuthData();
+                        if (!dialogContext.mounted) return;
+                        Navigator.of(dialogContext, rootNavigator: true)
+                            .pushAndRemoveUntil(
+                          MaterialPageRoute(
+                            builder: (_) => const MobileNoVerification(),
+                          ),
+                          (route) => false,
+                        );
+                      },
+                      child: const Text(
+                        'Logout',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1A5C38),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                      ),
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Drawer(
@@ -2235,6 +3072,18 @@ class AppDrawer extends StatelessWidget {
                 icon: Icons.star_outline,
                 label: 'Rate This App',
                 onTap: () => Navigator.pop(context),
+              ),
+
+              const SizedBox(height: 4),
+
+              // ── ACCOUNT section ──────────────────────────────────────────────
+              _SectionLabel('ACCOUNT'),
+              _DrawerItem(
+                icon: Icons.logout_rounded,
+                label: 'Logout',
+                iconColor: const Color(0xFFBA1A1A),
+                iconBgColor: const Color(0xFFFFF0EE),
+                onTap: () => _showLogoutDialog(context),
               ),
 
               if (kDebugMode) ...[

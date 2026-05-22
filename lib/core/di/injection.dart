@@ -11,8 +11,10 @@ import '../../features/auth/presentation/screens/mobile_no_verification.dart';
 import '../../features/trip_detail/bloc/roaster_bloc.dart';
 import '../../features/trip_detail/bloc/schedule_home_bloc.dart';
 import '../../features/trip_detail/bloc/shift_bloc.dart';
+import '../../features/trip_detail/bloc/trip_home_bloc.dart';
 import '../../features/trip_detail/data/repository/roaster_shift_repo.dart';
 import '../../features/trip_detail/data/repository/schedule_home_repo.dart';
+import '../../features/trip_detail/data/repository/trip_home_repo.dart';
 import '../../features/trip_detail/data/repository/user_detail_detail_repo.dart';
 import '../../weekly_off/bloc/weekly_off_bloc.dart';
 import '../../weekly_off/data/repository/weekly_off_repository.dart';
@@ -97,6 +99,14 @@ void setupDependencies() {
 
   sl.registerFactory<ScheduleHomeBloc>(
     () => ScheduleHomeBloc(sl()),
+  );
+
+  sl.registerLazySingleton<TripHomeRepo>(
+    () => TripHomeRepo(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<TripHomeBloc>(
+    () => TripHomeBloc(sl()),
   );
 
   syncBearerTokenToApiClients();

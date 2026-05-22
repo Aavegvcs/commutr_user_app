@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -225,17 +226,43 @@ class _EtsChatWebViewPageState extends State<EtsChatWebViewPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Transport Assistant'),
-        actions: <Widget>[
+        title: const Text(
+          'Transport Assistant',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.3,
+            color: Colors.white,
+          ),
+        ),
+        centerTitle: true,
+        elevation: 0,
+        backgroundColor: const Color(0xFF1A5C38), // deep green brand color
+        foregroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            bottom: Radius.circular(16),
+          ),
+        ),
+        actions: [
           IconButton(
             onPressed: () => _controller.reload(),
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh conversation',
+            splashRadius: 24,
           ),
+          const VerticalDivider(width: 8, thickness: 1, color: Colors.white24),
           IconButton(
             onPressed: clearStoredSession,
-            icon: const Icon(Icons.delete_outline),
+            icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: 'Clear chat history',
+            splashRadius: 24,
           ),
         ],
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+        ),
       ),
       body: Stack(
         children: <Widget>[
