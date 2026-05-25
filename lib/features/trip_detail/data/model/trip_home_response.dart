@@ -102,6 +102,7 @@ class TripHomeItem {
   final int? reachedHomeReq;
   final int? isReached;
   final String? userAppIvrNumber;
+  final int? tripTypeCode;
 
   const TripHomeItem({
     this.tripId,
@@ -127,6 +128,7 @@ class TripHomeItem {
     this.reachedHomeReq,
     this.isReached,
     this.userAppIvrNumber,
+    this.tripTypeCode
   });
 
   factory TripHomeItem.fromJson(Map<String, dynamic> json) {
@@ -172,6 +174,7 @@ class TripHomeItem {
       reachedHomeReq: (json['ReachedHomeReq'] as num?)?.toInt(),
       isReached: (json['IsReached'] as num?)?.toInt(),
       userAppIvrNumber: readString('UserAppIVRNumber'),
+      tripTypeCode: (json['TripTypeCode'] as num?)?.toInt()
     );
   }
 
@@ -183,4 +186,25 @@ class TripHomeItem {
   bool get hasOtp => (otp ?? '').trim().isNotEmpty;
 
   bool get hasVehicleInfo => (vehicleInfo ?? '').trim().isNotEmpty;
+
+  /// Trip has started (code 3) and the user has not boarded yet.
+  bool get isStartedNotBoarded =>
+      !isBoarded &&
+      tripStatusCode == 3 &&
+      (tripStatusName ?? '').trim().toLowerCase() == 'started';
+
+  /// Green Board CTA — not boarded and not deboarded.
+  bool get canShowBoardButton => !isBoarded && !isDeBoarded;
+
+  /// User has boarded but not yet deboarded.
+  bool get isBoardedNotDeboarded => isBoarded && !isDeBoarded;
+
+  /// Show board/deboard action row (share, chat, track + primary CTA).
+  bool get showBoardDeboardActions =>
+      canShowBoardButton || isBoardedNotDeboarded;
+
+  /// Trip has ended (TripStatusName = "End", TripStatusCode = 4).
+  bool get isCompleted =>
+      tripStatusCode == 4 &&
+      (tripStatusName ?? '').trim().toLowerCase() == 'end';
 }

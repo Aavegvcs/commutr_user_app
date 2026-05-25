@@ -1,10 +1,21 @@
+import 'package:commutr_main/features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
 import 'package:flutter/material.dart';
 
 class TripProgressBottomSheet extends StatelessWidget {
-  const TripProgressBottomSheet({super.key});
+  final CabTrackingData tracking;
+  final String? currentUserName;
+
+  const TripProgressBottomSheet({
+    super.key,
+    required this.tracking,
+    this.currentUserName,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final picked = tracking.currentSequenceOrder;
+    final total = tracking.passengerCount;
+
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -15,7 +26,6 @@ class TripProgressBottomSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Drag handle
           Center(
             child: Container(
               width: 40,
@@ -27,8 +37,6 @@ class TripProgressBottomSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-
-          // Header row
           Row(
             children: [
               GestureDetector(
@@ -47,27 +55,22 @@ class TripProgressBottomSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-
-          // Title
-          const Text(
-            'Passengers Picked (2/3)',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF1A5C38),
+          Text(
+            'Passengers Picked ($picked/$total)',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF004D32),
             ),
           ),
-
           const SizedBox(height: 16),
           const Divider(height: 1, color: Color(0xFFE0E0E0)),
           const SizedBox(height: 16),
-
-          // Passenger list with timeline
-          _PassengerTimeline(),
-
+          _PassengerTimeline(
+            tracking: tracking,
+            currentUserName: currentUserName,
+          ),
           const SizedBox(height: 20),
-
-          // Chat CTA
           Container(
             decoration: BoxDecoration(
               color: const Color(0xFFF2F2F2),
@@ -75,12 +78,12 @@ class TripProgressBottomSheet extends StatelessWidget {
             ),
             child: ListTile(
               contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
               leading: Stack(
                 children: [
                   const Icon(
                     Icons.chat_bubble_outline_rounded,
-                    size: 30,
+                    size: 24,
                     color: Color(0xFF1A5C38),
                   ),
                   Positioned(
@@ -99,11 +102,11 @@ class TripProgressBottomSheet extends StatelessWidget {
               ),
               title: const Text(
                 'Need Cab Update?',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
               ),
               subtitle: const Text(
                 'Chat with your group',
-                style: TextStyle(color: Colors.black54, fontSize: 13),
+                style: TextStyle(color: Colors.black54, fontSize: 14),
               ),
               trailing: const Icon(Icons.chevron_right,
                   color: Colors.black45, size: 22),
@@ -117,53 +120,111 @@ class TripProgressBottomSheet extends StatelessWidget {
 }
 
 class _PassengerTimeline extends StatelessWidget {
-  final List<_PassengerStop> stops = const [
-    _PassengerStop(
-      initials: 'AL',
-      name: 'Alex L. (You)',
-      time: '10:25 AM',
-      avatarColor: Color(0xFF1A3A5C),
-      isPickedUp: true,
-      isYou: true,
-    ),
-    _PassengerStop(
-      initials: 'SM',
-      name: 'Sarah M.',
-      time: '10:25 AM',
-      avatarColor: Color(0xFF6B8DD6),
-      isPickedUp: true,
-      isYou: false,
-    ),
-    _PassengerStop(
-      initials: 'RJ',
-      name: 'Ryan J.',
-      time: '10:25 AM',
-      avatarColor: Color(0xFFCCCCCC),
-      isPickedUp: false,
-      isYou: false,
-    ),
-    _PassengerStop(
-      initials: '',
-      name: 'Office',
-      time: '01:00 PM',
-      avatarColor: Color(0xFF1A5C38),
-      isPickedUp: false,
-      isYou: false,
-      isDestination: true,
-    ),
-  ];
+  final CabTrackingData tracking;
+  final String? currentUserName;
 
-  const _PassengerTimeline();
+  const _PassengerTimeline({
+    required this.tracking,
+    this.currentUserName,
+  });
+
+  static const _avatarColors = [
+    Color(0xFF1A3A5C),
+    Color(0xFF6B8DD6),
+    Color(0xFF8B6B4A),
+    Color(0xFF4A8B6B),
+    Color(0xFF7A5C9E),
+  ];
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: List.generate(stops.length, (i) {
-        final stop = stops[i];
-        final isLast = i == stops.length - 1;
-        return _TimelineRow(stop: stop, isLast: isLast);
-      }),
+    final orderedPassengers =
+        tracking.passengersForDisplay(currentUserName);
+    final stops = <_PassengerStop>[];
+
+    for (var i = 0; i < orderedPassengers.length; i++) {
+      final p = orderedPassengers[i];
+      final name = p.empName?.trim() ?? 'Passenger';
+      final isYou = _isCurrentUser(name);
+      stops.add(
+        _PassengerStop(
+          sequenceNumber: i + 1,
+          initials: _initials(name),
+          name: isYou ? '$name (You)' : name,
+          time: _formatPickTime(p.pickTime),
+          avatarColor: _avatarColors[i % _avatarColors.length],
+          isPickedUp: tracking.isPassengerPickedUp(i),
+          isCurrentInSequence: tracking.isPassengerCurrentInSequence(i),
+          isYou: isYou,
+        ),
+      );
+    }
+
+    stops.add(
+      _PassengerStop(
+        sequenceNumber: orderedPassengers.length + 1,
+        initials: '',
+        name: 'Office',
+        time: '—',
+        avatarColor: const Color(0xFF1A5C38),
+        isPickedUp: false,
+        isYou: false,
+        isDestination: true,
+      ),
     );
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        if (stops.length > 1)
+          Positioned(
+            left: (_TimelineRow.timelineColumnWidth - 2) / 2,
+            top: _TimelineRow.avatarVisualHeight(stops.first),
+            bottom: _TimelineRow.avatarVisualHeight(stops.last),
+            child: const SizedBox(
+              width: 2,
+              child: ColoredBox(color: _TimelineRow.connectorColor),
+            ),
+          ),
+        Column(
+          children: List.generate(stops.length, (i) {
+            final stop = stops[i];
+            final isLast = i == stops.length - 1;
+            return _TimelineRow(stop: stop, isLast: isLast);
+          }),
+        ),
+      ],
+    );
+  }
+
+  bool _isCurrentUser(String passengerName) {
+    final current = currentUserName?.trim().toLowerCase();
+    if (current == null || current.isEmpty) return false;
+    return passengerName.trim().toLowerCase() == current;
+  }
+
+  static String _initials(String name) {
+    final parts =
+        name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) {
+      return parts.first.length >= 2
+          ? parts.first.substring(0, 2).toUpperCase()
+          : parts.first.toUpperCase();
+    }
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+  }
+
+  static String _formatPickTime(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return '—';
+    final trimmed = raw.trim();
+    final match = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(trimmed);
+    if (match == null) return trimmed;
+    final hour = int.tryParse(match.group(1)!) ?? 0;
+    final minute = match.group(2)!;
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final hour12 = hour % 12 == 0 ? 12 : hour % 12;
+    return '$hour12:$minute $period';
   }
 }
 
@@ -173,80 +234,85 @@ class _TimelineRow extends StatelessWidget {
 
   const _TimelineRow({required this.stop, required this.isLast});
 
+  static const timelineColumnWidth = 38.0;
+  static const connectorColor = Color(0xFFB5D5C5);
+  static const _passengerAvatarSize = 42.0;
+  static const _destinationAvatarSize = 42.0;
+  static const _currentBorderWidth = 3.0;
+
+  static double avatarVisualHeight(_PassengerStop stop) {
+    if (stop.isDestination) return _destinationAvatarSize;
+    final border =
+        stop.isCurrentInSequence ? _currentBorderWidth * 2 : 0.0;
+    return _passengerAvatarSize + border;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Avatar + vertical line column
-          SizedBox(
-            width: 64,
-            child: Column(
-              children: [
-                // Avatar
-                stop.isDestination
-                    ? Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color: stop.avatarColor,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(
-                    Icons.grid_view_rounded,
-                    color: Colors.white,
-                    size: 26,
-                  ),
-                )
-                    : CircleAvatar(
-                  radius: 26,
-                  backgroundColor: stop.avatarColor,
-                  child: Text(
-                    stop.initials,
-                    style: TextStyle(
-                      color: stop.isPickedUp
-                          ? Colors.white
-                          : Colors.black54,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                ),
-                // Connector line
-                if (!isLast)
-                  Expanded(
-                    child: Container(
-                      width: 2,
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      color: const Color(0xFFB5D5C5),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // Name + time
-          Expanded(
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: timelineColumnWidth,
+          child: Center(child: _buildAvatar()),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
             child: Padding(
               padding: EdgeInsets.only(
                 bottom: isLast ? 0 : 16,
-                top: 10,
+                top: 12,
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    stop.name,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      color: stop.isPickedUp || stop.isDestination
-                          ? Colors.black87
-                          : Colors.black54,
+                  Expanded(
+                    child: Row(
+                      children: [
+                        if (!stop.isDestination && stop.sequenceNumber > 0)
+                          Container(
+                            width: 0,
+                            height: 0,
+                            // margin: const EdgeInsets.only(right: 8),
+                            alignment: Alignment.center,
+                            // decoration: BoxDecoration(
+                            //   color: stop.isCurrentInSequence
+                            //       ? const Color(0xFF1A5C38)
+                            //       : const Color(0xFFE8E8E8),
+                            //   shape: BoxShape.circle,
+                            // ),
+                            child: Text(
+                              '',
+                              // '${stop.sequenceNumber}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: stop.isCurrentInSequence
+                                    ? Colors.white
+                                    : Colors.black54,
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: Text(
+                            stop.name,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 3,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: stop.isCurrentInSequence
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: stop.isPickedUp ||
+                                      stop.isCurrentInSequence ||
+                                      stop.isDestination
+                                  ? Colors.black87
+                                  : Colors.black54,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   Column(
@@ -290,27 +356,74 @@ class _TimelineRow extends StatelessWidget {
               ),
             ),
           ),
-        ],
+      ],
+    );
+  }
+
+  Widget _buildAvatar() {
+    if (stop.isDestination) {
+      return Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: stop.avatarColor,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: const Icon(
+          Icons.corporate_fare,
+          color: Colors.white,
+          size: 24,
+        ),
+      );
+    }
+
+    return Container(
+      decoration: stop.isCurrentInSequence
+          ? BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: const Color(0xFF1A5C38),
+                width: 3,
+              ),
+            )
+          : null,
+      child: CircleAvatar(
+        radius: 26,
+        backgroundColor: stop.avatarColor,
+        child: Text(
+          stop.initials,
+          style: TextStyle(
+            color: stop.isPickedUp || stop.isCurrentInSequence
+                ? Colors.white
+                : Colors.black54,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+          ),
+        ),
       ),
     );
   }
 }
 
 class _PassengerStop {
+  final int sequenceNumber;
   final String initials;
   final String name;
   final String time;
   final Color avatarColor;
   final bool isPickedUp;
+  final bool isCurrentInSequence;
   final bool isYou;
   final bool isDestination;
 
   const _PassengerStop({
+    this.sequenceNumber = 0,
     required this.initials,
     required this.name,
     required this.time,
     required this.avatarColor,
     required this.isPickedUp,
+    this.isCurrentInSequence = false,
     required this.isYou,
     this.isDestination = false,
   });

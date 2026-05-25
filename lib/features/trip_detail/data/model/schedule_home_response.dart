@@ -167,22 +167,11 @@ class ScheduleItem {
     return v.isNotEmpty;
   }
 
-  /// Whether the login schedule card should appear on the home screen.
-  ///
-  /// The API often returns `"Today"` rows with `TripStatusName: Scheduled` but
-  /// without `LoginScheduleDate` (see observed `GetScheduleHomePage` payloads).
-  bool get shouldShowLoginCard {
-    if (hasLoginSchedule || _hasLoginShiftTime) return true;
-    if (isScheduledStatus && !hasLogoutSchedule && !_hasLogoutShiftTime) {
-      return true;
-    }
-    return false;
-  }
+  /// Login card: both [loginScheduleDate] and [loginShiftTime] must be set.
+  bool get shouldShowLoginCard => hasLoginSchedule && _hasLoginShiftTime;
 
-  /// Whether the logout schedule card should appear on the home screen.
-  bool get shouldShowLogoutCard {
-    return hasLogoutSchedule || _hasLogoutShiftTime;
-  }
+  /// Logout card: both [logoutScheduleDate] and [logoutShiftTime] must be set.
+  bool get shouldShowLogoutCard => hasLogoutSchedule && _hasLogoutShiftTime;
 
   /// `true` when the backend marks the trip as still `"Scheduled"` —
   /// meaning the vehicle hasn't been assigned/dispatched yet and the

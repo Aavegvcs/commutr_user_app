@@ -1,10 +1,17 @@
 import 'dart:async';
+
+import 'package:commutr_main/features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
+import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
+import 'package:commutr_main/ride_tracking/bloc/cab_tracking_state.dart';
 import 'package:commutr_main/ride_tracking/trip_progress_bottom_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class RideTrackingScreen extends StatefulWidget {
-  const RideTrackingScreen({super.key});
+  final String? userName;
+
+  const RideTrackingScreen({super.key, this.userName});
 
   @override
   State<RideTrackingScreen> createState() => _RideTrackingScreenState();
@@ -12,33 +19,31 @@ class RideTrackingScreen extends StatefulWidget {
 
 class _RideTrackingScreenState extends State<RideTrackingScreen>
     with TickerProviderStateMixin {
-  // ─── Google Maps ───────────────────────────────────────────────
   final Completer<GoogleMapController> _mapController = Completer();
 
-  // Dwarka Sector 8/9, New Delhi – matches screenshots
-  static const LatLng _driverLatLng = LatLng(28.5980, 77.0480);
-  static const LatLng _pickupLatLng = LatLng(28.5870, 77.0510);
-  static const CameraPosition _initialCamera = CameraPosition(
-    target: LatLng(28.5930, 77.0490),
+  static const LatLng _fallbackCenter = LatLng(28.5930, 77.0490);
+
+  LatLng _driverLatLng = _fallbackCenter;
+  LatLng _officeLatLng = _fallbackCenter;
+  CameraPosition _initialCamera = const CameraPosition(
+    target: _fallbackCenter,
     zoom: 14.8,
   );
 
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
 
-  // ─── Bottom Sheet ──────────────────────────────────────────────
   bool _isExpanded = false;
   final DraggableScrollableController _sheetController =
-  DraggableScrollableController();
+      DraggableScrollableController();
 
-  // ─── OTP Pulse Animation ───────────────────────────────────────
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
-    _setupMarkersAndRoute();
+    _setupFallbackMarkersAndRoute();
 
     _pulseController = AnimationController(
       vsync: this,
@@ -62,94 +67,191 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     super.dispose();
   }
 
-  // ── Markers & Polyline ─────────────────────────────────────────
-
-  void _setupMarkersAndRoute() {
-    _markers.addAll([
-      Marker(
-        markerId: const MarkerId('driver'),
-        position: _driverLatLng,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        infoWindow: const InfoWindow(
-          title: 'Amod Kumar Thakur',
-          snippet: 'Your driver is on the way',
+  void _setupFallbackMarkersAndRoute() {
+    _markers
+      ..clear()
+      ..addAll([
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: _driverLatLng,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: const InfoWindow(title: 'Driver'),
         ),
-      ),
-      Marker(
-        markerId: const MarkerId('pickup'),
-        position: _pickupLatLng,
-        icon:
-        BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-        infoWindow: const InfoWindow(title: 'Your pickup point'),
-      ),
-    ]);
+        Marker(
+          markerId: const MarkerId('office'),
+          position: _officeLatLng,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueOrange,
+          ),
+          infoWindow: const InfoWindow(title: 'Office'),
+        ),
+      ]);
 
-    _polylines.add(
-      Polyline(
-        polylineId: const PolylineId('route'),
-        color: const Color(0xFF1A6B4A),
-        width: 4,
-        points: const [
-          _driverLatLng,
-          LatLng(28.5955, 77.0472),
-          LatLng(28.5920, 77.0488),
-          LatLng(28.5895, 77.0500),
-          _pickupLatLng,
-        ],
-        patterns: [PatternItem.dash(18), PatternItem.gap(9)],
-      ),
-    );
+    _polylines
+      ..clear()
+      ..add(
+        Polyline(
+          polylineId: const PolylineId('route'),
+          color: const Color(0xFF1A6B4A),
+          width: 4,
+          points: [_driverLatLng, _officeLatLng],
+          patterns: [PatternItem.dash(18), PatternItem.gap(9)],
+        ),
+      );
   }
 
-  // ── Build ──────────────────────────────────────────────────────
+  void _applyTrackingToMap(CabTrackingData data) {
+    if (data.hasDriverLocation) {
+      _driverLatLng = LatLng(data.currentLat!, data.currentLng!);
+    }
+    if (data.hasOfficeLocation) {
+      _officeLatLng = LatLng(data.officeLat!, data.officeLng!);
+    }
+
+    _initialCamera = CameraPosition(
+      target: _driverLatLng,
+      zoom: 14.8,
+    );
+
+    _markers
+      ..clear()
+      ..addAll([
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: _driverLatLng,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: InfoWindow(
+            title: data.driverName ?? 'Driver',
+            snippet: 'Your driver is on the way',
+          ),
+        ),
+        if (data.hasOfficeLocation)
+          Marker(
+            markerId: const MarkerId('office'),
+            position: _officeLatLng,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueOrange,
+            ),
+            infoWindow: const InfoWindow(title: 'Office'),
+          ),
+      ]);
+
+    _polylines
+      ..clear()
+      ..add(
+        Polyline(
+          polylineId: const PolylineId('route'),
+          color: const Color(0xFF1A6B4A),
+          width: 4,
+          points: [_driverLatLng, _officeLatLng],
+          patterns: [PatternItem.dash(18), PatternItem.gap(9)],
+        ),
+      );
+
+    setState(() {});
+
+    if (_mapController.isCompleted) {
+      _mapController.future.then((ctrl) {
+        ctrl.animateCamera(
+          CameraUpdate.newLatLngBounds(
+            LatLngBounds(
+              southwest: LatLng(
+                _driverLatLng.latitude < _officeLatLng.latitude
+                    ? _driverLatLng.latitude
+                    : _officeLatLng.latitude,
+                _driverLatLng.longitude < _officeLatLng.longitude
+                    ? _driverLatLng.longitude
+                    : _officeLatLng.longitude,
+              ),
+              northeast: LatLng(
+                _driverLatLng.latitude > _officeLatLng.latitude
+                    ? _driverLatLng.latitude
+                    : _officeLatLng.latitude,
+                _driverLatLng.longitude > _officeLatLng.longitude
+                    ? _driverLatLng.longitude
+                    : _officeLatLng.longitude,
+              ),
+            ),
+            72,
+          ),
+        );
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          // ① Full-screen Google Map
-          GoogleMap(
-            initialCameraPosition: _initialCamera,
-            onMapCreated: (controller) {
-              _mapController.complete(controller);
-              controller.setMapStyle(_kMapStyle);
-            },
-            markers: _markers,
-            polylines: _polylines,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            mapToolbarEnabled: false,
-            compassEnabled: false,
-            // Push map content up so the bottom sheet doesn't cover the route
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).size.height * 0.23,
-            ),
+    return BlocConsumer<CabTrackingBloc, CabTrackingState>(
+      listener: (context, state) {
+        if (state is CabTrackingLoaded) {
+          _applyTrackingToMap(state.data);
+        } else if (state is CabTrackingError) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(state.message)),
+          );
+        }
+      },
+      builder: (context, state) {
+        final tracking =
+            state is CabTrackingLoaded ? state.data : null;
+        final isLoading = state is CabTrackingLoading;
+
+        return Scaffold(
+          body: Stack(
+            children: [
+              GoogleMap(
+                initialCameraPosition: _initialCamera,
+                onMapCreated: (controller) {
+                  if (!_mapController.isCompleted) {
+                    _mapController.complete(controller);
+                  }
+                  controller.setMapStyle(_kMapStyle);
+                  if (tracking != null) {
+                    _applyTrackingToMap(tracking);
+                  }
+                },
+                markers: _markers,
+                polylines: _polylines,
+                myLocationButtonEnabled: false,
+                zoomControlsEnabled: false,
+                mapToolbarEnabled: false,
+                compassEnabled: false,
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).size.height * 0.23,
+                ),
+              ),
+              if (isLoading)
+                const ColoredBox(
+                  color: Color(0x33FFFFFF),
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF1A6B4A),
+                    ),
+                  ),
+                ),
+              _TopBar(onBack: () => Navigator.of(context).maybePop()),
+              _RecenterFab(
+                onTap: () async {
+                  final ctrl = await _mapController.future;
+                  ctrl.animateCamera(
+                    CameraUpdate.newLatLngZoom(_driverLatLng, 15.0),
+                  );
+                },
+              ),
+              _buildBottomSheet(tracking: tracking, isLoading: isLoading),
+            ],
           ),
-
-          // ② Top bar
-          _TopBar(onBack: () => Navigator.of(context).maybePop()),
-
-          // ③ Recenter FAB
-          _RecenterFab(
-            onTap: () async {
-              final ctrl = await _mapController.future;
-              ctrl.animateCamera(
-                CameraUpdate.newLatLngZoom(_driverLatLng, 15.0),
-              );
-            },
-          ),
-
-          // ④ Draggable bottom sheet
-          _buildBottomSheet(),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  // ── Bottom Sheet ───────────────────────────────────────────────
-
-  Widget _buildBottomSheet() {
+  Widget _buildBottomSheet({
+    required CabTrackingData? tracking,
+    required bool isLoading,
+  }) {
     return DraggableScrollableSheet(
       controller: _sheetController,
       initialChildSize: 0.27,
@@ -176,7 +278,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Drag handle
                 Center(
                   child: Padding(
                     padding: const EdgeInsets.only(top: 10, bottom: 6),
@@ -190,25 +291,31 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                     ),
                   ),
                 ),
-
                 Padding(
                   padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   child: Column(
                     children: [
-                      // OTP card
-                      _OtpCard(pulseAnimation: _pulseAnimation),
+                      _OtpCard(
+                        pulseAnimation: _pulseAnimation,
+                        otp: tracking?.otpDisplay,
+                        isLoading: isLoading,
+                      ),
                       const SizedBox(height: 10),
-
-                      // Driver card
-                      const _DriverCard(),
-
-                      // Expanded section (vehicle info + users)
+                      _DriverCard(
+                        driverName: tracking?.driverName,
+                        driverImageUrl: tracking?.driverProfileImage,
+                        isLoading: isLoading,
+                      ),
                       AnimatedSize(
                         duration: const Duration(milliseconds: 260),
                         curve: Curves.easeInOut,
                         child: _isExpanded
-                            ? const _ExpandedInfo()
+                            ? _ExpandedInfo(
+                                tracking: tracking,
+                                userName: widget.userName,
+                                isLoading: isLoading,
+                              )
                             : const SizedBox.shrink(),
                       ),
                     ],
@@ -222,8 +329,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     );
   }
 }
-
-// ─── Top Bar ────────────────────────────────────────────────────────────────
 
 class _TopBar extends StatelessWidget {
   final VoidCallback onBack;
@@ -263,8 +368,6 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-// ─── Recenter FAB ───────────────────────────────────────────────────────────
-
 class _RecenterFab extends StatelessWidget {
   final VoidCallback onTap;
   const _RecenterFab({required this.onTap});
@@ -282,8 +385,6 @@ class _RecenterFab extends StatelessWidget {
     );
   }
 }
-
-// ─── Shared circle icon button ───────────────────────────────────────────────
 
 class _CircleButton extends StatelessWidget {
   final Widget child;
@@ -314,14 +415,21 @@ class _CircleButton extends StatelessWidget {
   }
 }
 
-// ─── OTP Card ───────────────────────────────────────────────────────────────
-
 class _OtpCard extends StatelessWidget {
   final Animation<double> pulseAnimation;
-  const _OtpCard({required this.pulseAnimation});
+  final String? otp;
+  final bool isLoading;
+
+  const _OtpCard({
+    required this.pulseAnimation,
+    this.otp,
+    this.isLoading = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final display = isLoading ? '—' : (otp ?? '—');
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
@@ -343,9 +451,9 @@ class _OtpCard extends StatelessWidget {
             animation: pulseAnimation,
             builder: (_, child) =>
                 Transform.scale(scale: pulseAnimation.value, child: child),
-            child: const Text(
-              '6553',
-              style: TextStyle(
+            child: Text(
+              display,
+              style: const TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.w800,
                 color: Color(0xFF1A6B4A),
@@ -359,13 +467,22 @@ class _OtpCard extends StatelessWidget {
   }
 }
 
-// ─── Driver Card ────────────────────────────────────────────────────────────
-
 class _DriverCard extends StatelessWidget {
-  const _DriverCard();
+  final String? driverName;
+  final String? driverImageUrl;
+  final bool isLoading;
+
+  const _DriverCard({
+    this.driverName,
+    this.driverImageUrl,
+    this.isLoading = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final name = isLoading ? 'Loading…' : (driverName ?? '—');
+    final imageUrl = driverImageUrl?.trim();
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -375,23 +492,31 @@ class _DriverCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Avatar
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
+          ClipOval(
+            child: Container(
+              width: 46,
+              height: 46,
               color: Colors.grey.shade200,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.person_outline_rounded,
-              color: Color(0xFF1A6B4A),
-              size: 26,
+              child: (imageUrl != null && imageUrl.isNotEmpty)
+                  ? Image.network(
+                      imageUrl,
+                      width: 46,
+                      height: 46,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(
+                        Icons.person_outline_rounded,
+                        color: Color(0xFF1A6B4A),
+                        size: 26,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.person_outline_rounded,
+                      color: Color(0xFF1A6B4A),
+                      size: 26,
+                    ),
             ),
           ),
           const SizedBox(width: 12),
-
-          // Name
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,9 +530,9 @@ class _DriverCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                const Text(
-                  'Amod Kumar Thakur',
-                  style: TextStyle(
+                Text(
+                  name,
+                  style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     color: Colors.black87,
@@ -416,8 +541,6 @@ class _DriverCard extends StatelessWidget {
               ],
             ),
           ),
-
-          // Call button
           ElevatedButton.icon(
             onPressed: () {},
             icon: const Icon(Icons.phone_rounded, size: 16),
@@ -430,7 +553,7 @@ class _DriverCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(24),
               ),
               padding:
-              const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               textStyle: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
@@ -443,71 +566,50 @@ class _DriverCard extends StatelessWidget {
   }
 }
 
-// ─── Expanded Info (vehicle + users) ────────────────────────────────────────
-
 class _ExpandedInfo extends StatelessWidget {
-  const _ExpandedInfo();
+  final CabTrackingData? tracking;
+  final String? userName;
+  final bool isLoading;
+
+  const _ExpandedInfo({
+    this.tracking,
+    this.userName,
+    this.isLoading = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final data = tracking;
+    final paxLabel = isLoading
+        ? '—'
+        : (data != null && data.passengerCount > 0
+            ? '${data.passengerCount}'
+            : '—');
+    final seqLabel = isLoading ? '—' : (tracking?.paxSequenceLabel ?? '—');
+    final plate = isLoading
+        ? '—'
+        : (tracking?.vehicleRegistrationNo?.trim().isNotEmpty == true
+            ? tracking!.vehicleRegistrationNo!.trim()
+            : '—');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 10),
         Divider(color: Colors.grey.shade200, height: 1),
         const SizedBox(height: 14),
-
-        // Vehicle type row
-        Row(
-          children: [
-            Text(
-              '671',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.grey.shade500,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Container(
-                width: 4,
-                height: 4,
-                decoration: const BoxDecoration(
-                  color: Colors.grey,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-            Text(
-              'SEDAN_EV',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.grey.shade500,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.4,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-
-        // Number plate
-        const Text(
-          'HR-55-AW-0640',
-          style: TextStyle(
+        Text(
+          plate,
+          style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w800,
             color: Colors.black87,
             letterSpacing: 0.8,
           ),
         ),
-
         const SizedBox(height: 14),
         Divider(color: Colors.grey.shade200, height: 1),
         const SizedBox(height: 14),
-
-        // Users row
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -517,9 +619,9 @@ class _ExpandedInfo extends StatelessWidget {
               size: 22,
             ),
             const SizedBox(width: 4),
-            const Text(
-              '3',
-              style: TextStyle(
+            Text(
+              paxLabel,
+              style: const TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
                 color: Colors.black87,
@@ -539,42 +641,46 @@ class _ExpandedInfo extends StatelessWidget {
               ),
             ),
             const Spacer(),
-            const Text(
-              '2/3',
-              style: TextStyle(
+            Text(
+              seqLabel,
+              style: const TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
                 color: Colors.black87,
               ),
             ),
             const SizedBox(width: 12),
-            InkWell(
-              splashColor: Colors.transparent,
-              onTap: (){
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) => const TripProgressBottomSheet(),
-                );
-              },
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: const Color(0xFF1A6B4A),
-                    width: 1.5,
+            if (tracking != null)
+              InkWell(
+                splashColor: Colors.transparent,
+                onTap: () {
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (_) => TripProgressBottomSheet(
+                      tracking: tracking!,
+                      currentUserName: userName,
+                    ),
+                  );
+                },
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFF1A6B4A),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFF1A6B4A),
+                    size: 22,
                   ),
                 ),
-                child: const Icon(
-                  Icons.chevron_right_rounded,
-                  color: Color(0xFF1A6B4A),
-                  size: 22,
-                ),
               ),
-            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -582,8 +688,6 @@ class _ExpandedInfo extends StatelessWidget {
     );
   }
 }
-
-// ─── Custom light map style (matches screenshot aesthetic) ──────────────────
 
 const String _kMapStyle = '''
 [

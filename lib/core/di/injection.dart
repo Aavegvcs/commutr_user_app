@@ -1,3 +1,9 @@
+import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_bloc.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/cab_tracking/user_cab_tracking_repo.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/trip_start/board_trip_repo.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/trip_start/cancel_trip_home_repo.dart';
+import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:commutr_main/core/network/api_client.dart';
@@ -108,6 +114,22 @@ void setupDependencies() {
   sl.registerFactory<TripHomeBloc>(
     () => TripHomeBloc(sl()),
   );
+
+  sl.registerLazySingleton<TripCancelRepository>(()=> TripCancelRepository(sl(instanceName: appApiClientKey)));
+
+  sl.registerFactory<TripCancelBloc>(() => TripCancelBloc(sl()));
+
+  sl.registerLazySingleton<BoardTripRepository>(
+    () => BoardTripRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<BoardTripBloc>(() => BoardTripBloc(sl()));
+
+  sl.registerLazySingleton<UserCabTrackingRepo>(
+    () => UserCabTrackingRepo(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<CabTrackingBloc>(() => CabTrackingBloc(sl()));
 
   syncBearerTokenToApiClients();
 }

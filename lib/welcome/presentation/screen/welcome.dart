@@ -1,6 +1,12 @@
 import 'dart:math' show pi;
 
 import 'package:commutr_main/core/debug/api_logger_screen.dart';
+import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_event.dart';
+import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_state.dart';
+import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_event.dart';
+import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_state.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
@@ -21,16 +27,64 @@ import 'package:commutr_main/features/trip_detail/data/model/schedule_home_respo
 import 'package:commutr_main/features/trip_detail/data/model/trip_home_response.dart';
 import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
+import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
+import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../features/ai_chatbot/chat_popup.dart';
 import '../../../features/trip_detail/presentation/screen/trip_detail.dart';
+import '../../../trip_summary/trip_summary_welcome.dart';
 import '../../../weekly_off/presentation/screen/weekly_off.dart';
 
-enum _TripHistoryStatus { completed, noShow, cancelled }
+enum _TripHistoryStatus { completed, noShow, cancelled, expired }
+
+enum _TripHistoryFilterCategory { tripStatus, tripRating, tripDate }
+
+class _TripHistoryFilterResult {
+  const _TripHistoryFilterResult({
+    required this.statusAll,
+    required this.statuses,
+    required this.ratingAll,
+    required this.ratings,
+    required this.includeUnrated,
+    this.fromDate,
+    this.toDate,
+  });
+
+  final bool statusAll;
+  final Set<_TripHistoryStatus> statuses;
+  final bool ratingAll;
+  final Set<int> ratings;
+  final bool includeUnrated;
+  final DateTime? fromDate;
+  final DateTime? toDate;
+}
+
+class _TripHistoryItem {
+  const _TripHistoryItem({
+    required this.cardId,
+    required this.dateGroupLabel,
+    required this.tripDate,
+    required this.isLogin,
+    required this.time,
+    required this.status,
+    this.rating,
+    this.navigateOnTap = false,
+  });
+
+  final String cardId;
+  final String dateGroupLabel;
+  final DateTime tripDate;
+  final bool isLogin;
+  final String time;
+  final _TripHistoryStatus status;
+  final int? rating;
+  final bool navigateOnTap;
+}
 
 class Welcome extends StatelessWidget {
   const Welcome({super.key});
@@ -75,6 +129,64 @@ class _WelcomeState extends State<_WelcomeView> {
   /// Keys for which trip-history cards are expanded (e.g. `"0"`, `"1"`).
   final Set<String> _tripHistoryExpanded = {};
 
+  bool _tripHistoryStatusAll = true;
+  Set<_TripHistoryStatus> _tripHistoryStatusFilters = {};
+  bool _tripHistoryRatingAll = true;
+  Set<int> _tripHistoryRatingFilters = {};
+  bool _tripHistoryIncludeUnrated = false;
+  DateTime? _tripHistoryFromDate;
+  DateTime? _tripHistoryToDate;
+
+  static final List<_TripHistoryItem> _tripHistoryItems = [
+    _TripHistoryItem(
+      cardId: 'th0',
+      dateGroupLabel: '9th Mar, Monday',
+      tripDate: DateTime(2025, 3, 9),
+      isLogin: true,
+      time: '2:03 AM',
+      status: _TripHistoryStatus.completed,
+      rating: 5,
+      navigateOnTap: true,
+    ),
+    _TripHistoryItem(
+      cardId: 'th1',
+      dateGroupLabel: '9th Mar, Monday',
+      tripDate: DateTime(2025, 3, 9),
+      isLogin: false,
+      time: '6:30 PM',
+      status: _TripHistoryStatus.noShow,
+    ),
+    _TripHistoryItem(
+      cardId: 'th2',
+      dateGroupLabel: '9th Mar, Monday',
+      tripDate: DateTime(2025, 3, 9),
+      isLogin: false,
+      time: '7:15 PM',
+      status: _TripHistoryStatus.cancelled,
+      rating: 2,
+    ),
+    _TripHistoryItem(
+      cardId: 'th3',
+      dateGroupLabel: '8th Mar, Monday',
+      tripDate: DateTime(2025, 3, 8),
+      isLogin: true,
+      time: '2:03 AM',
+      status: _TripHistoryStatus.completed,
+      rating: 4,
+      navigateOnTap: true,
+    ),
+    _TripHistoryItem(
+      cardId: 'th4',
+      dateGroupLabel: '8th Mar, Monday',
+      tripDate: DateTime(2025, 3, 8),
+      isLogin: false,
+      time: '5:45 PM',
+      status: _TripHistoryStatus.completed,
+      rating: 5,
+      navigateOnTap: true,
+    ),
+  ];
+
   void _showCancelRideDialog(
     BuildContext context, {
     required bool isLogin,
@@ -112,7 +224,7 @@ class _WelcomeState extends State<_WelcomeView> {
       return;
     }
 
-    showDialog(
+    showDialog<bool>(
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.black.withOpacity(0.5),
@@ -122,7 +234,59 @@ class _WelcomeState extends State<_WelcomeView> {
         empId: empIdStr,
         scheduleDate: scheduleDateIso,
       ),
-    );
+    ).then((cancelled) {
+      if (cancelled == true && context.mounted) {
+        context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
+      }
+    });
+  }
+
+  /// Active trip cancel via `POST /UserApp/UserCancelTrip`.
+  void _showCancelActiveTripDialog(
+    BuildContext context, {
+    required TripHomeItem item,
+  }) {
+    void showBar(String msg) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(msg)));
+    }
+
+    final empId = item.empId;
+    final tripId = item.tripId;
+    final tripDateIso = scheduleDateToIso(item.tripDate);
+
+    if (empId == null || empId == 0) {
+      showBar('Employee ID is missing. Pull to refresh.');
+      return;
+    }
+    if (tripId == null || tripId == 0) {
+      showBar('Trip ID is missing. Pull to refresh.');
+      return;
+    }
+    if (tripDateIso == null || tripDateIso.isEmpty) {
+      showBar('Trip date is missing. Pull to refresh.');
+      return;
+    }
+
+    showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (dialogContext) => CancelActiveTripDialog(
+        isLogin: item.isLogin,
+        requestedBy: empId,
+        requestFor: empId,
+        tripDate: tripDateIso,
+        tripType: item.isLogin ? 1 : 2,
+        tripId: tripId,
+      ),
+    ).then((cancelled) {
+      if (cancelled == true && context.mounted) {
+        context.read<TripHomeBloc>().add(const FetchTripHome());
+        context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
+      }
+    });
   }
 
   /// `POST /TransRoster/CancelSchedules` expects `yyyy-MM-dd`.
@@ -214,6 +378,235 @@ class _WelcomeState extends State<_WelcomeView> {
       MaterialPageRoute<void>(
         builder: (_) => const ChatPopup(),
       ),
+    );
+  }
+
+  void _openTripGroupChat() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const ChatPopup(),
+      ),
+    );
+  }
+
+  void _shareActiveTrip(TripHomeItem item) {
+    final parts = <String>[];
+    final otp = item.otp?.trim();
+    if (otp != null && otp.isNotEmpty) {
+      parts.add('Boarding OTP: $otp');
+    }
+    final vehicle = item.vehicleInfo?.trim();
+    if (vehicle != null && vehicle.isNotEmpty) {
+      parts.add('Vehicle: $vehicle');
+    }
+    final pickup = _plannedPickupLabel(item);
+    if (pickup != null) {
+      parts.add('Planned pickup: $pickup');
+    }
+    if (parts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to share for this trip')),
+      );
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: parts.join('\n')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Trip details copied')),
+    );
+  }
+
+  void _openRideTracking(
+    BuildContext context, {
+    required int? empId,
+    required int? tripId,
+    String? userName,
+  }) {
+    if (empId == null || tripId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trip details are not available for tracking yet.'),
+        ),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BlocProvider(
+          create: (_) => sl<CabTrackingBloc>()
+            ..add(FetchCabTracking(empId: empId, tripId: tripId)),
+          child: RideTrackingScreen(userName: userName),
+        ),
+      ),
+    );
+  }
+
+  void _onBoardTrip(TripHomeItem item) {
+    _showBoardTripDialog(context, item: item, boardingType: 'B');
+  }
+
+  void _onDeboardTrip(TripHomeItem item) {
+    _showBoardTripDialog(context, item: item, boardingType: 'D');
+  }
+
+  void _showBoardTripDialog(
+    BuildContext context, {
+    required TripHomeItem item,
+    required String boardingType,
+  }) {
+    void showBar(String msg) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(msg)));
+    }
+
+    final empId = item.empId;
+    final tripId = item.tripId;
+    final tripType = item.tripTypeCode ?? (item.isLogin ? 1 : 2);
+
+    if (empId == null || empId == 0) {
+      showBar('Employee ID is missing. Pull to refresh.');
+      return;
+    }
+    if (tripId == null || tripId == 0) {
+      showBar('Trip ID is missing. Pull to refresh.');
+      return;
+    }
+
+    showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (dialogContext) => BoardTripDialog(
+        item: item,
+        empId: empId,
+        tripId: tripId,
+        tripType: tripType,
+        boardingType: boardingType,
+      ),
+    ).then((result) {
+      if (result is String && result.isNotEmpty && context.mounted) {
+        showBar(result);
+        context.read<TripHomeBloc>().add(const FetchTripHome());
+      }
+    });
+  }
+
+  Widget _buildTripCircleAction({
+    required VoidCallback? onTap,
+    required IconData icon,
+    required Color iconColor,
+    Color backgroundColor = const Color(0xFFE8F5EE),
+    Color? borderColor,
+  }) {
+    return InkWell(
+      splashColor: Colors.transparent,
+      onTap: onTap,
+      child: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: backgroundColor,
+          shape: BoxShape.circle,
+          border: borderColor != null ? Border.all(color: borderColor) : null,
+        ),
+        child: Icon(icon, color: iconColor, size: 20),
+      ),
+    );
+  }
+
+  Widget _buildTripStartedExpandedActions({
+    required TripHomeItem item,
+    required Color accentColor,
+    required Color tagBgColor,
+    required Color trackBg,
+    required Color trackFg,
+    required VoidCallback? trackVehicleAction,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            _buildTripCircleAction(
+              onTap: () => _showCancelActiveTripDialog(context, item: item),
+              icon: Icons.close,
+              iconColor: const Color(0xFFBA1A1A),
+              backgroundColor: Colors.white,
+              borderColor: const Color(0x33BA1A1A),
+            ),
+            const SizedBox(width: 10),
+            _buildTripCircleAction(
+              onTap: () => _shareActiveTrip(item),
+              icon: Icons.share_outlined,
+              iconColor: accentColor,
+              backgroundColor: tagBgColor,
+            ),
+            const SizedBox(width: 10),
+            _buildTripCircleAction(
+              onTap: _openTripGroupChat,
+              icon: Icons.chat_bubble_outline,
+              iconColor: accentColor,
+              backgroundColor: tagBgColor,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: GestureDetector(
+                onTap: trackVehicleAction,
+                child: Container(
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: trackBg,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.my_location, size: 16, color: trackFg),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Track Vehicle',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: trackFg,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (item.canShowBoardButton || item.isBoardedNotDeboarded) ...[
+          const SizedBox(height: 10),
+          GestureDetector(
+            onTap: item.isBoardedNotDeboarded
+                ? () => _onDeboardTrip(item)
+                : () => _onBoardTrip(item),
+            child: Container(
+              height: 48,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: item.isBoardedNotDeboarded
+                    ? const Color(0xFFB40D1A)
+                    : const Color(0xFF1A5C38),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                item.isBoardedNotDeboarded ? 'Deboard' : 'Board',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -339,10 +732,84 @@ class _WelcomeState extends State<_WelcomeView> {
     }
   }
 
+  static DateTime _tripHistoryDateOnly(DateTime d) =>
+      DateTime(d.year, d.month, d.day);
+
+  bool _tripHistoryMatchesDateRange(_TripHistoryItem item) {
+    if (_tripHistoryFromDate == null && _tripHistoryToDate == null) {
+      return true;
+    }
+    final tripDay = _tripHistoryDateOnly(item.tripDate);
+    if (_tripHistoryFromDate != null &&
+        tripDay.isBefore(_tripHistoryDateOnly(_tripHistoryFromDate!))) {
+      return false;
+    }
+    if (_tripHistoryToDate != null &&
+        tripDay.isAfter(_tripHistoryDateOnly(_tripHistoryToDate!))) {
+      return false;
+    }
+    return true;
+  }
+
+  List<_TripHistoryItem> _filteredTripHistoryItems() {
+    return _tripHistoryItems.where((item) {
+      if (!_tripHistoryStatusAll &&
+          !_tripHistoryStatusFilters.contains(item.status)) {
+        return false;
+      }
+      if (!_tripHistoryRatingAll) {
+        final rated = item.rating != null;
+        if (!rated && !_tripHistoryIncludeUnrated) return false;
+        if (rated &&
+            !_tripHistoryRatingFilters.contains(item.rating!)) {
+          return false;
+        }
+      }
+      if (!_tripHistoryMatchesDateRange(item)) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Future<void> _openTripHistoryFilters() async {
+    final initial = _TripHistoryFilterResult(
+      statusAll: _tripHistoryStatusAll,
+      statuses: Set<_TripHistoryStatus>.from(_tripHistoryStatusFilters),
+      ratingAll: _tripHistoryRatingAll,
+      ratings: Set<int>.from(_tripHistoryRatingFilters),
+      includeUnrated: _tripHistoryIncludeUnrated,
+      fromDate: _tripHistoryFromDate,
+      toDate: _tripHistoryToDate,
+    );
+
+    final result = await Navigator.of(context).push<_TripHistoryFilterResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _TripHistoryFilterPage(
+          items: _tripHistoryItems,
+          initial: initial,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _tripHistoryStatusAll = result.statusAll;
+      _tripHistoryStatusFilters = Set<_TripHistoryStatus>.from(result.statuses);
+      _tripHistoryRatingAll = result.ratingAll;
+      _tripHistoryRatingFilters = Set<int>.from(result.ratings);
+      _tripHistoryIncludeUnrated = result.includeUnrated;
+      _tripHistoryFromDate = result.fromDate;
+      _tripHistoryToDate = result.toDate;
+    });
+  }
+
   Widget _buildTripHistorySection() {
     const loginGreen = Color(0xFF3E9B73);
     const logoutMaroon = Color(0xFFB40D1A);
     const completedBlue = Color(0xFF2563EB);
+
+    final filtered = _filteredTripHistoryItems();
 
     Widget dateRow(String label) {
       return Padding(
@@ -358,88 +825,95 @@ class _WelcomeState extends State<_WelcomeView> {
       );
     }
 
+    if (filtered.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(32, 48, 32, 100),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.filter_list_off_outlined,
+                size: 48,
+                color: _tripHistoryPrimaryGreen.withOpacity(0.5),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'No trips match your filters',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF333333),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Try adjusting or resetting the filters.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton(
+                onPressed: _openTripHistoryFilters,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _tripHistoryPrimaryGreen,
+                  side: const BorderSide(color: Color(0xFFB8DEC9)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+                child: const Text('Change filters'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final children = <Widget>[];
+    String? currentGroup;
+    for (final item in filtered) {
+      if (item.dateGroupLabel != currentGroup) {
+        currentGroup = item.dateGroupLabel;
+        if (children.isNotEmpty) {
+          children.add(const SizedBox(height: 6));
+        }
+        children.add(dateRow(item.dateGroupLabel));
+      } else {
+        children.add(const SizedBox(height: 10));
+      }
+      children.add(
+        _buildTripHistoryCard(
+          cardId: item.cardId,
+          isLogin: item.isLogin,
+          time: item.time,
+          status: item.status,
+          accentLogin: loginGreen,
+          accentLogout: logoutMaroon,
+          completedBlue: completedBlue,
+          onTap: item.navigateOnTap
+              ? () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => TripSummaryScreen(),
+                    ),
+                  );
+                }
+              : () {},
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          dateRow('9th Mar, Monday'),
-          _buildTripHistoryCard(
-            cardId: 'th0',
-            isLogin: true,
-            time: '2:03 AM',
-            status: _TripHistoryStatus.completed,
-            accentLogin: loginGreen,
-            accentLogout: logoutMaroon,
-            completedBlue: completedBlue,
-            onTap: (){
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => TripSummaryScreen(),
-                ),
-              );
-            }
-          ),
-          const SizedBox(height: 10),
-          _buildTripHistoryCard(
-            cardId: 'th1',
-            isLogin: false,
-            time: '6:30 PM',
-            status: _TripHistoryStatus.noShow,
-            accentLogin: loginGreen,
-            accentLogout: logoutMaroon,
-            completedBlue: completedBlue,
-            onTap: (){}
-          ),
-          const SizedBox(height: 10),
-          _buildTripHistoryCard(
-            cardId: 'th2',
-            isLogin: false,
-            time: '7:15 PM',
-            status: _TripHistoryStatus.cancelled,
-            accentLogin: loginGreen,
-            accentLogout: logoutMaroon,
-            completedBlue: completedBlue,
-            onTap: (){}
-          ),
-          dateRow('8th Mar, Monday'),
-          _buildTripHistoryCard(
-            cardId: 'th3',
-            isLogin: true,
-            time: '2:03 AM',
-            status: _TripHistoryStatus.completed,
-            accentLogin: loginGreen,
-            accentLogout: logoutMaroon,
-            completedBlue: completedBlue,
-            onTap: (){
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => TripSummaryScreen(),
-                ),
-              );
-            }
-          ),
-          const SizedBox(height: 10),
-          _buildTripHistoryCard(
-            cardId: 'th4',
-            isLogin: false,
-            time: '5:45 PM',
-            status: _TripHistoryStatus.completed,
-            accentLogin: loginGreen,
-            accentLogout: logoutMaroon,
-            completedBlue: completedBlue,
-            onTap: (){
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => TripSummaryScreen(),
-                ),
-              );
-            }
-          ),
-        ],
+        children: children,
       ),
     );
   }
@@ -480,6 +954,11 @@ class _WelcomeState extends State<_WelcomeView> {
         statusLabel = 'Trip Cancelled';
         statusIcon = Icons.cancel_outlined;
         statusColor = const Color(0xFFDC2626);
+        break;
+      case _TripHistoryStatus.expired:
+        statusLabel = 'Expired';
+        statusIcon = Icons.schedule_outlined;
+        statusColor = const Color(0xFF888888);
         break;
     }
 
@@ -633,11 +1112,7 @@ class _WelcomeState extends State<_WelcomeView> {
                 ),
               ),
               OutlinedButton.icon(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Filters coming soon')),
-                  );
-                },
+                onPressed: _openTripHistoryFilters,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF444444),
                   backgroundColor: Colors.white,
@@ -1295,23 +1770,6 @@ class _WelcomeState extends State<_WelcomeView> {
           ));
           groupCards.add(const SizedBox(height: 10));
         }
-
-        // Fallback: API row with status but no date/shift fields (common for "Today").
-        if (!item.shouldShowLoginCard &&
-            !item.shouldShowLogoutCard &&
-            item.isScheduledStatus) {
-          final key = '${group.dateIn ?? "_"}_login_$i';
-          groupCards.add(_buildScheduleCard(
-            type: 'login',
-            label: 'Login',
-            time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
-            isExpanded: _scheduleExpanded.contains(key),
-            onTap: () => _toggleScheduleExpansion(key),
-            isScheduled: true,
-            item: item,
-          ));
-          groupCards.add(const SizedBox(height: 10));
-        }
       }
 
       if (groupCards.isEmpty) continue;
@@ -1393,14 +1851,12 @@ class _WelcomeState extends State<_WelcomeView> {
         isScheduled ? const Color(0xFFB0B0B0) : accentColor;
     final VoidCallback? trackVehicleAction = isScheduled
         ? null
-        : () {
-            Navigator.push(
+        : () => _openRideTracking(
               context,
-              MaterialPageRoute(
-                builder: (context) => RideTrackingScreen(),
-              ),
+              empId: item.empId,
+              tripId: null,
+              userName: item.userName,
             );
-          };
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1884,7 +2340,12 @@ class _WelcomeState extends State<_WelcomeView> {
     final String label = item.tripType ?? (isLogin ? 'Login' : 'Logout');
     final String time = _formatShiftTime(item.pickShift) ?? '--:--';
     final bool isScheduled = item.isScheduledStatus;
-    final statusStyle = _tripStatusStyle(item.tripStatusName, isLogin);
+    final bool isCompleted = item.isCompleted;
+    final bool showBoardDeboardActions = item.showBoardDeboardActions && !isCompleted;
+    final bool isFullyDeboarded = item.isBoarded && item.isDeBoarded;
+    final statusStyle = isCompleted
+        ? (icon: Icons.check_circle_outline, color: const Color(0xFF2563EB))
+        : _tripStatusStyle(item.tripStatusName, isLogin);
     final Color accentColor =
         isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final Color statusColor = statusStyle.color;
@@ -1894,7 +2355,7 @@ class _WelcomeState extends State<_WelcomeView> {
         isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
     final IconData statusIcon = statusStyle.icon;
-    final String statusLabel = item.tripStatusName ?? '—';
+    final String statusLabel = isCompleted ? 'Trip Completed' : (item.tripStatusName ?? '—');
     final List<String> otpDigits = _otpDigits(item.otp);
     final plannedPickup = _plannedPickupLabel(item) ?? '--:--';
     final vehicleLabel = (item.vehicleInfo?.trim().isNotEmpty ?? false)
@@ -1912,14 +2373,12 @@ class _WelcomeState extends State<_WelcomeView> {
         isScheduled ? const Color(0xFFB0B0B0) : accentColor;
     final VoidCallback? trackVehicleAction = isScheduled
         ? null
-        : () {
-            Navigator.push(
+        : () => _openRideTracking(
               context,
-              MaterialPageRoute(
-                builder: (context) => RideTrackingScreen(),
-              ),
+              empId: item.empId,
+              tripId: item.tripId,
+              userName: item.userName,
             );
-          };
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -2003,6 +2462,28 @@ class _WelcomeState extends State<_WelcomeView> {
                       fontWeight: FontWeight.w500,
                     ),
                   ),
+                  if (item.tripStatusCode == 3 && item.isBoarded) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: isFullyDeboarded
+                            ? const Color(0xFFEEF2FF)
+                            : const Color(0xFFE8F5EE),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        isFullyDeboarded ? 'Deboarded' : 'Boarded',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: isFullyDeboarded
+                              ? const Color(0xFF4F46E5)
+                              : const Color(0xFF1A6B3C),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2010,8 +2491,8 @@ class _WelcomeState extends State<_WelcomeView> {
               const SizedBox(height: 14),
               Container(height: 1, color: const Color(0xFFE8E8E8)),
               const SizedBox(height: 14),
-              Padding(
-                padding: const EdgeInsets.only(left: 4),
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
                 child: Text(
                   'TRIP DETAIL',
                   style: TextStyle(
@@ -2043,31 +2524,20 @@ class _WelcomeState extends State<_WelcomeView> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Pickup:
-                          //   Login  → user's home (UserAddress)
-                          //   Logout → office (OfficeAddress)
                           _buildAddressBlock(
                             label: 'PICKUP',
-                            address: isLogin
-                                ? item.userAddress
-                                : item.officeAddress,
+                            address: isLogin ? item.userAddress : item.officeAddress,
                           ),
                           const SizedBox(height: 20),
                           _buildAddressBlock(
                             label: 'DROP',
-                            address: isLogin
-                                ? item.officeAddress
-                                : item.userAddress,
+                            address: isLogin ? item.officeAddress : item.userAddress,
                           ),
                           if (seqLabel != null) ...[
                             const SizedBox(height: 12),
                             Row(
                               children: [
-                                Icon(
-                                  Icons.event_seat_outlined,
-                                  size: 16,
-                                  color: Colors.grey[600],
-                                ),
+                                Icon(Icons.event_seat_outlined, size: 16, color: Colors.grey[600]),
                                 const SizedBox(width: 6),
                                 Text(
                                   seqLabel,
@@ -2086,14 +2556,113 @@ class _WelcomeState extends State<_WelcomeView> {
                   ],
                 ),
               ),
-              if (!isScheduled) ...[
+              if (isCompleted) ...[
+                // ─── Completed: Pickup + Drop Timing boxes ────────────────
                 const SizedBox(height: 16),
                 Row(
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE8E8E8)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isLogin ? 'Pickup Time' : 'Drop Time',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Color(0xff6B7280),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              isLogin ? plannedPickup : (_formatShiftTime(item.pickShift) ?? '--:--'),
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1A1A1A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE8E8E8)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isLogin ? 'Drop Time' : 'Pickup Time',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Color(0xff6B7280),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              isLogin ? (_formatShiftTime(item.pickShift) ?? '--:--') : plannedPickup,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1A1A1A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                // ─── Trip Summary button ──────────────────────────────────
+                GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => TripSummaryWelcomeScreen(item: item),
+                    ),
+                  ),
+                  child: Container(
+                    width: double.infinity,
+                    height: 42,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F5EE),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      'Trip Summary',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1A6B3C),
+                      ),
+                    ),
+                  ),
+                ),
+              ] else if (!isScheduled) ...[
+                // ─── Non-completed: Planned Pickup + Vehicle Info ─────────
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
@@ -2102,7 +2671,7 @@ class _WelcomeState extends State<_WelcomeView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            const Text(
                               'Planned Pickup',
                               style: TextStyle(
                                 fontSize: 10,
@@ -2126,8 +2695,7 @@ class _WelcomeState extends State<_WelcomeView> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
@@ -2139,7 +2707,7 @@ class _WelcomeState extends State<_WelcomeView> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
+                                  const Text(
                                     'Vehicle Info.',
                                     style: TextStyle(
                                       fontSize: 10,
@@ -2159,18 +2727,18 @@ class _WelcomeState extends State<_WelcomeView> {
                                 ],
                               ),
                             ),
-                            if (ivr != null && ivr.isNotEmpty)
-                              Container(
-                                width: 36,
-                                height: 36,
-                                decoration: BoxDecoration(
-                                  color: tagBgColor,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  Icons.phone,
-                                  size: 18,
-                                  color: accentColor,
+                            if (ivr != null && ivr.isNotEmpty && !isFullyDeboarded)
+                              InkWell(
+                                splashColor: Colors.transparent,
+                                onTap: () {},
+                                child: Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: tagBgColor,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(Icons.phone, size: 18, color: accentColor),
                                 ),
                               ),
                           ],
@@ -2179,96 +2747,132 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ],
                 ),
-              ],
-              // ─── Boarding OTP (hidden when "Scheduled") ───────────────────
-              if (!isScheduled) ...[
-                const SizedBox(height: 14),
-                Container(
-                  width: double.infinity,
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE8E8E8)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Boarding OTP',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Color(0xff6B7280),
-                          fontWeight: FontWeight.w600,
+                // ─── Boarding OTP ─────────────────────────────────────────
+                if (!isFullyDeboarded) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFE8E8E8)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Boarding OTP',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xff6B7280),
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: otpDigits
-                            .map(
-                              (digit) => Container(
-                            margin: const EdgeInsets.only(right: 8),
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE6F3ED),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              digit,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF002D1C),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: otpDigits.map(
+                            (digit) => Container(
+                              margin: const EdgeInsets.only(right: 8),
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE6F3ED),
+                                borderRadius: BorderRadius.circular(8),
                               ),
-                            ),
-                          ),
-                        )
-                            .toList(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: Opacity(
-                      opacity: isScheduled ? 0.6 : 1.0,
-                      child: GestureDetector(
-                        onTap: trackVehicleAction,
-                        child: Container(
-                          height: 42,
-                          decoration: BoxDecoration(
-                            color: trackBg,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.my_location, size: 16, color: trackFg),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Track Vehicle',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: trackFg,
+                              alignment: Alignment.center,
+                              child: Text(
+                                digit,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF002D1C),
                                 ),
                               ),
-                            ],
+                            ),
+                          ).toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+              const SizedBox(height: 14),
+              if (isCompleted)
+                const SizedBox.shrink()
+              else if (showBoardDeboardActions)
+                _buildTripStartedExpandedActions(
+                  item: item,
+                  accentColor: accentColor,
+                  tagBgColor: tagBgColor,
+                  trackBg: trackBg,
+                  trackFg: trackFg,
+                  trackVehicleAction: trackVehicleAction,
+                )
+              else if (!isFullyDeboarded)
+                Row(
+                  children: [
+                    if (!isScheduled)
+                      InkWell(
+                        splashColor: Colors.transparent,
+                        onTap: () => _showCancelActiveTripDialog(
+                          context,
+                          item: item,
+                        ),
+                        child: Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0x33BA1A1A)),
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            color: Color(0xFFBA1A1A),
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    if (!isScheduled) const SizedBox(width: 10),
+                    Expanded(
+                      child: Opacity(
+                        opacity: isScheduled ? 0.6 : 1.0,
+                        child: GestureDetector(
+                          onTap: trackVehicleAction,
+                          child: Container(
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: trackBg,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.my_location,
+                                    size: 16, color: trackFg),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Track Vehicle',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: trackFg,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ] else if (!isScheduled) ...[
-              // ─── Collapsed details: OTP + Track Vehicle (Vehicle Allocated) ─
+                  ],
+                ),
+            ] else if (isCompleted) ...[
+              // ─── Collapsed: inline "Trip Completed" (no extra chip border) ─
+              const SizedBox(height: 8),
+            ] else if (!isScheduled && !isFullyDeboarded) ...[
+              // ─── Collapsed: Boarding OTP + Track Vehicle ─
               const SizedBox(height: 12),
               Container(height: 1, color: const Color(0xFFE8E8E8)),
               const SizedBox(height: 8),
@@ -2317,36 +2921,37 @@ class _WelcomeState extends State<_WelcomeView> {
                         ],
                       ),
                     ),
-                    Transform.translate(
-                      offset: const Offset(0.0, 10.0),
-                      child: GestureDetector(
-                        onTap: trackVehicleAction,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: tagBgColor,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.my_location,
-                                  size: 16, color: accentColor),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Track Vehicle',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: accentColor,
+                    if (!isFullyDeboarded)
+                      Transform.translate(
+                        offset: const Offset(0.0, 10.0),
+                        child: GestureDetector(
+                          onTap: trackVehicleAction,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: tagBgColor,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.my_location,
+                                    size: 16, color: accentColor),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Track Vehicle',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: accentColor,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -2603,6 +3208,527 @@ class _LowerSemicircleBorderPainter extends CustomPainter {
   }
 }
 
+
+/// Board confirmation dialog — calls `POST /UserApp/UserBoardDeboard`.
+class BoardTripDialog extends StatelessWidget {
+  const BoardTripDialog({
+    super.key,
+    required this.item,
+    required this.empId,
+    required this.tripId,
+    required this.tripType,
+    this.boardingType = 'B',
+  });
+
+  final TripHomeItem item;
+  final int empId;
+  final int tripId;
+  final int tripType;
+  final String boardingType;
+
+  bool get _isDeboard => boardingType == 'D';
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocProvider<BoardTripBloc>(
+      create: (_) => sl<BoardTripBloc>(),
+      child: _BoardTripDialogView(
+        plateNumber: item.vehicleInfo?.trim().isNotEmpty == true
+            ? item.vehicleInfo!.trim()
+            : 'Not assigned',
+        empId: empId,
+        tripId: tripId,
+        tripType: tripType,
+        boardingType: boardingType,
+        title: _isDeboard ? 'Ready to deboard?' : 'Ready to board?',
+        description: _isDeboard
+            ? 'Please confirm you have reached your destination and are ready to deboard.'
+            : 'Please confirm you have reached the vehicle and are ready to start your trip.',
+        confirmColor:
+            _isDeboard ? const Color(0xFFB40D1A) : const Color(0xFF1A5C38),
+        successFallback:
+            _isDeboard ? 'Deboarded successfully.' : 'Boarded successfully.',
+      ),
+    );
+  }
+}
+
+class _BoardTripDialogView extends StatefulWidget {
+  const _BoardTripDialogView({
+    required this.plateNumber,
+    required this.empId,
+    required this.tripId,
+    required this.tripType,
+    required this.boardingType,
+    required this.title,
+    required this.description,
+    required this.confirmColor,
+    required this.successFallback,
+  });
+
+  final String plateNumber;
+  final int empId;
+  final int tripId;
+  final int tripType;
+  final String boardingType;
+  final String title;
+  final String description;
+  final Color confirmColor;
+  final String successFallback;
+
+  @override
+  State<_BoardTripDialogView> createState() => _BoardTripDialogViewState();
+}
+
+class _BoardTripDialogViewState extends State<_BoardTripDialogView> {
+  bool _isClosing = false;
+
+  void _closeDialog([String? result]) {
+    if (_isClosing || !mounted) return;
+    _isClosing = true;
+    Navigator.of(context).pop(result);
+  }
+
+  void _showSnackBar(BuildContext context, String message,
+      {required bool error}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor:
+              error ? const Color(0xFFB40D1A) : const Color(0xFF1A5C38),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  String _friendlyMessage(String raw) {
+    return raw.replaceFirst('Exception: ', '').trim();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocConsumer<BoardTripBloc, BoardTripState>(
+      listenWhen: (prev, curr) =>
+          curr is BoardTripSuccess ||
+          curr is BoardTripError ||
+          curr is BoardTripUnauthorized,
+      listener: (context, state) {
+        if (state is BoardTripSuccess) {
+          final message = state.message.isNotEmpty
+              ? state.message
+              : widget.successFallback;
+          _closeDialog(message);
+        } else if (state is BoardTripError) {
+          _showSnackBar(context, _friendlyMessage(state.message), error: true);
+        } else if (state is BoardTripUnauthorized) {
+          _closeDialog();
+          _showSnackBar(context, _friendlyMessage(state.message), error: true);
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MobileNoVerification()),
+            (route) => false,
+          );
+        }
+      },
+      buildWhen: (prev, curr) =>
+          curr is BoardTripInitial ||
+          curr is BoardTripLoading ||
+          curr is BoardTripSuccess ||
+          curr is BoardTripError ||
+          curr is BoardTripUnauthorized,
+      builder: (context, state) {
+        final isSubmitting = state is BoardTripLoading;
+        return PopScope(
+          canPop: !isSubmitting,
+          child: Dialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.title,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1A1A),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    widget.description,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      height: 1.45,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'PLATE NUMBER',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1A5C38),
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          widget.plateNumber,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1A1A1A),
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: isSubmitting
+                              ? null
+                              : () {
+                                  context.read<BoardTripBloc>().add(
+                                        BoardTripRequested(
+                                          empId: widget.empId,
+                                          tripId: widget.tripId,
+                                          tripType: widget.tripType,
+                                          boardingType: widget.boardingType,
+                                        ),
+                                      );
+                                },
+                          child: Container(
+                            height: 48,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: isSubmitting
+                                  ? widget.confirmColor.withValues(alpha: 0.6)
+                                  : widget.confirmColor,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: isSubmitting
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Confirm',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: isSubmitting
+                              ? null
+                              : _closeDialog,
+                          child: Container(
+                            height: 48,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(999),
+                              border:
+                                  Border.all(color: const Color(0xFFE5E7EB)),
+                            ),
+                            child: const Text(
+                              'Go Back',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1A5C38),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Cancel dialog for active trips (`UserCancelTrip` via [TripCancelBloc]).
+class CancelActiveTripDialog extends StatelessWidget {
+  const CancelActiveTripDialog({
+    super.key,
+    required this.isLogin,
+    required this.requestedBy,
+    required this.requestFor,
+    required this.tripDate,
+    required this.tripType,
+    required this.tripId,
+  });
+
+  final bool isLogin;
+  final int requestedBy;
+  final int requestFor;
+  final String tripDate;
+  final int tripType;
+  final int tripId;
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocProvider<TripCancelBloc>(
+      create: (_) => sl<TripCancelBloc>(),
+      child: _CancelActiveTripDialogView(
+        isLogin: isLogin,
+        requestedBy: requestedBy,
+        requestFor: requestFor,
+        tripDate: tripDate,
+        tripType: tripType,
+        tripId: tripId,
+      ),
+    );
+  }
+}
+
+class _CancelActiveTripDialogView extends StatelessWidget {
+  const _CancelActiveTripDialogView({
+    required this.isLogin,
+    required this.requestedBy,
+    required this.requestFor,
+    required this.tripDate,
+    required this.tripType,
+    required this.tripId,
+  });
+
+  final bool isLogin;
+  final int requestedBy;
+  final int requestFor;
+  final String tripDate;
+  final int tripType;
+  final int tripId;
+
+  void _showSnackBar(BuildContext context, String message,
+      {required bool error}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor:
+              error ? const Color(0xFFB40D1A) : const Color(0xFF1A5C38),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  String _friendlyMessage(String raw) {
+    return raw.replaceFirst('Exception: ', '').trim();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocConsumer<TripCancelBloc, TripCancelState>(
+      listenWhen: (prev, curr) =>
+          curr is TripCancelSuccess ||
+          curr is TripCancelError ||
+          curr is TripCancelUnauthorized,
+      listener: (context, state) {
+        if (state is TripCancelSuccess) {
+          Navigator.of(context).pop(true);
+          _showSnackBar(
+            context,
+            state.message.isNotEmpty
+                ? state.message
+                : 'Trip cancelled successfully.',
+            error: false,
+          );
+        } else if (state is TripCancelError) {
+          _showSnackBar(context, _friendlyMessage(state.message), error: true);
+        } else if (state is TripCancelUnauthorized) {
+          Navigator.of(context).pop(false);
+          _showSnackBar(context, _friendlyMessage(state.message), error: true);
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MobileNoVerification()),
+            (route) => false,
+          );
+        }
+      },
+      buildWhen: (prev, curr) =>
+          curr is TripCancelInitial ||
+          curr is TripCancelLoading ||
+          curr is TripCancelSuccess ||
+          curr is TripCancelError ||
+          curr is TripCancelUnauthorized,
+      builder: (context, state) {
+        final isCancelling = state is TripCancelLoading;
+        return PopScope(
+          canPop: !isCancelling,
+          child: Dialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFFFF0EE),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xffBA1A1A),
+                        size: 30,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    isLogin
+                        ? 'Cancel this Login trip?'
+                        : 'Cancel this Logout trip?',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xff181C1B),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Are you sure you want to cancel your trip? You might be charged a cancellation fee.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Color(0xFF888888),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFCC2222),
+                            side: const BorderSide(
+                              color: Color(0xFFFFCCCC),
+                              width: 1.5,
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(50),
+                            ),
+                          ),
+                          onPressed: isCancelling
+                              ? null
+                              : () {
+                                  context.read<TripCancelBloc>().add(
+                                        CancelTripRequested(
+                                          requestedBy: requestedBy,
+                                          requestFor: requestFor,
+                                          tripDate: tripDate,
+                                          tripType: tripType,
+                                          tripId: tripId,
+                                        ),
+                                      );
+                                },
+                          child: isCancelling
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: Color(0xFFCC2222),
+                                  ),
+                                )
+                              : const Text(
+                                  'Cancel Trip',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1A5C38),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(50),
+                            ),
+                          ),
+                          onPressed: isCancelling
+                              ? null
+                              : () => Navigator.of(context).pop(false),
+                          child: const Text(
+                            'Keep Trip',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
 
 class CancelRideDialog extends StatelessWidget {
   const CancelRideDialog({
@@ -3339,6 +4465,637 @@ class _DrawerItem extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── Trip History Filters (full-screen) ─────────────────────────────────────
+
+class _TripHistoryFilterPage extends StatefulWidget {
+  const _TripHistoryFilterPage({
+    required this.items,
+    required this.initial,
+  });
+
+  final List<_TripHistoryItem> items;
+  final _TripHistoryFilterResult initial;
+
+  @override
+  State<_TripHistoryFilterPage> createState() => _TripHistoryFilterPageState();
+}
+
+class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
+  static const Color _primaryGreen = Color(0xFF1A6B3C);
+  static const Color _mintBg = Color(0xFFE8F5EE);
+  static const Color _sidebarInactive = Color(0xFF6B7280);
+
+  _TripHistoryFilterCategory _category = _TripHistoryFilterCategory.tripStatus;
+
+  late bool _statusAll;
+  late Set<_TripHistoryStatus> _statuses;
+  late bool _ratingAll;
+  late Set<int> _ratings;
+  late bool _includeUnrated;
+  DateTime? _fromDate;
+  DateTime? _toDate;
+
+  static const List<String> _monthLabels = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _applyResult(widget.initial);
+  }
+
+  void _applyResult(_TripHistoryFilterResult r) {
+    _statusAll = r.statusAll;
+    _statuses = Set.from(r.statuses);
+    _ratingAll = r.ratingAll;
+    _ratings = Set.from(r.ratings);
+    _includeUnrated = r.includeUnrated;
+    _fromDate = r.fromDate;
+    _toDate = r.toDate;
+  }
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  static DateTime _startOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
+
+  static DateTime _endOfMonth(DateTime d) =>
+      DateTime(d.year, d.month + 1, 0);
+
+  String _formatMonthYear(DateTime? date) {
+    if (date == null) return 'Select date';
+    return '${_monthLabels[date.month - 1]} ${date.year}';
+  }
+
+  bool _matchesDateRange(_TripHistoryItem item) {
+    if (_fromDate == null && _toDate == null) return true;
+    final tripDay = _dateOnly(item.tripDate);
+    if (_fromDate != null &&
+        tripDay.isBefore(_dateOnly(_fromDate!))) {
+      return false;
+    }
+    if (_toDate != null && tripDay.isAfter(_dateOnly(_toDate!))) {
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _pickDate({required bool isFrom}) async {
+    final initial = isFrom
+        ? (_fromDate ?? DateTime.now())
+        : (_toDate ?? _fromDate ?? DateTime.now());
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: _primaryGreen,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Color(0xFF333333),
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (isFrom) {
+        _fromDate = _startOfMonth(picked);
+        if (_toDate != null && _fromDate!.isAfter(_toDate!)) {
+          _toDate = _endOfMonth(picked);
+        }
+      } else {
+        _toDate = _endOfMonth(picked);
+        if (_fromDate != null && _toDate!.isBefore(_fromDate!)) {
+          _fromDate = _startOfMonth(picked);
+        }
+      }
+    });
+  }
+
+  bool _matchesStatus(_TripHistoryItem item) {
+    if (_statusAll) return true;
+    return _statuses.contains(item.status);
+  }
+
+  bool _matchesRating(_TripHistoryItem item) {
+    if (_ratingAll) return true;
+    final rated = item.rating != null;
+    if (!rated) return _includeUnrated;
+    return _ratings.contains(item.rating);
+  }
+
+  List<_TripHistoryItem> _itemsForStatusCounts() {
+    return widget.items
+        .where((i) => _matchesRating(i) && _matchesDateRange(i))
+        .toList();
+  }
+
+  List<_TripHistoryItem> _itemsForRatingCounts() {
+    return widget.items
+        .where((i) => _matchesStatus(i) && _matchesDateRange(i))
+        .toList();
+  }
+
+  int _statusCount(_TripHistoryStatus? status) {
+    final pool = _itemsForStatusCounts();
+    if (status == null) return pool.length;
+    return pool.where((i) => i.status == status).length;
+  }
+
+  int _ratingCount({int? stars, bool unrated = false}) {
+    final pool = _itemsForRatingCounts();
+    if (stars != null) {
+      return pool.where((i) => i.rating == stars).length;
+    }
+    if (unrated) return pool.where((i) => i.rating == null).length;
+    return pool.length;
+  }
+
+  _TripHistoryFilterResult _currentResult() => _TripHistoryFilterResult(
+        statusAll: _statusAll,
+        statuses: Set.from(_statuses),
+        ratingAll: _ratingAll,
+        ratings: Set.from(_ratings),
+        includeUnrated: _includeUnrated,
+        fromDate: _fromDate,
+        toDate: _toDate,
+      );
+
+  void _clearAllFilters() {
+    setState(() {
+      _statusAll = true;
+      _statuses.clear();
+      _ratingAll = true;
+      _ratings.clear();
+      _includeUnrated = false;
+      _fromDate = null;
+      _toDate = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildHeader(),
+            Expanded(child: _buildBody()),
+            _buildFooter(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      color: _mintBg,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close, color: _primaryGreen, size: 26),
+            onPressed: () => Navigator.pop(context),
+          ),
+          const Expanded(
+            child: Text(
+              'Filters',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: _primaryGreen,
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.history, color: _primaryGreen, size: 24),
+            onPressed: () => setState(() => _applyResult(widget.initial)),
+            tooltip: 'Reset to last applied',
+          ),
+        ],
+      ),
+    );
+  }
+
+Widget _buildBody() {
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Container(
+        width: MediaQuery.of(context).size.width * 0.34,
+        decoration: BoxDecoration(
+          color: _mintBg,
+          border: Border(
+            right: BorderSide(
+              color: Colors.grey.shade300,
+              width: 1.0,
+            ),
+          ),
+        ),
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            _sidebarItem('Trip Status', _TripHistoryFilterCategory.tripStatus),
+            _sidebarItem('Trip Rating', _TripHistoryFilterCategory.tripRating),
+            _sidebarItem('Trip Date', _TripHistoryFilterCategory.tripDate),
+          ],
+        ),
+      ),
+      Expanded(
+        child: ColoredBox(
+          color: Colors.white,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+            children: _buildOptionsForCategory(),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+  Widget _sidebarItem(String label, _TripHistoryFilterCategory cat) {
+    final selected = _category == cat;
+    return Material(
+      color: selected ? Colors.white : Colors.transparent,
+      child: InkWell(
+        onTap: () => setState(() => _category = cat),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: selected ? _primaryGreen : _sidebarInactive,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildOptionsForCategory() {
+    switch (_category) {
+      case _TripHistoryFilterCategory.tripStatus:
+        return [
+          _checkRow(
+            label: 'All',
+            count: _statusCount(null),
+            checked: _statusAll,
+            enabled: _statusCount(null) > 0 || _statusAll,
+            onTap: () => setState(() {
+              _statusAll = true;
+              _statuses.clear();
+            }),
+          ),
+          _checkRow(
+            label: 'Completed',
+            count: _statusCount(_TripHistoryStatus.completed),
+            checked: !_statusAll &&
+                _statuses.contains(_TripHistoryStatus.completed),
+            enabled: _statusCount(_TripHistoryStatus.completed) > 0,
+            onTap: () => setState(() {
+              _statusAll = false;
+              if (_statuses.contains(_TripHistoryStatus.completed)) {
+                _statuses.remove(_TripHistoryStatus.completed);
+                if (_statuses.isEmpty) _statusAll = true;
+              } else {
+                _statuses.add(_TripHistoryStatus.completed);
+              }
+            }),
+          ),
+          _checkRow(
+            label: 'No Show',
+            count: _statusCount(_TripHistoryStatus.noShow),
+            checked:
+                !_statusAll && _statuses.contains(_TripHistoryStatus.noShow),
+            enabled: _statusCount(_TripHistoryStatus.noShow) > 0,
+            onTap: () => setState(() {
+              _statusAll = false;
+              if (_statuses.contains(_TripHistoryStatus.noShow)) {
+                _statuses.remove(_TripHistoryStatus.noShow);
+                if (_statuses.isEmpty) _statusAll = true;
+              } else {
+                _statuses.add(_TripHistoryStatus.noShow);
+              }
+            }),
+          ),
+          _checkRow(
+            label: 'Cancelled',
+            count: _statusCount(_TripHistoryStatus.cancelled),
+            checked: !_statusAll &&
+                _statuses.contains(_TripHistoryStatus.cancelled),
+            enabled: _statusCount(_TripHistoryStatus.cancelled) > 0,
+            onTap: () => setState(() {
+              _statusAll = false;
+              if (_statuses.contains(_TripHistoryStatus.cancelled)) {
+                _statuses.remove(_TripHistoryStatus.cancelled);
+                if (_statuses.isEmpty) _statusAll = true;
+              } else {
+                _statuses.add(_TripHistoryStatus.cancelled);
+              }
+            }),
+          ),
+          _checkRow(
+            label: 'Expired',
+            count: _statusCount(_TripHistoryStatus.expired),
+            checked:
+                !_statusAll && _statuses.contains(_TripHistoryStatus.expired),
+            enabled: _statusCount(_TripHistoryStatus.expired) > 0,
+            onTap: () => setState(() {
+              _statusAll = false;
+              if (_statuses.contains(_TripHistoryStatus.expired)) {
+                _statuses.remove(_TripHistoryStatus.expired);
+                if (_statuses.isEmpty) _statusAll = true;
+              } else {
+                _statuses.add(_TripHistoryStatus.expired);
+              }
+            }),
+          ),
+        ];
+      case _TripHistoryFilterCategory.tripRating:
+        return [
+          _checkRow(
+            label: 'All',
+            count: _ratingCount(),
+            checked: _ratingAll,
+            enabled: _ratingCount() > 0 || _ratingAll,
+            onTap: () => setState(() {
+              _ratingAll = true;
+              _ratings.clear();
+              _includeUnrated = false;
+            }),
+          ),
+          for (final stars in [5, 4, 3, 2, 1])
+            _checkRow(
+              label: '$stars Star${stars == 1 ? '' : 's'}',
+              count: _ratingCount(stars: stars),
+              checked: !_ratingAll && _ratings.contains(stars),
+              enabled: _ratingCount(stars: stars) > 0,
+              onTap: () => setState(() {
+                _ratingAll = false;
+                if (_ratings.contains(stars)) {
+                  _ratings.remove(stars);
+                  if (_ratings.isEmpty && !_includeUnrated) {
+                    _ratingAll = true;
+                  }
+                } else {
+                  _ratings.add(stars);
+                }
+              }),
+            ),
+          _checkRow(
+            label: 'Not Rated',
+            count: _ratingCount(unrated: true),
+            checked: !_ratingAll && _includeUnrated,
+            enabled: _ratingCount(unrated: true) > 0,
+            onTap: () => setState(() {
+              _ratingAll = false;
+              _includeUnrated = !_includeUnrated;
+              if (!_includeUnrated &&
+                  _ratings.isEmpty) {
+                _ratingAll = true;
+              }
+            }),
+          ),
+        ];
+      case _TripHistoryFilterCategory.tripDate:
+        return [_buildTripDateRangeSection()];
+    }
+  }
+
+  Widget _buildTripDateRangeSection() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: _buildDatePickerField(
+            label: 'FROM DATE',
+            date: _fromDate,
+            onTap: () => _pickDate(isFrom: true),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildDatePickerField(
+            label: 'TO DATE',
+            date: _toDate,
+            onTap: () => _pickDate(isFrom: false),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDatePickerField({
+    required String label,
+    required DateTime? date,
+    required VoidCallback onTap,
+  }) {
+    final hasDate = date != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+            color: Color(0xFF9CA3AF),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Material(
+          color: Colors.white,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(10),
+            child: Ink(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFD1D5DB)),
+              ),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _formatMonthYear(date),
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: hasDate
+                              ? const Color(0xFF1A1A1A)
+                              : const Color(0xFF9CA3AF),
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.calendar_today_outlined,
+                      size: 20,
+                      color: hasDate
+                          ? _primaryGreen
+                          : const Color(0xFF9CA3AF),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _checkRow({
+    required String label,
+    required int count,
+    required bool checked,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final textColor = enabled
+        ? const Color(0xFF1A1A1A)
+        : const Color(0xFFBDBDBD);
+    final countColor = enabled
+        ? const Color(0xFF6B7280)
+        : const Color(0xFFBDBDBD);
+
+    return Opacity(
+      opacity: enabled ? 1 : 0.55,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Row(
+            children: [
+              _FilterCheckbox(checked: checked && enabled, enabled: enabled),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: textColor,
+                  ),
+                ),
+              ),
+              Text(
+                '($count)',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: countColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFooter() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+      child: Row(
+        children: [
+          TextButton(
+            onPressed: _clearAllFilters,
+            style: TextButton.styleFrom(
+              foregroundColor: _primaryGreen,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+            ),
+            child: const Text(
+              'Clear Filters',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const Spacer(),
+          SizedBox(
+            width: 140,
+            child: ElevatedButton(
+              onPressed: () =>
+                  Navigator.pop(context, _currentResult()),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _primaryGreen,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(28),
+                ),
+              ),
+              child: const Text(
+                'Apply',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterCheckbox extends StatelessWidget {
+  const _FilterCheckbox({
+    required this.checked,
+    required this.enabled,
+  });
+
+  final bool checked;
+  final bool enabled;
+
+  static const Color _primaryGreen = Color(0xFF1A6B3C);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        color: checked ? _primaryGreen : Colors.white,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+          color: checked
+              ? _primaryGreen
+              : (enabled ? const Color(0xFFD1D5DB) : const Color(0xFFE5E7EB)),
+          width: 1.5,
+        ),
+      ),
+      child: checked
+          ? const Icon(Icons.check, size: 16, color: Colors.white)
+          : null,
     );
   }
 }
