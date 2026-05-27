@@ -1,15 +1,16 @@
 import 'dart:convert';
 
+import 'package:commutr_main/core/di/injection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 /// Chat server base (scheme + host + port, no trailing slash).
-const String kEtsChatBaseUrl = 'http://13.235.144.192:5050';
+const String kEtsChatBaseUrl = 'https://dev-core.commutr.in:5050';
 
 /// Parent origin for embed / postMessage (matches `parent_origin` query param).
-const String kEtsChatParentOrigin = 'http://13.235.144.192';
+const String kEtsChatParentOrigin = 'https://dev-core.commutr.in';
 
 const String kEtsChatHiveBoxName = 'ets_chat';
 

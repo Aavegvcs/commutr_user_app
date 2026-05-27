@@ -14,6 +14,10 @@ import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verifi
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_history_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_history_event.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_history_state.dart';
+import 'package:commutr_main/features/trip_detail/data/model/trip_history_response.dart';
 import 'package:commutr_main/features/trip_detail/bloc/schedule_home_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/schedule_home_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/schedule_home_state.dart';
@@ -36,9 +40,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../features/ai_chatbot/chat_popup.dart';
+import '../../../features/complaint/presentation/screen/raise_complaint_screen.dart';
 import '../../../features/trip_detail/presentation/screen/trip_detail.dart';
 import '../../../trip_summary/trip_summary_welcome.dart';
+import '../../../features/adhoc/presentation/screen/adhoc_request_screen.dart';
+import '../../../features/sos/bloc/sos_bloc.dart';
+import '../../../features/sos/bloc/sos_event.dart';
+import '../../../features/sos/bloc/sos_state.dart';
+import '../../../features/team_cab/presentation/screen/team_cab_screen.dart';
 import '../../../weekly_off/presentation/screen/weekly_off.dart';
+import '../../../features/trip_detail/data/repository/user_feedback_repo.dart';
 
 enum _TripHistoryStatus { completed, noShow, cancelled, expired }
 
@@ -72,6 +83,7 @@ class _TripHistoryItem {
     required this.isLogin,
     required this.time,
     required this.status,
+    required this.apiItem,
     this.rating,
     this.navigateOnTap = false,
   });
@@ -82,6 +94,7 @@ class _TripHistoryItem {
   final bool isLogin;
   final String time;
   final _TripHistoryStatus status;
+  final TripHistoryItem apiItem;
   final int? rating;
   final bool navigateOnTap;
 }
@@ -97,11 +110,16 @@ class Welcome extends StatelessWidget {
           create: (_) => sl<TripHomeBloc>()..add(const FetchTripHome()),
         ),
         BlocProvider<ScheduleHomeBloc>(
-          create: (_) =>
-              sl<ScheduleHomeBloc>()..add(const FetchScheduleHome()),
+          create: (_) => sl<ScheduleHomeBloc>()..add(const FetchScheduleHome()),
         ),
         BlocProvider<RosterBloc>(
           create: (_) => sl<RosterBloc>()..add(const FetchRosterUserDetails()),
+        ),
+        BlocProvider<TripHistoryBloc>(
+          create: (_) => sl<TripHistoryBloc>(),
+        ),
+        BlocProvider<SosBloc>(
+          create: (_) => sl<SosBloc>(),
         ),
       ],
       child: const _WelcomeView(),
@@ -118,6 +136,37 @@ class _WelcomeView extends StatefulWidget {
 
 class _WelcomeState extends State<_WelcomeView> {
   int _selectedIndex = 0;
+  bool _tripHistoryFetchDispatched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // BlocListener does not replay the current state; fetch if roster already loaded.
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _ensureTripHistoryFetched());
+  }
+
+  void _ensureTripHistoryFetched() {
+    final rosterState = context.read<RosterBloc>().state;
+    if (rosterState is RosterLoaded) {
+      _maybeDispatchTripHistoryFetch(rosterState.details.empId);
+    }
+  }
+
+  void _maybeDispatchTripHistoryFetch(int empId) {
+    if (_tripHistoryFetchDispatched) return;
+    _tripHistoryFetchDispatched = true;
+    context.read<TripHistoryBloc>().add(FetchTripHistory(
+          empId: empId,
+          fromDate: _defaultFromDate(),
+          toDate: _defaultToDate(),
+        ));
+  }
+
+  void _selectTripHistoryTab() {
+    setState(() => _selectedIndex = 1);
+    _ensureTripHistoryFetched();
+  }
 
   /// Keys for which active-trip cards are expanded (prefix `trip_`).
   final Set<String> _tripExpanded = {};
@@ -137,55 +186,7 @@ class _WelcomeState extends State<_WelcomeView> {
   DateTime? _tripHistoryFromDate;
   DateTime? _tripHistoryToDate;
 
-  static final List<_TripHistoryItem> _tripHistoryItems = [
-    _TripHistoryItem(
-      cardId: 'th0',
-      dateGroupLabel: '9th Mar, Monday',
-      tripDate: DateTime(2025, 3, 9),
-      isLogin: true,
-      time: '2:03 AM',
-      status: _TripHistoryStatus.completed,
-      rating: 5,
-      navigateOnTap: true,
-    ),
-    _TripHistoryItem(
-      cardId: 'th1',
-      dateGroupLabel: '9th Mar, Monday',
-      tripDate: DateTime(2025, 3, 9),
-      isLogin: false,
-      time: '6:30 PM',
-      status: _TripHistoryStatus.noShow,
-    ),
-    _TripHistoryItem(
-      cardId: 'th2',
-      dateGroupLabel: '9th Mar, Monday',
-      tripDate: DateTime(2025, 3, 9),
-      isLogin: false,
-      time: '7:15 PM',
-      status: _TripHistoryStatus.cancelled,
-      rating: 2,
-    ),
-    _TripHistoryItem(
-      cardId: 'th3',
-      dateGroupLabel: '8th Mar, Monday',
-      tripDate: DateTime(2025, 3, 8),
-      isLogin: true,
-      time: '2:03 AM',
-      status: _TripHistoryStatus.completed,
-      rating: 4,
-      navigateOnTap: true,
-    ),
-    _TripHistoryItem(
-      cardId: 'th4',
-      dateGroupLabel: '8th Mar, Monday',
-      tripDate: DateTime(2025, 3, 8),
-      isLogin: false,
-      time: '5:45 PM',
-      status: _TripHistoryStatus.completed,
-      rating: 5,
-      navigateOnTap: true,
-    ),
-  ];
+  // Trip history items are loaded from the API; no static list needed.
 
   void _showCancelRideDialog(
     BuildContext context, {
@@ -193,7 +194,8 @@ class _WelcomeState extends State<_WelcomeView> {
     required ScheduleItem item,
   }) {
     final rosterState = context.read<RosterBloc>().state;
-    final locCode = rosterState is RosterLoaded ? rosterState.details.locCode : null;
+    final locCode =
+        rosterState is RosterLoaded ? rosterState.details.locCode : null;
     final scheduleDateIso = _scheduleDateIsoForCancel(item, isLogin);
     final empIdStr = _empIdForCancelPayload(item);
 
@@ -212,7 +214,8 @@ class _WelcomeState extends State<_WelcomeView> {
       return;
     }
     if (locCode == null || locCode == 0) {
-      showBar('Office location not available. Pull to refresh or try again later.');
+      showBar(
+          'Office location not available. Pull to refresh or try again later.');
       return;
     }
     if (scheduleDateIso == null || scheduleDateIso.isEmpty) {
@@ -489,6 +492,14 @@ class _WelcomeState extends State<_WelcomeView> {
       if (result is String && result.isNotEmpty && context.mounted) {
         showBar(result);
         context.read<TripHomeBloc>().add(const FetchTripHome());
+        if (boardingType == 'D') {
+          showDialog<void>(
+            context: context,
+            barrierDismissible: true,
+            barrierColor: Colors.black.withValues(alpha: 0.5),
+            builder: (_) => _RateAppDialog(empId: empId, tripId: tripId),
+          );
+        }
       }
     });
   }
@@ -618,7 +629,7 @@ class _WelcomeState extends State<_WelcomeView> {
       drawer: AppDrawer(
         onTripHistoryTap: () {
           Navigator.pop(context);
-          setState(() => _selectedIndex = 1);
+          _selectTripHistoryTab();
         },
       ),
       // floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
@@ -644,79 +655,86 @@ class _WelcomeState extends State<_WelcomeView> {
       //     ),
       //   ),
       // ),
-      body: Stack(
-        children: [
-          Column(
-            children: [
-              _buildHeader(),
-              Expanded(child: _buildMainContent()),
-            ],
-          ),
-
-          // Bottom navigation bar
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Column(
+      body: BlocListener<RosterBloc, RosterState>(
+        listener: (context, state) {
+          if (state is RosterLoaded) {
+            _ensureTripHistoryFetched();
+          }
+        },
+        child: Stack(
+          children: [
+            Column(
               children: [
-                // Container(
-                //   width: double.infinity,
-                //   height: 45,
-                //   color: Color(0xFFF9F9F9),
-                // ),
-                _buildBottomNav(),
+                _buildHeader(),
+                Expanded(child: _buildMainContent()),
               ],
             ),
-          ),
 
-          // SOS button
-          Positioned(
-            bottom: 90,
-            left: 16,
-            child: _buildSOSButton(),
-          ),
+            // Bottom navigation bar
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Column(
+                children: [
+                  // Container(
+                  //   width: double.infinity,
+                  //   height: 45,
+                  //   color: Color(0xFFF9F9F9),
+                  // ),
+                  _buildBottomNav(),
+                ],
+              ),
+            ),
 
-          // FAB image (sits above the notch)
-          Positioned(
-            bottom: 36,
-            left: 0,
-            right: 0,
-            child: Center(child: _buildFAB()),
-          ),
+            // SOS button
+            Positioned(
+              bottom: 90,
+              left: 16,
+              child: _buildSOSButton(),
+            ),
 
-          // // Left lc.png decoration
-          // Positioned(
-          //   bottom: 65,
-          //   left: MediaQuery.of(context).size.width * 0.322,
-          //   child: Center(
-          //     child: Image.asset(
-          //       'assets/images/lc.png',
-          //       width: 24,
-          //       height: 24,
-          //       fit: BoxFit.cover,
-          //     ),
-          //   ),
-          // ),
-          //
-          // // Right lc.png decoration (flipped)
-          // Positioned(
-          //   bottom: 65,
-          //   right: MediaQuery.of(context).size.width * 0.322,
-          //   child: Transform(
-          //     alignment: Alignment.center,
-          //     transform: Matrix4.rotationY(3.1416),
-          //     child: Center(
-          //       child: Image.asset(
-          //         'assets/images/lc.png',
-          //         width: 24,
-          //         height: 24,
-          //         fit: BoxFit.cover,
-          //       ),
-          //     ),
-          //   ),
-          // ),
-        ],
+            // FAB image (sits above the notch)
+            Positioned(
+              bottom: 36,
+              left: 0,
+              right: 0,
+              child: Center(child: _buildFAB()),
+            ),
+
+            // // Left lc.png decoration
+            // Positioned(
+            //   bottom: 65,
+            //   left: MediaQuery.of(context).size.width * 0.322,
+            //   child: Center(
+            //     child: Image.asset(
+            //       'assets/images/lc.png',
+            //       width: 24,
+            //       height: 24,
+            //       fit: BoxFit.cover,
+            //     ),
+            //   ),
+            // ),
+            //
+            // // Right lc.png decoration (flipped)
+            // Positioned(
+            //   bottom: 65,
+            //   right: MediaQuery.of(context).size.width * 0.322,
+            //   child: Transform(
+            //     alignment: Alignment.center,
+            //     transform: Matrix4.rotationY(3.1416),
+            //     child: Center(
+            //       child: Image.asset(
+            //         'assets/images/lc.png',
+            //         width: 24,
+            //         height: 24,
+            //         fit: BoxFit.cover,
+            //       ),
+            //     ),
+            //   ),
+            // ),
+          ],
+        ),
       ),
     );
   }
@@ -751,8 +769,9 @@ class _WelcomeState extends State<_WelcomeView> {
     return true;
   }
 
-  List<_TripHistoryItem> _filteredTripHistoryItems() {
-    return _tripHistoryItems.where((item) {
+  List<_TripHistoryItem> _filteredItems(List<_TripHistoryItem> all) {
+    return all.where((item) {
+      if (item.status == _TripHistoryStatus.expired) return false;
       if (!_tripHistoryStatusAll &&
           !_tripHistoryStatusFilters.contains(item.status)) {
         return false;
@@ -760,8 +779,7 @@ class _WelcomeState extends State<_WelcomeView> {
       if (!_tripHistoryRatingAll) {
         final rated = item.rating != null;
         if (!rated && !_tripHistoryIncludeUnrated) return false;
-        if (rated &&
-            !_tripHistoryRatingFilters.contains(item.rating!)) {
+        if (rated && !_tripHistoryRatingFilters.contains(item.rating!)) {
           return false;
         }
       }
@@ -772,7 +790,7 @@ class _WelcomeState extends State<_WelcomeView> {
     }).toList();
   }
 
-  Future<void> _openTripHistoryFilters() async {
+  Future<void> _openTripHistoryFilters(List<_TripHistoryItem> allItems) async {
     final initial = _TripHistoryFilterResult(
       statusAll: _tripHistoryStatusAll,
       statuses: Set<_TripHistoryStatus>.from(_tripHistoryStatusFilters),
@@ -787,12 +805,16 @@ class _WelcomeState extends State<_WelcomeView> {
       MaterialPageRoute(
         fullscreenDialog: true,
         builder: (_) => _TripHistoryFilterPage(
-          items: _tripHistoryItems,
+          items: allItems,
           initial: initial,
         ),
       ),
     );
     if (result == null || !mounted) return;
+
+    final prevFrom = _tripHistoryFromDate;
+    final prevTo = _tripHistoryToDate;
+
     setState(() {
       _tripHistoryStatusAll = result.statusAll;
       _tripHistoryStatusFilters = Set<_TripHistoryStatus>.from(result.statuses);
@@ -802,14 +824,133 @@ class _WelcomeState extends State<_WelcomeView> {
       _tripHistoryFromDate = result.fromDate;
       _tripHistoryToDate = result.toDate;
     });
+
+    final datesChanged = prevFrom != result.fromDate || prevTo != result.toDate;
+    if (datesChanged) {
+      final rosterState = context.read<RosterBloc>().state;
+      if (rosterState is RosterLoaded) {
+        String dateStr(DateTime d) =>
+            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+        _tripHistoryFetchDispatched = false;
+        context.read<TripHistoryBloc>().add(FetchTripHistory(
+              empId: rosterState.details.empId,
+              fromDate: result.fromDate != null
+                  ? dateStr(result.fromDate!)
+                  : _defaultFromDate(),
+              toDate: result.toDate != null
+                  ? dateStr(result.toDate!)
+                  : _defaultToDate(),
+            ));
+        _tripHistoryFetchDispatched = true;
+      }
+    }
+  }
+
+  /// Default date range: today back 15 days.
+  static String _defaultFromDate() {
+    final d = DateTime.now().subtract(const Duration(days: 15));
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  static String _defaultToDate() {
+    final d = DateTime.now();
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Maps a backend [TripHistoryItem] (UserTripHistory API) to UI card data.
+  _TripHistoryItem _toUiItem(TripHistoryItem api, int index) {
+    final tripDate = _parseScheduleDate(api.tripDate) ?? DateTime.now();
+    final dateGroupLabel = _formatHeaderDate(tripDate);
+    final time = _formatShiftTime(api.pickTime ?? api.shiftTime) ?? '--:--';
+
+    final _TripHistoryStatus status;
+    if (api.isNoShow) {
+      status = _TripHistoryStatus.noShow;
+    } else if (api.isCancelled) {
+      status = _TripHistoryStatus.cancelled;
+    } else if (api.isCompleted) {
+      status = _TripHistoryStatus.completed;
+    } else {
+      final s = (api.tripStatus ?? '').trim().toLowerCase();
+      if (s.contains('expir') || s == 'printed') {
+        status = _TripHistoryStatus.expired;
+      } else if (s.contains('start') && api.isBoarded) {
+        status = _TripHistoryStatus.completed;
+      } else {
+        status = _TripHistoryStatus.expired;
+      }
+    }
+
+    return _TripHistoryItem(
+      cardId: 'api_${api.tripId ?? index}_${api.empId ?? index}',
+      dateGroupLabel: dateGroupLabel,
+      tripDate: tripDate,
+      isLogin: api.isLogin,
+      time: time,
+      status: status,
+      apiItem: api,
+      rating: api.rating,
+      navigateOnTap: status == _TripHistoryStatus.completed,
+    );
   }
 
   Widget _buildTripHistorySection() {
+    return BlocBuilder<TripHistoryBloc, TripHistoryState>(
+      builder: (context, historyState) {
+        if (historyState is TripHistoryInitial ||
+            historyState is TripHistoryLoading) {
+          return _buildSectionLoader();
+        }
+
+        if (historyState is TripHistoryUnauthorized) {
+          return _buildSchedulesEmptyState(
+            title: 'Session expired',
+            subtitle: historyState.message,
+            onRetry: () =>
+                Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const MobileNoVerification()),
+              (route) => false,
+            ),
+            retryLabel: 'Sign in again',
+          );
+        }
+
+        if (historyState is TripHistoryError) {
+          final rosterState = context.read<RosterBloc>().state;
+          return _buildSchedulesEmptyState(
+            title: 'Could not load trip history',
+            subtitle: historyState.message,
+            onRetry: rosterState is RosterLoaded
+                ? () {
+                    _tripHistoryFetchDispatched = false;
+                    _maybeDispatchTripHistoryFetch(rosterState.details.empId);
+                  }
+                : null,
+            retryLabel: 'Retry',
+          );
+        }
+
+        final apiItems = historyState is TripHistoryLoaded
+            ? historyState.items
+            : <TripHistoryItem>[];
+
+        final allUiItems = apiItems
+            .asMap()
+            .entries
+            .map((e) => _toUiItem(e.value, e.key))
+            .toList();
+
+        return _buildTripHistoryList(allUiItems);
+      },
+    );
+  }
+
+  Widget _buildTripHistoryList(List<_TripHistoryItem> allItems) {
     const loginGreen = Color(0xFF3E9B73);
     const logoutMaroon = Color(0xFFB40D1A);
     const completedBlue = Color(0xFF2563EB);
 
-    final filtered = _filteredTripHistoryItems();
+    final filtered = _filteredItems(allItems);
 
     Widget dateRow(String label) {
       return Padding(
@@ -826,6 +967,10 @@ class _WelcomeState extends State<_WelcomeView> {
     }
 
     if (filtered.isEmpty) {
+      final hasActiveFilters = !_tripHistoryStatusAll ||
+          !_tripHistoryRatingAll ||
+          _tripHistoryFromDate != null ||
+          _tripHistoryToDate != null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(32, 48, 32, 100),
@@ -833,15 +978,19 @@ class _WelcomeState extends State<_WelcomeView> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                Icons.filter_list_off_outlined,
+                hasActiveFilters
+                    ? Icons.filter_list_off_outlined
+                    : Icons.history_toggle_off_outlined,
                 size: 48,
                 color: _tripHistoryPrimaryGreen.withOpacity(0.5),
               ),
               const SizedBox(height: 16),
-              const Text(
-                'No trips match your filters',
+              Text(
+                hasActiveFilters
+                    ? 'No trips match your filters'
+                    : 'No trip history found',
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF333333),
@@ -849,25 +998,26 @@ class _WelcomeState extends State<_WelcomeView> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Try adjusting or resetting the filters.',
+                hasActiveFilters
+                    ? 'Try adjusting or resetting the filters.'
+                    : 'No trips found for the selected date range.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey.shade600,
-                ),
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
               ),
-              const SizedBox(height: 20),
-              OutlinedButton(
-                onPressed: _openTripHistoryFilters,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _tripHistoryPrimaryGreen,
-                  side: const BorderSide(color: Color(0xFFB8DEC9)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
+              if (hasActiveFilters) ...[
+                const SizedBox(height: 20),
+                OutlinedButton(
+                  onPressed: () => _openTripHistoryFilters(allItems),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _tripHistoryPrimaryGreen,
+                    side: const BorderSide(color: Color(0xFFB8DEC9)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
                   ),
+                  child: const Text('Change filters'),
                 ),
-                child: const Text('Change filters'),
-              ),
+              ],
             ],
           ),
         ),
@@ -900,7 +1050,8 @@ class _WelcomeState extends State<_WelcomeView> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => TripSummaryScreen(),
+                      builder: (context) =>
+                          TripSummaryScreen(tripItem: item.apiItem),
                     ),
                   );
                 }
@@ -918,16 +1069,15 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
-  Widget _buildTripHistoryCard({
-    required String cardId,
-    required bool isLogin,
-    required String time,
-    required _TripHistoryStatus status,
-    required Color accentLogin,
-    required Color accentLogout,
-    required Color completedBlue,
-    required void Function()? onTap
-  }) {
+  Widget _buildTripHistoryCard(
+      {required String cardId,
+      required bool isLogin,
+      required String time,
+      required _TripHistoryStatus status,
+      required Color accentLogin,
+      required Color accentLogout,
+      required Color completedBlue,
+      required void Function()? onTap}) {
     final accentColor = isLogin ? accentLogin : accentLogout;
     final Color tagBgColor =
         isLogin ? const Color(0xFFE8F5EE) : const Color(0xFFFFF0EE);
@@ -1012,8 +1162,8 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                     const SizedBox(width: 8),
                     Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
                         color: tagBgColor,
                         borderRadius: BorderRadius.circular(20),
@@ -1096,7 +1246,8 @@ class _WelcomeState extends State<_WelcomeView> {
             children: [
               Builder(
                 builder: (scaffoldContext) => IconButton(
-                  icon: const Icon(Icons.menu, color: _tripHistoryPrimaryGreen, size: 26),
+                  icon: const Icon(Icons.menu,
+                      color: _tripHistoryPrimaryGreen, size: 26),
                   onPressed: () => Scaffold.of(scaffoldContext).openDrawer(),
                 ),
               ),
@@ -1112,12 +1263,24 @@ class _WelcomeState extends State<_WelcomeView> {
                 ),
               ),
               OutlinedButton.icon(
-                onPressed: _openTripHistoryFilters,
+                onPressed: () {
+                  final historyState = context.read<TripHistoryBloc>().state;
+                  final apiItems = historyState is TripHistoryLoaded
+                      ? historyState.items
+                      : <TripHistoryItem>[];
+                  final allUiItems = apiItems
+                      .asMap()
+                      .entries
+                      .map((e) => _toUiItem(e.value, e.key))
+                      .toList();
+                  _openTripHistoryFilters(allUiItems);
+                },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF444444),
                   backgroundColor: Colors.white,
                   side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   shape: RoundedRectangleBorder(
@@ -1155,12 +1318,15 @@ class _WelcomeState extends State<_WelcomeView> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Builder(                              // ← add this
+                  Builder(
+                    // ← add this
                     builder: (scaffoldContext) => InkWell(
                       onTap: () {
-                        Scaffold.of(scaffoldContext).openDrawer();  // ← use scaffoldContext
+                        Scaffold.of(scaffoldContext)
+                            .openDrawer(); // ← use scaffoldContext
                       },
-                      child: const Icon(Icons.menu, color: Colors.white, size: 26),
+                      child:
+                          const Icon(Icons.menu, color: Colors.white, size: 26),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1249,9 +1415,7 @@ class _WelcomeState extends State<_WelcomeView> {
             return RefreshIndicator(
               onRefresh: () async {
                 context.read<TripHomeBloc>().add(const FetchTripHome());
-                context
-                    .read<ScheduleHomeBloc>()
-                    .add(const FetchScheduleHome());
+                context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
               },
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -1296,8 +1460,8 @@ class _WelcomeState extends State<_WelcomeView> {
       return _buildSchedulesEmptyState(
         title: 'Session expired',
         subtitle: tripState.message,
-        onRetry: () => Navigator.of(context, rootNavigator: true)
-            .pushAndRemoveUntil(
+        onRetry: () =>
+            Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const MobileNoVerification()),
           (route) => false,
         ),
@@ -1308,8 +1472,8 @@ class _WelcomeState extends State<_WelcomeView> {
       return _buildSchedulesEmptyState(
         title: 'Session expired',
         subtitle: scheduleState.message,
-        onRetry: () => Navigator.of(context, rootNavigator: true)
-            .pushAndRemoveUntil(
+        onRetry: () =>
+            Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const MobileNoVerification()),
           (route) => false,
         ),
@@ -1356,15 +1520,13 @@ class _WelcomeState extends State<_WelcomeView> {
         _buildSchedulesEmptyState(
           title: 'Could not load schedules',
           subtitle: scheduleState.message,
-          onRetry: () => context
-              .read<ScheduleHomeBloc>()
-              .add(const FetchScheduleHome()),
+          onRetry: () =>
+              context.read<ScheduleHomeBloc>().add(const FetchScheduleHome()),
           retryLabel: 'Retry',
         ),
       );
     } else if (scheduleState is ScheduleHomeLoaded) {
-      final scheduleCards =
-          _buildScheduleGroupWidgets(scheduleState.groups);
+      final scheduleCards = _buildScheduleGroupWidgets(scheduleState.groups);
       if (scheduleCards.isNotEmpty) {
         children.add(_buildSubsectionLabel('Scheduled'));
         children.addAll(scheduleCards);
@@ -1544,17 +1706,43 @@ class _WelcomeState extends State<_WelcomeView> {
   // ─── Date / time helpers ───────────────────────────────────────────────────
 
   static const List<String> _monthAbbrev = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   static const Map<String, int> _monthIndex = {
-    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    'jan': 1,
+    'feb': 2,
+    'mar': 3,
+    'apr': 4,
+    'may': 5,
+    'jun': 6,
+    'jul': 7,
+    'aug': 8,
+    'sep': 9,
+    'oct': 10,
+    'nov': 11,
+    'dec': 12,
   };
 
   static const List<String> _weekdayNames = [
-    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
   ];
 
   String? _resolveTripGroupHeaderDate(TripDayGroup group) {
@@ -1697,9 +1885,8 @@ class _WelcomeState extends State<_WelcomeView> {
           style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w600,
-            color: hasAddress
-                ? const Color(0xFF2C3437)
-                : const Color(0xFF9AA0A6),
+            color:
+                hasAddress ? const Color(0xFF2C3437) : const Color(0xFF9AA0A6),
           ),
         ),
         if (subtitle != null) ...[
@@ -1828,16 +2015,16 @@ class _WelcomeState extends State<_WelcomeView> {
   }) {
     final bool isLogin = type == 'login';
     final Color accentColor =
-    isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
+        isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final Color allocatedStatusColor =
-    isLogin ? const Color(0xFFE0A309) : const Color(0xFFB40D1A);
+        isLogin ? const Color(0xFFE0A309) : const Color(0xFFB40D1A);
     final Color scheduledStatusColor = const Color(0xFF596064);
     final Color statusColor =
         isScheduled ? scheduledStatusColor : allocatedStatusColor;
     final Color tagBgColor =
-    isLogin ? const Color(0xFFE8F5EE) : const Color(0xFFFFF0EE);
+        isLogin ? const Color(0xFFE8F5EE) : const Color(0xFFFFF0EE);
     final Color tagTextColor =
-    isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
+        isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
     final IconData statusIcon =
         isScheduled ? Icons.access_time : Icons.check_circle_outline;
@@ -1845,10 +2032,8 @@ class _WelcomeState extends State<_WelcomeView> {
     final List<String> otpDigits = ['3', '3', '3', '3'];
 
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
-    final Color trackBg =
-        isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
-    final Color trackFg =
-        isScheduled ? const Color(0xFFB0B0B0) : accentColor;
+    final Color trackBg = isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
+    final Color trackFg = isScheduled ? const Color(0xFFB0B0B0) : accentColor;
     final VoidCallback? trackVehicleAction = isScheduled
         ? null
         : () => _openRideTracking(
@@ -1896,7 +2081,7 @@ class _WelcomeState extends State<_WelcomeView> {
                   const SizedBox(width: 8),
                   Container(
                     padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: tagBgColor,
                       borderRadius: BorderRadius.circular(20),
@@ -1985,9 +2170,8 @@ class _WelcomeState extends State<_WelcomeView> {
                           //   Logout → office (OfficeAddress)
                           _buildAddressBlock(
                             label: 'PICKUP',
-                            address: isLogin
-                                ? item.userAddress
-                                : item.officeAddress,
+                            address:
+                                isLogin ? item.userAddress : item.officeAddress,
                           ),
                           const SizedBox(height: 20),
                           // Drop:
@@ -1995,9 +2179,8 @@ class _WelcomeState extends State<_WelcomeView> {
                           //   Logout → user's home (UserAddress)
                           _buildAddressBlock(
                             label: 'DROP',
-                            address: isLogin
-                                ? item.officeAddress
-                                : item.userAddress,
+                            address:
+                                isLogin ? item.officeAddress : item.userAddress,
                           ),
                         ],
                       ),
@@ -2086,7 +2269,7 @@ class _WelcomeState extends State<_WelcomeView> {
                 Container(
                   width: double.infinity,
                   padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
@@ -2108,24 +2291,24 @@ class _WelcomeState extends State<_WelcomeView> {
                         children: otpDigits
                             .map(
                               (digit) => Container(
-                            margin: const EdgeInsets.only(right: 8),
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE6F3ED),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              digit,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF002D1C),
+                                margin: const EdgeInsets.only(right: 8),
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE6F3ED),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  digit,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF002D1C),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        )
+                            )
                             .toList(),
                       ),
                     ],
@@ -2244,24 +2427,24 @@ class _WelcomeState extends State<_WelcomeView> {
                             children: otpDigits
                                 .map(
                                   (digit) => Container(
-                                margin: const EdgeInsets.only(right: 6),
-                                width: 23,
-                                height: 23,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE6F3ED),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  digit,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF002D1C),
+                                    margin: const EdgeInsets.only(right: 6),
+                                    width: 23,
+                                    height: 23,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFE6F3ED),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      digit,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF002D1C),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                            )
+                                )
                                 .toList(),
                           ),
                         ],
@@ -2308,7 +2491,6 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
-
   /// Tries to derive a friendly header date for schedule groups.
   String? _resolveGroupHeaderDate(ScheduleDateGroup group) {
     DateTime? candidate;
@@ -2341,7 +2523,8 @@ class _WelcomeState extends State<_WelcomeView> {
     final String time = _formatShiftTime(item.pickShift) ?? '--:--';
     final bool isScheduled = item.isScheduledStatus;
     final bool isCompleted = item.isCompleted;
-    final bool showBoardDeboardActions = item.showBoardDeboardActions && !isCompleted;
+    final bool showBoardDeboardActions =
+        item.showBoardDeboardActions && !isCompleted;
     final bool isFullyDeboarded = item.isBoarded && item.isDeBoarded;
     final statusStyle = isCompleted
         ? (icon: Icons.check_circle_outline, color: const Color(0xFF2563EB))
@@ -2355,7 +2538,8 @@ class _WelcomeState extends State<_WelcomeView> {
         isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
     final IconData statusIcon = statusStyle.icon;
-    final String statusLabel = isCompleted ? 'Trip Completed' : (item.tripStatusName ?? '—');
+    final String statusLabel =
+        isCompleted ? 'Trip Completed' : (item.tripStatusName ?? '—');
     final List<String> otpDigits = _otpDigits(item.otp);
     final plannedPickup = _plannedPickupLabel(item) ?? '--:--';
     final vehicleLabel = (item.vehicleInfo?.trim().isNotEmpty ?? false)
@@ -2367,10 +2551,8 @@ class _WelcomeState extends State<_WelcomeView> {
     final ivr = item.userAppIvrNumber?.trim();
 
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
-    final Color trackBg =
-        isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
-    final Color trackFg =
-        isScheduled ? const Color(0xFFB0B0B0) : accentColor;
+    final Color trackBg = isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
+    final Color trackFg = isScheduled ? const Color(0xFFB0B0B0) : accentColor;
     final VoidCallback? trackVehicleAction = isScheduled
         ? null
         : () => _openRideTracking(
@@ -2418,7 +2600,7 @@ class _WelcomeState extends State<_WelcomeView> {
                   const SizedBox(width: 8),
                   Container(
                     padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: tagBgColor,
                       borderRadius: BorderRadius.circular(20),
@@ -2465,7 +2647,8 @@ class _WelcomeState extends State<_WelcomeView> {
                   if (item.tripStatusCode == 3 && item.isBoarded) ...[
                     const SizedBox(width: 6),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: isFullyDeboarded
                             ? const Color(0xFFEEF2FF)
@@ -2526,18 +2709,21 @@ class _WelcomeState extends State<_WelcomeView> {
                         children: [
                           _buildAddressBlock(
                             label: 'PICKUP',
-                            address: isLogin ? item.userAddress : item.officeAddress,
+                            address:
+                                isLogin ? item.userAddress : item.officeAddress,
                           ),
                           const SizedBox(height: 20),
                           _buildAddressBlock(
                             label: 'DROP',
-                            address: isLogin ? item.officeAddress : item.userAddress,
+                            address:
+                                isLogin ? item.officeAddress : item.userAddress,
                           ),
                           if (seqLabel != null) ...[
                             const SizedBox(height: 12),
                             Row(
                               children: [
-                                Icon(Icons.event_seat_outlined, size: 16, color: Colors.grey[600]),
+                                Icon(Icons.event_seat_outlined,
+                                    size: 16, color: Colors.grey[600]),
                                 const SizedBox(width: 6),
                                 Text(
                                   seqLabel,
@@ -2563,7 +2749,8 @@ class _WelcomeState extends State<_WelcomeView> {
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
@@ -2582,7 +2769,10 @@ class _WelcomeState extends State<_WelcomeView> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              isLogin ? plannedPickup : (_formatShiftTime(item.pickShift) ?? '--:--'),
+                              isLogin
+                                  ? plannedPickup
+                                  : (_formatShiftTime(item.pickShift) ??
+                                      '--:--'),
                               style: const TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
@@ -2596,7 +2786,8 @@ class _WelcomeState extends State<_WelcomeView> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
@@ -2615,7 +2806,10 @@ class _WelcomeState extends State<_WelcomeView> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              isLogin ? (_formatShiftTime(item.pickShift) ?? '--:--') : plannedPickup,
+                              isLogin
+                                  ? (_formatShiftTime(item.pickShift) ??
+                                      '--:--')
+                                  : plannedPickup,
                               style: const TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
@@ -2662,7 +2856,8 @@ class _WelcomeState extends State<_WelcomeView> {
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
@@ -2695,7 +2890,8 @@ class _WelcomeState extends State<_WelcomeView> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
@@ -2727,7 +2923,9 @@ class _WelcomeState extends State<_WelcomeView> {
                                 ],
                               ),
                             ),
-                            if (ivr != null && ivr.isNotEmpty && !isFullyDeboarded)
+                            if (ivr != null &&
+                                ivr.isNotEmpty &&
+                                !isFullyDeboarded)
                               InkWell(
                                 splashColor: Colors.transparent,
                                 onTap: () {},
@@ -2738,7 +2936,8 @@ class _WelcomeState extends State<_WelcomeView> {
                                     color: tagBgColor,
                                     shape: BoxShape.circle,
                                   ),
-                                  child: Icon(Icons.phone, size: 18, color: accentColor),
+                                  child: Icon(Icons.phone,
+                                      size: 18, color: accentColor),
                                 ),
                               ),
                           ],
@@ -2752,7 +2951,8 @@ class _WelcomeState extends State<_WelcomeView> {
                   const SizedBox(height: 14),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(20),
@@ -2771,26 +2971,28 @@ class _WelcomeState extends State<_WelcomeView> {
                         ),
                         const SizedBox(height: 8),
                         Row(
-                          children: otpDigits.map(
-                            (digit) => Container(
-                              margin: const EdgeInsets.only(right: 8),
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE6F3ED),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                digit,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF002D1C),
+                          children: otpDigits
+                              .map(
+                                (digit) => Container(
+                                  margin: const EdgeInsets.only(right: 8),
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE6F3ED),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    digit,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF002D1C),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ),
-                          ).toList(),
+                              )
+                              .toList(),
                         ),
                       ],
                     ),
@@ -2898,24 +3100,24 @@ class _WelcomeState extends State<_WelcomeView> {
                             children: otpDigits
                                 .map(
                                   (digit) => Container(
-                                margin: const EdgeInsets.only(right: 6),
-                                width: 23,
-                                height: 23,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE6F3ED),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  digit,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF002D1C),
+                                    margin: const EdgeInsets.only(right: 6),
+                                    width: 23,
+                                    height: 23,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFE6F3ED),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      digit,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF002D1C),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                            )
+                                )
                                 .toList(),
                           ),
                         ],
@@ -2965,12 +3167,188 @@ class _WelcomeState extends State<_WelcomeView> {
 
   Widget _buildSOSButton() {
     return GestureDetector(
-      onTap: () {},
+      onTap: () => _showSOSDialog(),
       child: Image.asset(
         'assets/images/sos.png',
         width: 67,
         height: 67,
         fit: BoxFit.cover,
+      ),
+    );
+  }
+
+  void _showSOSDialog() {
+    final rosterState = context.read<RosterBloc>().state;
+    final empId =
+        rosterState is RosterLoaded ? rosterState.details.empId : null;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (dialogContext) => BlocProvider.value(
+        value: context.read<SosBloc>(),
+        child: BlocListener<SosBloc, SosState>(
+          listener: (_, state) {
+            if (state is SosSuccess ||
+                state is SosError ||
+                state is SosUnauthorized) {
+              Navigator.of(dialogContext).pop();
+              final msg = state is SosSuccess
+                  ? 'SOS alert triggered successfully.'
+                  : state is SosError
+                      ? state.message
+                      : (state as SosUnauthorized).message;
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(
+                  content: Text(msg),
+                  backgroundColor: state is SosSuccess
+                      ? const Color(0xFF1A6B3C)
+                      : const Color(0xFFB40D1A),
+                  behavior: SnackBarBehavior.floating,
+                ));
+            }
+          },
+          child: BlocBuilder<SosBloc, SosState>(
+            builder: (dialogCtx, sosState) {
+              final isLoading = sosState is SosLoading;
+              return Dialog(
+                backgroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24)),
+                insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Container(
+                            width: 64,
+                            height: 64,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFFFCCCC),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.gpp_maybe,
+                              color: Color(0xFFB40D1A),
+                              size: 32,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Activate SOS?',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF1A1A1A),
+                          fontFamily: 'Manrope',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Are you sure you want to trigger an emergency alert? This will immediately notify our safety team and share your live location with local authorities.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF596064),
+                          height: 1.5,
+                          fontFamily: 'Manrope',
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: isLoading
+                                  ? null
+                                  : () {
+                                      if (empId == null) {
+                                        Navigator.of(dialogContext).pop();
+                                        ScaffoldMessenger.of(context)
+                                          ..hideCurrentSnackBar()
+                                          ..showSnackBar(const SnackBar(
+                                            content: Text(
+                                                'Employee data not loaded. Please try again.'),
+                                            behavior: SnackBarBehavior.floating,
+                                          ));
+                                        return;
+                                      }
+                                      dialogCtx
+                                          .read<SosBloc>()
+                                          .add(TriggerSos(empId: empId));
+                                    },
+                              child: Container(
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFB40D1A),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                alignment: Alignment.center,
+                                child: isLoading
+                                    ? const SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Confirm',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                          fontFamily: 'Manrope',
+                                        ),
+                                      ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: isLoading
+                                  ? null
+                                  : () => Navigator.of(dialogContext).pop(),
+                              child: Container(
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                      color: const Color(0xFFE0E0E0)),
+                                ),
+                                alignment: Alignment.center,
+                                child: const Text(
+                                  'Go Back',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1A6B3C),
+                                    fontFamily: 'Manrope',
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -3058,7 +3436,7 @@ class _WelcomeState extends State<_WelcomeView> {
             // Trip History tab
             Expanded(
               child: GestureDetector(
-                onTap: () => setState(() => _selectedIndex = 1),
+                onTap: _selectTripHistoryTab,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -3208,7 +3586,6 @@ class _LowerSemicircleBorderPainter extends CustomPainter {
   }
 }
 
-
 /// Board confirmation dialog — calls `POST /UserApp/UserBoardDeboard`.
 class BoardTripDialog extends StatelessWidget {
   const BoardTripDialog({
@@ -3316,9 +3693,8 @@ class _BoardTripDialogViewState extends State<_BoardTripDialogView> {
           curr is BoardTripUnauthorized,
       listener: (context, state) {
         if (state is BoardTripSuccess) {
-          final message = state.message.isNotEmpty
-              ? state.message
-              : widget.successFallback;
+          final message =
+              state.message.isNotEmpty ? state.message : widget.successFallback;
           _closeDialog(message);
         } else if (state is BoardTripError) {
           _showSnackBar(context, _friendlyMessage(state.message), error: true);
@@ -3455,9 +3831,7 @@ class _BoardTripDialogViewState extends State<_BoardTripDialogView> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: GestureDetector(
-                          onTap: isSubmitting
-                              ? null
-                              : _closeDialog,
+                          onTap: isSubmitting ? null : _closeDialog,
                           child: Container(
                             height: 48,
                             alignment: Alignment.center,
@@ -3971,11 +4345,20 @@ class _CancelRideDialogView extends StatelessWidget {
   }
 }
 
-
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key, this.onTripHistoryTap});
 
   final VoidCallback? onTripHistoryTap;
+
+  void _showRateAppDialog(BuildContext context) {
+    Navigator.pop(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (_) => const _RateAppDialog(),
+    );
+  }
 
   void _showLogoutDialog(BuildContext context) {
     Navigator.pop(context);
@@ -4120,7 +4503,14 @@ class AppDrawer extends StatelessWidget {
               _DrawerItem(
                 icon: Icons.calendar_today_outlined,
                 label: 'Create Schedule',
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => TripDetailsScreen(),
+                    ),
+                  );
+                },
               ),
               _DrawerItem(
                 icon: Icons.calendar_month_outlined,
@@ -4140,7 +4530,28 @@ class AppDrawer extends StatelessWidget {
               _DrawerItem(
                 icon: Icons.people_outline,
                 label: 'Team Cab',
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const TeamCabScreen(),
+                    ),
+                  );
+                },
+              ),
+              _DrawerItem(
+                icon: Icons.people_outline,
+                label: 'ADHOC Request',
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AdhocRequestScreen(),
+                    ),
+                  );
+                },
               ),
 
               const SizedBox(height: 4),
@@ -4180,6 +4591,23 @@ class AppDrawer extends StatelessWidget {
                 onTap: () => Navigator.pop(context),
               ),
               _DrawerItem(
+                icon: Icons.directions_bus_outlined,
+                label: 'Raise Complaint',
+                onTap: () {
+                  final rosterState = context.read<RosterBloc>().state;
+                  final empId = rosterState is RosterLoaded
+                      ? rosterState.details.empId
+                      : 0;
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RaiseComplaintScreen(empId: empId),
+                    ),
+                  );
+                },
+              ),
+              _DrawerItem(
                 icon: Icons.quiz_outlined,
                 label: "FAQ's",
                 onTap: () => Navigator.pop(context),
@@ -4197,7 +4625,7 @@ class AppDrawer extends StatelessWidget {
               _DrawerItem(
                 icon: Icons.star_outline,
                 label: 'Rate This App',
-                onTap: () => Navigator.pop(context),
+                onTap: () => _showRateAppDialog(context),
               ),
 
               const SizedBox(height: 4),
@@ -4253,7 +4681,7 @@ class _DrawerHeader extends StatelessWidget {
           // Avatar
           InkWell(
             splashColor: Colors.transparent,
-            onTap: (){
+            onTap: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -4469,6 +4897,271 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
+// ─── Rate App Dialog ─────────────────────────────────────────────────────────
+
+class _RateAppDialog extends StatefulWidget {
+  const _RateAppDialog({this.empId, this.tripId});
+
+  final int? empId;
+  final int? tripId;
+
+  @override
+  State<_RateAppDialog> createState() => _RateAppDialogState();
+}
+
+class _RateAppDialogState extends State<_RateAppDialog> {
+  int _rating = 0;
+  bool _isSubmitting = false;
+  final TextEditingController _remarksController = TextEditingController();
+
+  static const _labels = [
+    '',
+    'Poor',
+    'Fair',
+    'Average',
+    'Good Quality',
+    'Excellent'
+  ];
+  static const _primaryGreen = Color(0xFF1A5C38);
+
+  @override
+  void dispose() {
+    _remarksController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitFeedback() async {
+    final empId = widget.empId;
+    final tripId = widget.tripId;
+    if (empId == null || tripId == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+    try {
+      await sl<UserFeedbackRepo>().createUserFeedback(
+        empId: empId,
+        tripId: tripId,
+        rating: _rating,
+        remarks: _remarksController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.black.withValues(alpha: 0.5),
+        builder: (_) => const _FeedbackSuccessDialog(),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString().replaceFirst('Exception: ', ''),
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'How was your ride?',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF181C1B),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Your feedback helps us keep the flow smooth.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Color(0xFF888888),
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+            const SizedBox(height: 28),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(5, (i) {
+                final starIndex = i + 1;
+                return GestureDetector(
+                  onTap: () => setState(() => _rating = starIndex),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Icon(
+                      starIndex <= _rating ? Icons.star : Icons.star_border,
+                      color: starIndex <= _rating
+                          ? _primaryGreen
+                          : const Color(0xFFCCCCCC),
+                      size: 40,
+                    ),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _rating > 0 ? _labels[_rating].toUpperCase() : '',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: _primaryGreen,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _remarksController,
+              minLines: 3,
+              maxLines: 5,
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Add Remarks',
+                hintStyle: const TextStyle(color: Color(0xFF9AA0A6)),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFB8DEC9)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide:
+                      const BorderSide(color: _primaryGreen, width: 1.5),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: (_rating == 0 || _isSubmitting) ? null : _submitFeedback,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _primaryGreen,
+                  disabledBackgroundColor: const Color(0xFFB0C4B8),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                ),
+                label: _isSubmitting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Text(
+                            'Submit Feedback',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Icon(Icons.send, size: 18),
+                        ],
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Feedback Success Dialog ─────────────────────────────────────────────────
+
+class _FeedbackSuccessDialog extends StatelessWidget {
+  const _FeedbackSuccessDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 80),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: const BoxDecoration(
+                color: Color(0xFF1A5C38),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check, color: Colors.white, size: 40),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Feedback Submitted\nSuccessfully',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF181C1B),
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1A5C38),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                ),
+                child: const Text(
+                  'Go Back',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ─── Trip History Filters (full-screen) ─────────────────────────────────────
 
 class _TripHistoryFilterPage extends StatefulWidget {
@@ -4500,8 +5193,18 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
   DateTime? _toDate;
 
   static const List<String> _monthLabels = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   @override
@@ -4522,21 +5225,15 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  static DateTime _startOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
-
-  static DateTime _endOfMonth(DateTime d) =>
-      DateTime(d.year, d.month + 1, 0);
-
   String _formatMonthYear(DateTime? date) {
     if (date == null) return 'Select date';
-    return '${_monthLabels[date.month - 1]} ${date.year}';
+    return '${date.day} ${_monthLabels[date.month - 1]} ${date.year}';
   }
 
   bool _matchesDateRange(_TripHistoryItem item) {
     if (_fromDate == null && _toDate == null) return true;
     final tripDay = _dateOnly(item.tripDate);
-    if (_fromDate != null &&
-        tripDay.isBefore(_dateOnly(_fromDate!))) {
+    if (_fromDate != null && tripDay.isBefore(_dateOnly(_fromDate!))) {
       return false;
     }
     if (_toDate != null && tripDay.isAfter(_dateOnly(_toDate!))) {
@@ -4571,14 +5268,14 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
     if (picked == null || !mounted) return;
     setState(() {
       if (isFrom) {
-        _fromDate = _startOfMonth(picked);
+        _fromDate = _dateOnly(picked);
         if (_toDate != null && _fromDate!.isAfter(_toDate!)) {
-          _toDate = _endOfMonth(picked);
+          _toDate = _dateOnly(picked);
         }
       } else {
-        _toDate = _endOfMonth(picked);
+        _toDate = _dateOnly(picked);
         if (_fromDate != null && _toDate!.isBefore(_fromDate!)) {
-          _fromDate = _startOfMonth(picked);
+          _fromDate = _dateOnly(picked);
         }
       }
     });
@@ -4692,42 +5389,45 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
     );
   }
 
-Widget _buildBody() {
-  return Row(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Container(
-        width: MediaQuery.of(context).size.width * 0.34,
-        decoration: BoxDecoration(
-          color: _mintBg,
-          border: Border(
-            right: BorderSide(
-              color: Colors.grey.shade300,
-              width: 1.0,
+  Widget _buildBody() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          width: MediaQuery.of(context).size.width * 0.34,
+          decoration: BoxDecoration(
+            color: _mintBg,
+            border: Border(
+              right: BorderSide(
+                color: Colors.grey.shade300,
+                width: 1.0,
+              ),
+            ),
+          ),
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            children: [
+              _sidebarItem(
+                  'Trip Status', _TripHistoryFilterCategory.tripStatus),
+              _sidebarItem(
+                  'Trip Rating', _TripHistoryFilterCategory.tripRating),
+              _sidebarItem('Trip Date', _TripHistoryFilterCategory.tripDate),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ColoredBox(
+            color: Colors.white,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+              children: _buildOptionsForCategory(),
             ),
           ),
         ),
-        child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          children: [
-            _sidebarItem('Trip Status', _TripHistoryFilterCategory.tripStatus),
-            _sidebarItem('Trip Rating', _TripHistoryFilterCategory.tripRating),
-            _sidebarItem('Trip Date', _TripHistoryFilterCategory.tripDate),
-          ],
-        ),
-      ),
-      Expanded(
-        child: ColoredBox(
-          color: Colors.white,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-            children: _buildOptionsForCategory(),
-          ),
-        ),
-      ),
-    ],
-  );
-}
+      ],
+    );
+  }
+
   Widget _sidebarItem(String label, _TripHistoryFilterCategory cat) {
     final selected = _category == cat;
     return Material(
@@ -4766,8 +5466,8 @@ Widget _buildBody() {
           _checkRow(
             label: 'Completed',
             count: _statusCount(_TripHistoryStatus.completed),
-            checked: !_statusAll &&
-                _statuses.contains(_TripHistoryStatus.completed),
+            checked:
+                !_statusAll && _statuses.contains(_TripHistoryStatus.completed),
             enabled: _statusCount(_TripHistoryStatus.completed) > 0,
             onTap: () => setState(() {
               _statusAll = false;
@@ -4798,8 +5498,8 @@ Widget _buildBody() {
           _checkRow(
             label: 'Cancelled',
             count: _statusCount(_TripHistoryStatus.cancelled),
-            checked: !_statusAll &&
-                _statuses.contains(_TripHistoryStatus.cancelled),
+            checked:
+                !_statusAll && _statuses.contains(_TripHistoryStatus.cancelled),
             enabled: _statusCount(_TripHistoryStatus.cancelled) > 0,
             onTap: () => setState(() {
               _statusAll = false;
@@ -4867,8 +5567,7 @@ Widget _buildBody() {
             onTap: () => setState(() {
               _ratingAll = false;
               _includeUnrated = !_includeUnrated;
-              if (!_includeUnrated &&
-                  _ratings.isEmpty) {
+              if (!_includeUnrated && _ratings.isEmpty) {
                 _ratingAll = true;
               }
             }),
@@ -4951,9 +5650,7 @@ Widget _buildBody() {
                     Icon(
                       Icons.calendar_today_outlined,
                       size: 20,
-                      color: hasDate
-                          ? _primaryGreen
-                          : const Color(0xFF9CA3AF),
+                      color: hasDate ? _primaryGreen : const Color(0xFF9CA3AF),
                     ),
                   ],
                 ),
@@ -4972,12 +5669,10 @@ Widget _buildBody() {
     required bool enabled,
     required VoidCallback onTap,
   }) {
-    final textColor = enabled
-        ? const Color(0xFF1A1A1A)
-        : const Color(0xFFBDBDBD);
-    final countColor = enabled
-        ? const Color(0xFF6B7280)
-        : const Color(0xFFBDBDBD);
+    final textColor =
+        enabled ? const Color(0xFF1A1A1A) : const Color(0xFFBDBDBD);
+    final countColor =
+        enabled ? const Color(0xFF6B7280) : const Color(0xFFBDBDBD);
 
     return Opacity(
       opacity: enabled ? 1 : 0.55,
@@ -5041,8 +5736,7 @@ Widget _buildBody() {
           SizedBox(
             width: 140,
             child: ElevatedButton(
-              onPressed: () =>
-                  Navigator.pop(context, _currentResult()),
+              onPressed: () => Navigator.pop(context, _currentResult()),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _primaryGreen,
                 foregroundColor: Colors.white,

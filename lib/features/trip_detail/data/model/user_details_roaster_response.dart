@@ -36,7 +36,7 @@ class RosterUserDetailsResponse {
 class RosterUserDetails {
   final List<LocationModel> locations;
   final List<TripTypeModel> tripTypes;
-  final List<DriverModel> drivers;
+  final List<DrModel> drList;
   final int locCode;
   final int empId;
   final String gender;
@@ -47,7 +47,7 @@ class RosterUserDetails {
   const RosterUserDetails({
     required this.locations,
     required this.tripTypes,
-    required this.drivers,
+    required this.drList,
     required this.locCode,
     required this.empId,
     required this.gender,
@@ -66,8 +66,8 @@ class RosterUserDetails {
           ?.map((e) => TripTypeModel.fromJson(e as Map<String, dynamic>))
           .toList() ??
           [],
-      drivers: (json['DrList'] as List<dynamic>?)
-          ?.map((e) => DriverModel.fromJson(e as Map<String, dynamic>))
+      drList: (json['DrList'] as List<dynamic>?)
+          ?.map((e) => DrModel.fromJson(e as Map<String, dynamic>))
           .toList() ??
           [],
       locCode: (json['LocCode'] as num?)?.toInt() ?? 0,
@@ -104,13 +104,13 @@ class TripTypeModel {
   );
 }
 
-class DriverModel {
+class DrModel {
   final int empId;
   final String empName;
 
-  const DriverModel({required this.empId, required this.empName});
+  const DrModel({required this.empId, required this.empName});
 
-  factory DriverModel.fromJson(Map<String, dynamic> json) => DriverModel(
+  factory DrModel.fromJson(Map<String, dynamic> json) => DrModel(
     empId: (json['EMPID'] as num?)?.toInt() ?? 0,
     empName: json['EmpName']?.toString() ?? '',
   );

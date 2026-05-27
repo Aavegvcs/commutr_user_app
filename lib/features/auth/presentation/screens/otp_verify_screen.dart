@@ -2,15 +2,19 @@ import 'dart:async';
 
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:otp_autofill/otp_autofill.dart';
 
 import '../../bloc/auth_bloc.dart';
 import '../../bloc/auth_event.dart';
 import '../../bloc/auth_state.dart';
 
 class OtpVerifyScreen extends StatefulWidget {
+  /// NOTE: existing API kept intact – `otp` is actually the contact number
+  /// that the OTP was sent to (used as the verification identifier).
   final String otp;
   const OtpVerifyScreen({super.key, required this.otp});
 
@@ -18,29 +22,157 @@ class OtpVerifyScreen extends StatefulWidget {
   State<OtpVerifyScreen> createState() => _OtpVerifyScreenState();
 }
 
-class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
+class _OtpVerifyScreenState extends State<OtpVerifyScreen>
+    with WidgetsBindingObserver {
   static const Color primaryGreen = Color(0xFF1A6B3C);
   static const Color lightGreen = Color(0xFF4CAF50);
 
-  final int _otpLength = 6;
+  static const int _otpLength = 6;
+  static const int _resendDurationSeconds = 45;
+
+  /// Optional: if your DLT-registered sender ID maps to a normalised phone
+  /// number, set it here so the consent dialog ONLY fires for SMS from
+  /// that sender. Leave `null` to accept any non-contact sender.
+  static const String? _senderPhone = null;
+
+  late final AuthBloc _authBloc;
+  late final OTPInteractor _otpInteractor;
   late List<TextEditingController> _controllers;
   late List<FocusNode> _focusNodes;
 
-  int _resendSeconds = 45;
+  int _resendSeconds = _resendDurationSeconds;
   Timer? _timer;
   bool _hasError = false;
+
+  /// Guards against double-submission once auto-fill triggers verify.
+  bool _autoSubmitted = false;
+
+  bool _isListening = false;
 
   @override
   void initState() {
     super.initState();
+    _authBloc = sl<AuthBloc>();
+    _otpInteractor = OTPInteractor();
     _controllers = List.generate(_otpLength, (_) => TextEditingController());
     _focusNodes = List.generate(_otpLength, (_) => FocusNode());
+    WidgetsBinding.instance.addObserver(this);
+    _startUserConsentListener();
     _startTimer();
   }
 
+  // ───────────────────────── SMS User Consent API ─────────────────────────
+  //
+  // This is the same mechanism Zomato / Swiggy / Paytm use.
+  //  • Works with ANY SMS format – no `<#>` prefix, no 11-char hash.
+  //  • Requires NO Android permissions.
+  //  • Shows a small system dialog "Allow app to read SMS?" the first time
+  //    a matching SMS arrives. Tapping Allow returns the full SMS body.
+  //  • Listener lives for ~5 minutes per call.
+  //
+  // Reference: https://developers.google.com/identity/sms-retriever/user-consent/overview
+
+  Future<void> _startUserConsentListener() async {
+    if (_isListening) return;
+    _isListening = true;
+    _log('User Consent listener: starting…');
+
+    try {
+      final smsBody = await _otpInteractor.startListenUserConsent(
+        _senderPhone,
+      );
+      _log('User Consent listener: SMS received → "$smsBody"');
+      if (!mounted) return;
+
+      final extracted = _extractOtp(smsBody);
+      if (extracted == null) {
+        _log('User Consent listener: could not extract $_otpLength-digit OTP');
+        _isListening = false;
+        return;
+      }
+      _handleAutoFilledCode(extracted);
+    } on PlatformException catch (e) {
+      _log('User Consent listener: PlatformException → ${e.code} / ${e.message}');
+      _isListening = false;
+    } catch (e) {
+      // Either TimeoutException (5-minute window expired) or user denied.
+      // Manual entry still works perfectly.
+      _log('User Consent listener: finished with $e');
+      _isListening = false;
+    }
+  }
+
+  Future<void> _stopUserConsentListener() async {
+    if (!_isListening) return;
+    try {
+      await _otpInteractor.stopListenForCode();
+      _log('User Consent listener: stopped');
+    } catch (e) {
+      _log('User Consent listener: stop failed → $e');
+    }
+    _isListening = false;
+  }
+
+  /// Pulls a 6-digit number out of the SMS body. The DLT template is:
+  ///   "Hi, your OTP is 123456 for login to Commutr app. ..."
+  /// so the first run of exactly 6 consecutive digits is the OTP.
+  String? _extractOtp(String? smsBody) {
+    if (smsBody == null || smsBody.isEmpty) return null;
+
+    // Strict: exactly 6 digits with no digit on either side.
+    final strictMatch = RegExp(r'(?<!\d)\d{6}(?!\d)').firstMatch(smsBody);
+    if (strictMatch != null) return strictMatch.group(0);
+
+    // Fallback: first run of 6+ digits anywhere.
+    final looseMatch = RegExp(r'\d{6,}').firstMatch(smsBody)?.group(0);
+    if (looseMatch != null && looseMatch.length >= _otpLength) {
+      return looseMatch.substring(0, _otpLength);
+    }
+    return null;
+  }
+
+  void _log(String message) {
+    if (kDebugMode) debugPrint('[OTP-CONSENT] $message');
+  }
+
+  // ─────────────────────────── Lifecycle handling ─────────────────────────
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed &&
+        _resendSeconds > 0 &&
+        !_autoSubmitted &&
+        !_isListening) {
+      _startUserConsentListener();
+    }
+  }
+
+  // ───────────────────────── Auto-fill core logic ────────────────────────
+
+  void _handleAutoFilledCode(String otp) {
+    if (!mounted || _autoSubmitted) return;
+    if (otp.length < _otpLength) return;
+
+    final code = otp.substring(0, _otpLength);
+    _log('auto-filling OTP boxes with: $code');
+
+    for (var i = 0; i < _otpLength; i++) {
+      _controllers[i].text = code[i];
+    }
+    FocusScope.of(context).unfocus();
+    if (_hasError) setState(() => _hasError = false);
+
+    _autoSubmitted = true;
+    _stopUserConsentListener();
+    _authBloc.add(OtpVerifyEvent(widget.otp, code));
+  }
+
+  // ──────────────────────────────── Misc ─────────────────────────────────
+
   void _startTimer() {
     _timer?.cancel();
-    setState(() => _resendSeconds = 45);
+    setState(() => _resendSeconds = _resendDurationSeconds);
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_resendSeconds == 0) {
         timer.cancel();
@@ -53,8 +185,15 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    for (final c in _controllers) { c.dispose(); }
-    for (final f in _focusNodes) { f.dispose(); }
+    WidgetsBinding.instance.removeObserver(this);
+    _stopUserConsentListener();
+    for (final c in _controllers) {
+      c.dispose();
+    }
+    for (final f in _focusNodes) {
+      f.dispose();
+    }
+    _authBloc.close();
     super.dispose();
   }
 
@@ -75,10 +214,35 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
 
   String get _enteredOtp => _controllers.map((c) => c.text).join();
 
+  Future<void> _onResendPressed() async {
+    _autoSubmitted = false;
+    for (final c in _controllers) {
+      c.clear();
+    }
+    if (_focusNodes.isNotEmpty) {
+      _focusNodes.first.requestFocus();
+    }
+    _startTimer();
+    await _stopUserConsentListener();
+    _startUserConsentListener();
+    _authBloc.add(RequestOtpEvent(widget.otp));
+  }
+
+  void _onManualVerifyPressed() {
+    final code = _enteredOtp;
+    if (code.length < _otpLength) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter the 6-digit OTP')),
+      );
+      return;
+    }
+    _authBloc.add(OtpVerifyEvent(widget.otp, code));
+  }
+
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => sl<AuthBloc>(),
+    return BlocProvider<AuthBloc>.value(
+      value: _authBloc,
       child: BlocConsumer<AuthBloc, AuthState>(
         listener: (context, state) {
           if (state is OtpVerifySuccess) {
@@ -88,7 +252,25 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
               (_) => false,
             );
           } else if (state is OtpVerifyFailure) {
+            _autoSubmitted = false;
+            // Re-arm the consent listener so a follow-up SMS could still
+            // be picked up.
+            if (!_isListening) _startUserConsentListener();
             setState(() => _hasError = true);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(state.message),
+                backgroundColor: Colors.redAccent,
+              ),
+            );
+          } else if (state is OtpRequestSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(state.message),
+                backgroundColor: primaryGreen,
+              ),
+            );
+          } else if (state is OtpRequestFailure) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(state.message),
@@ -217,20 +399,7 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
                             child: ElevatedButton(
                               onPressed: (isLoading || _resendSeconds == 0)
                                   ? null
-                                  : () {
-                                      final code = _enteredOtp;
-                                      if (code.length < _otpLength) {
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(const SnackBar(
-                                          content: Text(
-                                              'Please enter the 6-digit OTP'),
-                                        ));
-                                        return;
-                                      }
-                                      context.read<AuthBloc>().add(
-                                            OtpVerifyEvent(widget.otp, code),
-                                          );
-                                    },
+                                  : _onManualVerifyPressed,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: primaryGreen,
                                 foregroundColor: Colors.white,
@@ -263,7 +432,7 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
                           height: 56,
                           child: OutlinedButton.icon(
                             onPressed:
-                                _resendSeconds == 0 ? _startTimer : null,
+                                _resendSeconds == 0 ? _onResendPressed : null,
                             style: OutlinedButton.styleFrom(
                               foregroundColor: primaryGreen,
                               side: const BorderSide(

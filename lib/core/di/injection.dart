@@ -1,6 +1,15 @@
+import 'package:commutr_main/features/adhoc/bloc/adhoc_bloc.dart';
+import 'package:commutr_main/features/adhoc/data/repository/adhoc_repo.dart';
+import 'package:commutr_main/features/sos/bloc/sos_bloc.dart';
+import 'package:commutr_main/features/sos/data/repository/sos_repo.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/user_feedback_repo.dart';
+import 'package:commutr_main/features/complaint/bloc/complaint_bloc.dart';
+import 'package:commutr_main/features/complaint/data/repository/complaint_repo.dart';
 import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/trip_history_bloc.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/cab_tracking/user_cab_tracking_repo.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/trip_history_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/trip_start/board_trip_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/trip_start/cancel_trip_home_repo.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
@@ -130,6 +139,34 @@ void setupDependencies() {
   );
 
   sl.registerFactory<CabTrackingBloc>(() => CabTrackingBloc(sl()));
+
+  sl.registerLazySingleton<TripHistoryRepo>(
+    () => TripHistoryRepo(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<TripHistoryBloc>(() => TripHistoryBloc(sl()));
+
+  sl.registerLazySingleton<ComplaintRepository>(
+    () => ComplaintRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<ComplaintBloc>(() => ComplaintBloc(sl()));
+
+  sl.registerLazySingleton<AdhocRepository>(
+    () => AdhocRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<AdhocBloc>(() => AdhocBloc(sl()));
+
+  sl.registerLazySingleton<SosRepository>(
+    () => SosRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<SosBloc>(() => SosBloc(sl()));
+
+  sl.registerLazySingleton<UserFeedbackRepo>(
+    () => UserFeedbackRepo(sl(instanceName: appApiClientKey)),
+  );
 
   syncBearerTokenToApiClients();
 }

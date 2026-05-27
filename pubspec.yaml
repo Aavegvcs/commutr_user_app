@@ -44,6 +44,7 @@ dependencies:
   circle_nav_bar: ^2.2.0
   hive_flutter: ^1.1.0
   webview_flutter: ^4.13.1
+  otp_autofill: ^4.1.0
 
 #  device_info_plus: ^11.3.0
 #  package_info_plus: ^9.0.1
