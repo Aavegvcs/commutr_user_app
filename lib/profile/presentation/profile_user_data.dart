@@ -1,3 +1,5 @@
+import 'package:commutr_main/profile/data/model/user_profile_response.dart';
+
 /// Single source of profile fields used by profile and edit screens.
 class ProfileUserData {
   const ProfileUserData({
@@ -11,6 +13,7 @@ class ProfileUserData {
     required this.pincode,
     required this.office,
     required this.nodalPoint,
+    this.empId,
   });
 
   final String fullName;
@@ -25,6 +28,26 @@ class ProfileUserData {
   final String pincode;
   final String office;
   final String nodalPoint;
+
+  /// Numeric employee ID from the API.
+  final int? empId;
+
+  /// Build from the profile API response.
+  factory ProfileUserData.fromApiResponse(UserProfileResponse r) {
+    return ProfileUserData(
+      fullName: r.fullName,
+      email: r.emailId ?? '',
+      phone: r.mobileNo ?? '',
+      gender: r.genderLabel,
+      address: r.address ?? '',
+      city: r.city ?? '',
+      state: r.stateName ?? '',
+      pincode: r.pin ?? '',
+      office: r.locationName ?? '',
+      nodalPoint: r.resolvedNodalPoint,
+      empId: r.empId,
+    );
+  }
 
   /// Split [fullName] into first and last (remainder joins after first word).
   (String, String) get firstAndLastName {
@@ -44,18 +67,16 @@ class ProfileUserData {
   }
 }
 
-/// App-wide demo / current user snapshot for profile flows.
-const ProfileUserData kProfileUserData = ProfileUserData(
-  fullName: 'Yash Khare',
-  email: 'yash.khare@asndtechnology.com',
-  phone: '9314420102',
-  gender: 'Male',
-  address:
-      'Shastri Nagar, Near Metro Pillar no - 196, Opp. HP Petrol Pump, Delhi',
-  city: 'Delhi',
-  state: 'New Delhi',
-  pincode: '110103',
-  office: 'Del24',
-  nodalPoint:
-      'Shastri Nagar, Near Metro Pillar no - 196, Opp. HP Petrol...',
+/// Fallback / placeholder used only before the API responds.
+const ProfileUserData kProfileUserDataFallback = ProfileUserData(
+  fullName: '',
+  email: '',
+  phone: '',
+  gender: 'Other',
+  address: '',
+  city: '',
+  state: '',
+  pincode: '',
+  office: '',
+  nodalPoint: '',
 );

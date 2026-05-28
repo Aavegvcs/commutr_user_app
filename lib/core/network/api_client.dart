@@ -501,6 +501,9 @@ class _LoggingInterceptor extends Interceptor {
     print(
       '→ [${options.method}] ${options.uri}',
     );
+    if (kDebugMode && options.data != null) {
+      print('→ body: ${options.data}');
+    }
 
     handler.next(options);
   }
@@ -525,6 +528,14 @@ class _LoggingInterceptor extends Interceptor {
     print(
       '✖ [${err.response?.statusCode}] ${err.requestOptions.path}',
     );
+    if (kDebugMode) {
+      if (err.requestOptions.data != null) {
+        print('✖ request body: ${err.requestOptions.data}');
+      }
+      if (err.response?.data != null) {
+        print('✖ response body: ${err.response?.data}');
+      }
+    }
 
     handler.next(err);
   }
@@ -584,6 +595,8 @@ class _ErrorInterceptor extends Interceptor {
           401 => UnauthorizedException(msg),
 
           404 => NotFoundException(msg),
+
+          409 => ConflictException(msg),
 
           _ => ServerException(
             'Server error ($status): $msg',

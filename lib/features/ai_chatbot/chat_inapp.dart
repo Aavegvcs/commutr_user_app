@@ -1,16 +1,15 @@
 import 'dart:convert';
 
-import 'package:commutr_main/core/di/injection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 /// Chat server base (scheme + host + port, no trailing slash).
-const String kEtsChatBaseUrl = 'https://dev-core.commutr.in:5050';
+const String kEtsChatBaseUrl = 'http://13.205.219.46:5050';
 
 /// Parent origin for embed / postMessage (matches `parent_origin` query param).
-const String kEtsChatParentOrigin = 'https://dev-core.commutr.in';
+const String kEtsChatParentOrigin = 'http://13.205.219.46';
 
 const String kEtsChatHiveBoxName = 'ets_chat';
 
@@ -69,21 +68,17 @@ class _EtsChatWebViewPageState extends State<EtsChatWebViewPage> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.white)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (_) {
-            if (mounted) {
-              setState(() => _loading = true);
-            }
-          },
-          onPageFinished: (_) async {
-            await _captureSessionId();
-            if (mounted) {
-              setState(() => _loading = false);
-            }
-          },
-        ),
-      )
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageFinished: (_) async {
+          // Inject the access token and hide the loading spinner
+          final freshToken = widget.accessToken;
+          await _controller.runJavaScript(
+              "window.ETS_CHAT_AUTH_TOKEN = ${jsonEncode(freshToken)};"
+          );
+          await _captureSessionId();
+          if (mounted) setState(() => _loading = false);
+        },
+      ))
       ..loadHtmlString(
         _buildWrapperHtml(),
         baseUrl: widget.parentOrigin,

@@ -18,6 +18,11 @@ class NotFoundException implements Exception {
   NotFoundException(this.message);
 }
 
+class ConflictException implements Exception {
+  final String message;
+  ConflictException(this.message);
+}
+
 class ServerException implements Exception {
   final String title;
   ServerException(this.title);

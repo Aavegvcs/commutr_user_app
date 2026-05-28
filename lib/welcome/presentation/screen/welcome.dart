@@ -1,5 +1,7 @@
 import 'dart:math' show pi;
 
+import 'package:url_launcher/url_launcher.dart';
+
 import 'package:commutr_main/core/debug/api_logger_screen.dart';
 import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/board_trip/board_trip_event.dart';
@@ -30,6 +32,9 @@ import 'package:commutr_main/features/trip_detail/bloc/shift_state.dart';
 import 'package:commutr_main/features/trip_detail/data/model/schedule_home_response.dart';
 import 'package:commutr_main/features/trip_detail/data/model/trip_home_response.dart';
 import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
+import 'package:commutr_main/profile/bloc/profile_bloc.dart';
+import 'package:commutr_main/profile/bloc/profile_event.dart';
+import 'package:commutr_main/profile/bloc/profile_state.dart';
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
@@ -120,6 +125,9 @@ class Welcome extends StatelessWidget {
         ),
         BlocProvider<SosBloc>(
           create: (_) => sl<SosBloc>(),
+        ),
+        BlocProvider<ProfileBloc>(
+          create: (_) => sl<ProfileBloc>()..add(const FetchUserProfile()),
         ),
       ],
       child: const _WelcomeView(),
@@ -1344,13 +1352,20 @@ class _WelcomeState extends State<_WelcomeView> {
                             letterSpacing: 1.2,
                           ),
                         ),
-                        const Text(
-                          'Mr. Yash',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        BlocBuilder<ProfileBloc, ProfileState>(
+                          builder: (context, state) {
+                            final firstName = state is ProfileLoaded
+                                ? (state.profile.firstName?.trim() ?? '')
+                                : '';
+                            return Text(
+                              firstName.isNotEmpty ? 'Mr. $firstName' : '',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -4350,6 +4365,32 @@ class AppDrawer extends StatelessWidget {
 
   final VoidCallback? onTripHistoryTap;
 
+  void _showHelpDeskCallDialog(BuildContext context) {
+    final rosterState = context.read<RosterBloc>().state;
+    final phone = rosterState is RosterLoaded
+        ? rosterState.details.helpDeskContactNumber.trim()
+        : '';
+
+    if (phone.isEmpty) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('Help desk number not available. Try again later.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      return;
+    }
+
+    Navigator.pop(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (_) => _HelpDeskCallDialog(phoneNumber: phone),
+    );
+  }
+
   void _showRateAppDialog(BuildContext context) {
     Navigator.pop(context);
     showDialog<void>(
@@ -4583,7 +4624,7 @@ class AppDrawer extends StatelessWidget {
               _DrawerItem(
                 icon: Icons.headset_mic_outlined,
                 label: 'Call Help Desk',
-                onTap: () => Navigator.pop(context),
+                onTap: () => _showHelpDeskCallDialog(context),
               ),
               _DrawerItem(
                 icon: Icons.directions_bus_outlined,
@@ -4707,27 +4748,55 @@ class _DrawerHeader extends StatelessWidget {
           const SizedBox(width: 14),
           // User info
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'Yash Khare',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF1A1A1A),
+            child: InkWell(
+              splashColor: Colors.transparent,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ProfileScreen(),
                   ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'EMP ID: 450921',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF555555)),
-                ),
-                Text(
-                  'Office : D21',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF555555)),
-                ),
-              ],
+                );
+              },
+              child: BlocBuilder<ProfileBloc, ProfileState>(
+                builder: (context, state) {
+                  final fullName = state is ProfileLoaded
+                      ? state.profile.fullName
+                      : '';
+                  final empId = state is ProfileLoaded
+                      ? (state.profile.empId?.toString() ?? '')
+                      : '';
+                  final office = state is ProfileLoaded
+                      ? (state.profile.locationName?.trim() ?? '')
+                      : '';
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fullName,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1A1A1A),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      if (empId.isNotEmpty)
+                        Text(
+                          'EMP ID: $empId',
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF555555)),
+                        ),
+                      if (office.isNotEmpty)
+                        Text(
+                          'Office : $office',
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF555555)),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
           // Close / back icon
@@ -5790,6 +5859,159 @@ class _FilterCheckbox extends StatelessWidget {
       child: checked
           ? const Icon(Icons.check, size: 16, color: Colors.white)
           : null,
+    );
+  }
+}
+
+class _HelpDeskCallDialog extends StatelessWidget {
+  const _HelpDeskCallDialog({required this.phoneNumber});
+
+  final String phoneNumber;
+
+  Future<void> _makeCall(BuildContext context) async {
+    final uri = Uri(scheme: 'tel', path: phoneNumber);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            content: Text('Could not launch the dialer. Please try manually.'),
+            behavior: SnackBarBehavior.floating,
+          ));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE8F5EE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.headset_mic_outlined,
+                color: Color(0xFF1A6B3C),
+                size: 30,
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Call Help Desk',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF1A1A1A),
+                fontFamily: 'Manrope',
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Do you want to call the help desk?',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Color(0xFF596064),
+                height: 1.5,
+                fontFamily: 'Manrope',
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.phone, size: 18, color: Color(0xFF1A6B3C)),
+                  const SizedBox(width: 8),
+                  Text(
+                    phoneNumber,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1A1A),
+                      letterSpacing: 0.5,
+                      fontFamily: 'Manrope',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 28),
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _makeCall(context);
+                    },
+                    child: Container(
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A5C38),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Text(
+                        'Call Now',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          fontFamily: 'Manrope',
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: Container(
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: const Color(0xFFE0E0E0)),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Text(
+                        'Go Back',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1A6B3C),
+                          fontFamily: 'Manrope',
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

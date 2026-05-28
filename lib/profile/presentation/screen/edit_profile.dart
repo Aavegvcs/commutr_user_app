@@ -1,6 +1,18 @@
+import 'package:commutr_main/features/auth/presentation/screens/pin_map/location_data.dart';
+import 'package:commutr_main/features/auth/presentation/screens/pin_map/pin_map_screen.dart';
+import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
+import 'package:commutr_main/core/network/api_client.dart';
+import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/profile/bloc/profile_bloc.dart';
+import 'package:commutr_main/profile/bloc/profile_event.dart';
+import 'package:commutr_main/profile/bloc/profile_state.dart';
+import 'package:commutr_main/profile/data/repository/profile_repository.dart';
 import 'package:commutr_main/profile/presentation/profile_user_data.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class ProfileEditScreen extends StatefulWidget {
   const ProfileEditScreen({
@@ -29,6 +41,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   late String _selectedGender;
   final List<String> _genders = ['Male', 'Female', 'Other'];
 
+  LocationData? _pinnedLocation;
+  GoogleMapController? _mapPreviewController;
+  bool _isSavingProfile = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,14 +56,17 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       text: widget.initialData.formattedPhone,
     );
     _emailController = TextEditingController(text: widget.initialData.email);
-    _addressController = TextEditingController(text: widget.initialData.address);
+    _addressController =
+        TextEditingController(text: widget.initialData.address);
     _cityController = TextEditingController(text: widget.initialData.city);
     _stateController = TextEditingController(text: widget.initialData.state);
-    _pincodeController = TextEditingController(text: widget.initialData.pincode);
+    _pincodeController =
+        TextEditingController(text: widget.initialData.pincode);
   }
 
   void _applyFromData(ProfileUserData data) {
-    _selectedGender = _genders.contains(data.gender) ? data.gender : _genders.first;
+    _selectedGender =
+        _genders.contains(data.gender) ? data.gender : _genders.first;
   }
 
   void _resetFormToInitial() {
@@ -65,8 +84,16 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   }
 
   static const Color _primaryGreen = Color(0xFF1A6B4A);
-  static const Color _fieldBg = Color(0xFFECF5EE);
-  static const Color _bgColor = Color(0xFFF3F7F4);
+  static const Color _fieldBg = Color(0xFFF5F5F4);
+  static const Color _bgColor = Colors.white;
+
+  void _goToSignIn() {
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const MobileNoVerification()),
+      (route) => false,
+    );
+  }
 
   @override
   void dispose() {
@@ -170,9 +197,11 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                         controller: _firstNameController,
                         hintText: 'First Name',
                         validator: (val) {
-                          if (val == null || val.trim().isEmpty) return 'Required';
+                          if (val == null || val.trim().isEmpty)
+                            return 'Required';
                           if (val.trim().length < 2) return 'Min 2 chars';
-                          if (!RegExp(r'^[a-zA-Z\s]+$').hasMatch(val)) return 'Letters only';
+                          if (!RegExp(r'^[a-zA-Z\s]+$').hasMatch(val))
+                            return 'Letters only';
                           return null;
                         },
                       ),
@@ -186,9 +215,11 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                         controller: _lastNameController,
                         hintText: 'Last Name',
                         validator: (val) {
-                          if (val == null || val.trim().isEmpty) return 'Required';
+                          if (val == null || val.trim().isEmpty)
+                            return 'Required';
                           if (val.trim().length < 2) return 'Min 2 chars';
-                          if (!RegExp(r'^[a-zA-Z\s]+$').hasMatch(val)) return 'Letters only';
+                          if (!RegExp(r'^[a-zA-Z\s]+$').hasMatch(val))
+                            return 'Letters only';
                           return null;
                         },
                       ),
@@ -229,7 +260,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                               color: isSelected ? _primaryGreen : Colors.white,
                               borderRadius: BorderRadius.circular(30),
                               border: Border.all(
-                                color: isSelected ? _primaryGreen : Colors.grey.shade300,
+                                color: isSelected
+                                    ? _primaryGreen
+                                    : Colors.grey.shade300,
                               ),
                             ),
                             child: Row(
@@ -238,13 +271,15 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                                 Icon(
                                   icon,
                                   size: 16,
-                                  color: isSelected ? Colors.white : Colors.grey,
+                                  color:
+                                      isSelected ? Colors.white : Colors.grey,
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
                                   gender,
                                   style: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.grey,
+                                    color:
+                                        isSelected ? Colors.white : Colors.grey,
                                     fontWeight: FontWeight.w500,
                                     fontSize: 13,
                                   ),
@@ -270,10 +305,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                   controller: _mobileController,
                   hintText: '+91 XXXXXXXXXX',
                   keyboardType: TextInputType.phone,
-                  suffixIcon: const Icon(Icons.edit, size: 18, color: Colors.grey),
-                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+\- ]'))],
+                  suffixIcon:
+                      const Icon(Icons.edit, size: 18, color: Colors.grey),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9+\- ]'))
+                  ],
                   validator: (val) {
-                    if (val == null || val.trim().isEmpty) return 'Mobile number required';
+                    if (val == null || val.trim().isEmpty)
+                      return 'Mobile number required';
                     final digits = val.replaceAll(RegExp(r'\D'), '');
                     if (digits.length < 10) return 'Enter valid mobile number';
                     return null;
@@ -288,9 +327,11 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                   controller: _emailController,
                   hintText: 'email@example.com',
                   keyboardType: TextInputType.emailAddress,
-                  prefixIcon: const Icon(Icons.mail_outline, size: 18, color: Colors.grey),
+                  prefixIcon: const Icon(Icons.mail_outline,
+                      size: 18, color: Colors.grey),
                   validator: (val) {
-                    if (val == null || val.trim().isEmpty) return 'Email required';
+                    if (val == null || val.trim().isEmpty)
+                      return 'Email required';
                     if (!RegExp(r'^[\w.-]+@[\w.-]+\.\w{2,}$').hasMatch(val)) {
                       return 'Enter a valid email';
                     }
@@ -301,20 +342,128 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               const SizedBox(height: 28),
 
               // Location Section
-              _buildSectionHeader('Location'),
-              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on,
+                          color: _primaryGreen, size: 20),
+                      const SizedBox(width: 6),
+                      const Text(
+                        'Location Details',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _primaryGreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _openLocationDialog,
+                    icon: const Icon(Icons.edit_location_alt_outlined,
+                        size: 16, color: _primaryGreen),
+                    label: const Text(
+                      'EDIT LOCATION',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                        color: _primaryGreen,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: _primaryGreen),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
 
-              _buildLabeledField(
-                label: 'CURRENT ADDRESS',
-                child: _buildTextField(
-                  controller: _addressController,
-                  hintText: 'Enter your address',
-                  maxLines: 3,
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty) return 'Address required';
-                    if (val.trim().length < 5) return 'Enter a valid address';
-                    return null;
-                  },
+              // // Map preview (tappable to open dialog)
+              // GestureDetector(
+              //   onTap: _openLocationDialog,
+              //   child: ClipRRect(
+              //     borderRadius: BorderRadius.circular(16),
+              //     child: SizedBox(
+              //       height: 160,
+              //       child: _pinnedLocation != null
+              //           ? Stack(
+              //               children: [
+              //                 GoogleMap(
+              //                   initialCameraPosition: CameraPosition(
+              //                     target: LatLng(
+              //                       _pinnedLocation!.latitude,
+              //                       _pinnedLocation!.longitude,
+              //                     ),
+              //                     zoom: 15,
+              //                   ),
+              //                   zoomControlsEnabled: false,
+              //                   myLocationButtonEnabled: false,
+              //                   scrollGesturesEnabled: false,
+              //                   zoomGesturesEnabled: false,
+              //                   tiltGesturesEnabled: false,
+              //                   rotateGesturesEnabled: false,
+              //                   markers: {
+              //                     Marker(
+              //                       markerId: const MarkerId('pinned'),
+              //                       position: LatLng(
+              //                         _pinnedLocation!.latitude,
+              //                         _pinnedLocation!.longitude,
+              //                       ),
+              //                     ),
+              //                   },
+              //                   onMapCreated: (c) => _mapPreviewController = c,
+              //                 ),
+              //                 // Transparent overlay to capture taps
+              //                 Positioned.fill(
+              //                   child: Container(color: Colors.transparent),
+              //                 ),
+              //               ],
+              //             )
+              //           : Container(
+              //               color: const Color(0xFFE8F0EE),
+              //               child: Center(
+              //                 child: Column(
+              //                   mainAxisSize: MainAxisSize.min,
+              //                   children: [
+              //                     Icon(Icons.map_outlined,
+              //                         size: 40, color: _primaryGreen.withValues(alpha: 0.5)),
+              //                     const SizedBox(height: 8),
+              //                     Text(
+              //                       'Tap to set location',
+              //                       style: TextStyle(
+              //                         fontSize: 13,
+              //                         color: Colors.grey.shade500,
+              //                       ),
+              //                     ),
+              //                   ],
+              //                 ),
+              //               ),
+              //             ),
+              //     ),
+              //   ),
+              // ),
+              // const SizedBox(height: 16),
+
+              // Address summary (read-only, tap to edit via dialog)
+              GestureDetector(
+                onTap: _openLocationDialog,
+                child: _buildLabeledField(
+                  label: 'CURRENT ADDRESS',
+                  child: AbsorbPointer(
+                    child: _buildTextField(
+                      controller: _addressController,
+                      hintText: 'Tap to set address',
+                      maxLines: 3,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -322,49 +471,46 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: _buildLabeledField(
-                      label: 'CITY',
-                      child: _buildTextField(
-                        controller: _cityController,
-                        hintText: 'City',
-                        validator: (val) {
-                          if (val == null || val.trim().isEmpty) return 'Required';
-                          return null;
-                        },
+                    child: GestureDetector(
+                      onTap: _openLocationDialog,
+                      child: _buildLabeledField(
+                        label: 'CITY',
+                        child: AbsorbPointer(
+                          child: _buildTextField(
+                            controller: _cityController,
+                            hintText: 'City',
+                          ),
+                        ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: _buildLabeledField(
-                      label: 'STATE',
-                      child: _buildTextField(
-                        controller: _stateController,
-                        hintText: 'State',
-                        validator: (val) {
-                          if (val == null || val.trim().isEmpty) return 'Required';
-                          return null;
-                        },
+                    child: GestureDetector(
+                      onTap: _openLocationDialog,
+                      child: _buildLabeledField(
+                        label: 'STATE',
+                        child: AbsorbPointer(
+                          child: _buildTextField(
+                            controller: _stateController,
+                            hintText: 'State',
+                          ),
+                        ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: _buildLabeledField(
-                      label: 'PINCODE',
-                      child: _buildTextField(
-                        controller: _pincodeController,
-                        hintText: 'Pincode',
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(6),
-                        ],
-                        validator: (val) {
-                          if (val == null || val.trim().isEmpty) return 'Required';
-                          if (val.length != 6) return '6 digits';
-                          return null;
-                        },
+                    child: GestureDetector(
+                      onTap: _openLocationDialog,
+                      child: _buildLabeledField(
+                        label: 'PINCODE',
+                        child: AbsorbPointer(
+                          child: _buildTextField(
+                            controller: _pincodeController,
+                            hintText: 'Pincode',
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -377,7 +523,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: _handleSave,
+                  onPressed: _isSavingProfile ? null : _handleSave,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _primaryGreen,
                     foregroundColor: Colors.white,
@@ -386,10 +532,20 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                     ),
                     elevation: 0,
                   ),
-                  child: const Text(
-                    'Save Changes',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
+                  child: _isSavingProfile
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Save Changes',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -505,8 +661,612 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     );
   }
 
-  void _handleSave() {
-    if (_formKey.currentState!.validate()) {
+  void _openLocationDialog() {
+    // Local controllers seeded from the current state so the dialog is
+    // independently editable and only commits on "Save".
+    final addrCtrl = TextEditingController(text: _addressController.text);
+    final cityCtrl = TextEditingController(text: _cityController.text);
+    final stateCtrl = TextEditingController(text: _stateController.text);
+    final pinCtrl = TextEditingController(text: _pincodeController.text);
+
+    // Start with already-pinned location (from a previous map pick).
+    // If none exists, we'll geocode the address text to get a fallback location.
+    LocationData? dialogPinnedLocation = _pinnedLocation;
+    bool isGeocoding = false;
+    bool isSaving = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            // ── Geocode address on first open when no pin exists ─────
+            if (dialogPinnedLocation == null && !isGeocoding) {
+              final query = [
+                addrCtrl.text.trim(),
+                cityCtrl.text.trim(),
+                stateCtrl.text.trim(),
+                pinCtrl.text.trim(),
+              ].where((s) => s.isNotEmpty).join(', ');
+
+              if (query.isNotEmpty) {
+                isGeocoding = true;
+                locationFromAddress(query).then((locations) {
+                  if (!ctx.mounted) return;
+                  if (locations.isEmpty) {
+                    setDialogState(() => isGeocoding = false);
+                    return;
+                  }
+                  final loc = locations.first;
+                  setDialogState(() {
+                    isGeocoding = false;
+                    dialogPinnedLocation = LocationData(
+                      latitude: loc.latitude,
+                      longitude: loc.longitude,
+                      city: cityCtrl.text.trim(),
+                      state: stateCtrl.text.trim(),
+                      pincode: pinCtrl.text.trim(),
+                      fullAddress: addrCtrl.text.trim(),
+                    );
+                  });
+                }).catchError((_) {
+                  if (!ctx.mounted) return;
+                  setDialogState(() => isGeocoding = false);
+                });
+              }
+            }
+
+            return Dialog(
+              backgroundColor: _bgColor,
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 32),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Header ──────────────────────────────────────
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.location_on,
+                                color: _primaryGreen, size: 20),
+                            const SizedBox(width: 6),
+                            const Text(
+                              'Location Details',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: _primaryGreen,
+                              ),
+                            ),
+                          ],
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            // Push PinMapScreen ON TOP of the dialog so we
+                            // return here when the user confirms a location.
+                            final result =
+                                await Navigator.of(ctx).push<LocationData>(
+                              MaterialPageRoute(
+                                  builder: (_) => const PinMapScreen()),
+                            );
+                            if (result == null) return;
+                            // Update dialog map + fields
+                            setDialogState(() {
+                              dialogPinnedLocation = result;
+                              addrCtrl.text = result.fullAddress;
+                              cityCtrl.text = result.city;
+                              stateCtrl.text = result.state;
+                              pinCtrl.text =
+                                  result.pincode == 'N/A' ? '' : result.pincode;
+                            });
+                          },
+                          icon: const Icon(Icons.location_searching,
+                              size: 16, color: _primaryGreen),
+                          label: const Text(
+                            'PIN ON MAP',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.8,
+                              color: _primaryGreen,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: _primaryGreen),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // ── Map preview ─────────────────────────────────
+                    InkWell(
+                      splashColor: Colors.transparent,
+                      onTap: () async{
+                        // return here when the user confirms a location.
+                        final result =
+                            await Navigator.of(ctx).push<LocationData>(
+                          MaterialPageRoute(
+                              builder: (_) => const PinMapScreen()),
+                        );
+                        if (result == null) return;
+                        // Update dialog map + fields
+                        setDialogState(() {
+                          dialogPinnedLocation = result;
+                          addrCtrl.text = result.fullAddress;
+                          cityCtrl.text = result.city;
+                          stateCtrl.text = result.state;
+                          pinCtrl.text =
+                          result.pincode == 'N/A' ? '' : result.pincode;
+                        });
+                      },
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: SizedBox(
+                          height: 160,
+                          child: isGeocoding
+                              // Loading state while geocoding the address
+                              ? Container(
+                                  color: const Color(0xFFE8F0EE),
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        CircularProgressIndicator(
+                                          color: _primaryGreen,
+                                          strokeWidth: 2.5,
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Text(
+                                          'Locating address…',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.grey.shade500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              : dialogPinnedLocation != null
+                                  ? IgnorePointer(
+                                      child: GoogleMap(
+                                        initialCameraPosition: CameraPosition(
+                                          target: LatLng(
+                                            dialogPinnedLocation!.latitude,
+                                            dialogPinnedLocation!.longitude,
+                                          ),
+                                          zoom: 15,
+                                        ),
+                                        zoomControlsEnabled: false,
+                                        myLocationButtonEnabled: false,
+                                        scrollGesturesEnabled: false,
+                                        zoomGesturesEnabled: false,
+                                        tiltGesturesEnabled: false,
+                                        rotateGesturesEnabled: false,
+                                        markers: {
+                                          Marker(
+                                            markerId: const MarkerId(
+                                                'dialog_pinned'),
+                                            position: LatLng(
+                                              dialogPinnedLocation!.latitude,
+                                              dialogPinnedLocation!.longitude,
+                                            ),
+                                          ),
+                                        },
+                                        onMapCreated: (_) {},
+                                      ),
+                                    )
+                                  // No address to geocode — prompt user
+                                  : Container(
+                                      color: const Color(0xFFE8F0EE),
+                                      child: Center(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.map_outlined,
+                                                size: 40,
+                                                color: _primaryGreen.withValues(
+                                                    alpha: 0.5)),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Tap "PIN ON MAP" to set location',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: Colors.grey.shade500,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ── Address ─────────────────────────────────────
+                    _buildLabeledField(
+                      label: 'CURRENT ADDRESS',
+                      child: AbsorbPointer(
+                        child: _buildTextField(
+                          controller: addrCtrl,
+                          hintText: 'Pin on map to set address',
+                          maxLines: 3,
+                          validator: (val) {
+                            if (val == null || val.trim().isEmpty)
+                              return 'Address required';
+                            if (val.trim().length < 5)
+                              return 'Enter a valid address';
+                            return null;
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ── City / State / Pincode ───────────────────────
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildLabeledField(
+                            label: 'CITY',
+                            child: AbsorbPointer(
+                              child: _buildTextField(
+                                controller: cityCtrl,
+                                hintText: 'City',
+                                validator: (val) {
+                                  if (val == null || val.trim().isEmpty)
+                                    return 'Required';
+                                  return null;
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildLabeledField(
+                            label: 'STATE',
+                            child: AbsorbPointer(
+                              child: _buildTextField(
+                                controller: stateCtrl,
+                                hintText: 'State',
+                                validator: (val) {
+                                  if (val == null || val.trim().isEmpty)
+                                    return 'Required';
+                                  return null;
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildLabeledField(
+                            label: 'PINCODE',
+                            child: AbsorbPointer(
+                              child: _buildTextField(
+                                controller: pinCtrl,
+                                hintText: 'Pincode',
+                                keyboardType: TextInputType.number,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                  LengthLimitingTextInputFormatter(6),
+                                ],
+                                validator: (val) {
+                                  if (val == null || val.trim().isEmpty)
+                                    return 'Required';
+                                  if (val.length != 6) return '6 digits';
+                                  return null;
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    // ── Action buttons ───────────────────────────────
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: _primaryGreen),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                color: _primaryGreen,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: isSaving
+                                ? null
+                                : () => _saveLocationDialog(
+                                      dialogContext: ctx,
+                                      setDialogState: setDialogState,
+                                      onSavingChanged: (saving) {
+                                        setDialogState(() => isSaving = saving);
+                                      },
+                                      addrCtrl: addrCtrl,
+                                      cityCtrl: cityCtrl,
+                                      stateCtrl: stateCtrl,
+                                      pinCtrl: pinCtrl,
+                                      dialogPinnedLocation: dialogPinnedLocation,
+                                    ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _primaryGreen,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                            child: isSaving
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Save',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w600),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _saveLocationDialog({
+    required BuildContext dialogContext,
+    required void Function(void Function()) setDialogState,
+    required void Function(bool saving) onSavingChanged,
+    required TextEditingController addrCtrl,
+    required TextEditingController cityCtrl,
+    required TextEditingController stateCtrl,
+    required TextEditingController pinCtrl,
+    required LocationData? dialogPinnedLocation,
+  }) async {
+    final address = addrCtrl.text.trim();
+    final city = cityCtrl.text.trim();
+    final state = stateCtrl.text.trim();
+    final pin = pinCtrl.text.trim();
+
+    if (address.isEmpty ||
+        city.isEmpty ||
+        state.isEmpty ||
+        pin.length != 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Please complete address, city, state and pincode.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    if (dialogPinnedLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Pin your location on the map before saving.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    ProfileBloc bloc;
+    try {
+      bloc = context.read<ProfileBloc>();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Profile data is not available. Open from Profile.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    final blocState = bloc.state;
+    if (blocState is! ProfileLoaded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Profile is still loading. Please wait.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    onSavingChanged(true);
+
+    bloc.add(
+      SubmitAddressChange(
+        address: address,
+        city: city,
+        state: state,
+        pin: pin,
+        empLat: dialogPinnedLocation.latitude,
+        empLng: dialogPinnedLocation.longitude,
+      ),
+    );
+
+    try {
+      final result = await bloc.stream.firstWhere(
+        (s) =>
+            s is ProfileAddressChangeSuccess ||
+            s is ProfileAddressChangeFailed ||
+            s is ProfileUnauthorized,
+      );
+
+      if (!mounted) return;
+
+      if (result is ProfileAddressChangeSuccess) {
+        setState(() {
+          _addressController.text = address;
+          _cityController.text = city;
+          _stateController.text = state;
+          _pincodeController.text = pin;
+          _pinnedLocation = dialogPinnedLocation;
+          _mapPreviewController?.animateCamera(
+            CameraUpdate.newLatLngZoom(
+              LatLng(
+                dialogPinnedLocation.latitude,
+                dialogPinnedLocation.longitude,
+              ),
+              15,
+            ),
+          );
+        });
+        if (dialogContext.mounted) {
+          Navigator.of(dialogContext).pop();
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result.message),
+            backgroundColor: _primaryGreen,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      } else if (result is ProfileUnauthorized) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result.message),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+        _goToSignIn();
+      } else if (result is ProfileAddressChangeFailed) {
+        await _showAddressChangeErrorDialog(
+          'Address change request already sent',
+        );
+      }
+    } finally {
+      if (mounted) {
+        onSavingChanged(false);
+      }
+    }
+  }
+
+  Future<void> _handleSave() async {
+    if (!_formKey.currentState!.validate()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Please fix the errors before saving.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    ProfileBloc bloc;
+    try {
+      bloc = context.read<ProfileBloc>();
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Profile data is not available.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    final current = bloc.state;
+    if (current is! ProfileLoaded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Profile is still loading. Please wait.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSavingProfile = true);
+    try {
+      await sl<ProfileRepository>().updateUserProfile(
+        profile: current.profile,
+        firstName: _firstNameController.text,
+        lastName: _lastNameController.text,
+        genderCode: _genderCode(_selectedGender),
+        address: _addressController.text,
+        city: _cityController.text,
+        pin: _pincodeController.text,
+        emailId: _emailController.text,
+        mobileNo: _mobileController.text.replaceFirst(
+          RegExp(r'^\s*\+?91'),
+          '',
+        ).trim(),
+        depCode: current.profile.depCode,
+        proCode: current.profile.proCode,
+        lobCode: current.profile.lobCode,
+        empLat: _pinnedLocation?.latitude,
+        empLng: _pinnedLocation?.longitude,
+      );
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text('Profile saved successfully!'),
@@ -515,15 +1275,43 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
-    } else {
+    } catch (e) {
+      if (!mounted) return;
+      if (ApiClient.refreshFailedFor(e)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Session expired. Please sign in again.'),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+        _goToSignIn();
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Please fix the errors before saving.'),
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
           backgroundColor: Colors.redAccent,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingProfile = false);
+      }
+    }
+  }
+
+  String _genderCode(String value) {
+    switch (value) {
+      case 'Male':
+        return 'M';
+      case 'Female':
+        return 'F';
+      default:
+        return 'O';
     }
   }
 
@@ -549,6 +1337,75 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _showAddressChangeErrorDialog(String message) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F4),
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFB71C1C),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white, size: 48),
+                ),
+                const SizedBox(height: 26),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    height: 1.2,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1B1F22),
+                  ),
+                ),
+                const SizedBox(height: 30),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB71C1C),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      minimumSize: const Size.fromHeight(44),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(26),
+                      ),
+                    ),
+                    child: const Text(
+                      'Go Back',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

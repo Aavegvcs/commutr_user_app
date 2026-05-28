@@ -1,5 +1,7 @@
 import 'package:commutr_main/features/adhoc/bloc/adhoc_bloc.dart';
 import 'package:commutr_main/features/adhoc/data/repository/adhoc_repo.dart';
+import 'package:commutr_main/profile/bloc/profile_bloc.dart';
+import 'package:commutr_main/profile/data/repository/profile_repository.dart';
 import 'package:commutr_main/features/sos/bloc/sos_bloc.dart';
 import 'package:commutr_main/features/sos/data/repository/sos_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/user_feedback_repo.dart';
@@ -166,6 +168,17 @@ void setupDependencies() {
 
   sl.registerLazySingleton<UserFeedbackRepo>(
     () => UserFeedbackRepo(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerLazySingleton<ProfileRepository>(
+    () => ProfileRepository(
+      apiClient: sl(instanceName: appApiClientKey),
+      authStorage: sl(),
+    ),
+  );
+
+  sl.registerFactory<ProfileBloc>(
+    () => ProfileBloc(sl()),
   );
 
   syncBearerTokenToApiClients();
