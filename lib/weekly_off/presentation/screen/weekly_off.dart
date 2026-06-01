@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import '../../bloc/weekly_off_bloc.dart';
 import '../../bloc/weekly_off_event.dart';
 import '../../bloc/weekly_off_state.dart';
@@ -30,6 +31,7 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
   static const int maxSelection = 6;
 
   final List<String> _days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
   /// Filled after [LoadWeeklyOffEvent]; until then UI shows loading.
   final Set<String> _selectedDays = {};
 
@@ -91,10 +93,84 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
     );
   }
 
+  void _showResultDialog({required bool success, required String message}) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: (success ? primaryGreen : Colors.red)
+                    .withValues(alpha: 0.1),
+              ),
+              child: Icon(
+                success ? Icons.check_circle_outline : Icons.error_outline,
+                color: success ? primaryGreen : Colors.red,
+                size: 36,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              success ? 'Success' : 'Error',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: success ? primaryGreen : Colors.red,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF616161)),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  if (success) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const Welcome()),
+                      (route) => false,
+                    );
+                  } else {
+                    Navigator.of(context).pop();
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: success ? primaryGreen : Colors.red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  elevation: 0,
+                ),
+                child: const Text(
+                  'Go Back',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _savePreferences() {
     context.read<WeeklyOffBloc>().add(
-      UpdateWeeklyOffEvent(weekOff: _selectedDays.join(',')),
-    );
+          UpdateWeeklyOffEvent(weekOff: _selectedDays.join(',')),
+        );
   }
 
   @override
@@ -112,7 +188,10 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
               ..addAll(_selectionFromWeekOff(row?.weekOff));
           });
         } else if (state is WeeklyOffSaved) {
-          _showSnackBar(state.response.message ?? 'Preferences saved!');
+          _showResultDialog(
+            success: true,
+            message: state.response.message ?? 'Preferences saved!',
+          );
         } else if (state is WeeklyOffFailure) {
           if (_selectedDays.isEmpty) {
             if (!mounted) return;
@@ -120,7 +199,7 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
               _selectedDays.addAll({''});
             });
           }
-          _showSnackBar(state.message, color: Colors.red);
+          _showResultDialog(success: false, message: state.message);
         }
       },
       child: BlocBuilder<WeeklyOffBloc, WeeklyOffState>(
@@ -148,7 +227,8 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
               children: [
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 28),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -266,18 +346,20 @@ class _DayCard extends StatelessWidget {
           ),
           boxShadow: isSelected
               ? [
-            BoxShadow(
-              color: primaryGreen.withOpacity(0.08),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ]
+                  BoxShadow(
+                    color: primaryGreen.withOpacity(0.08),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
               : [],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(height: 16,),
+            SizedBox(
+              height: 16,
+            ),
             Text(
               day,
               style: TextStyle(
@@ -302,14 +384,15 @@ class _DayCard extends StatelessWidget {
               ),
               child: isSelected
                   ? const Icon(
-                Icons.check,
-                color: Colors.white,
-                size: 18,
-              )
+                      Icons.check,
+                      color: Colors.white,
+                      size: 18,
+                    )
                   : const SizedBox.shrink(),
             ),
-            SizedBox(height: 16,),
-
+            SizedBox(
+              height: 16,
+            ),
           ],
         ),
       ),

@@ -76,10 +76,22 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   final Color borderGreen = const Color(0xFFB8DEC9);
 
   static const List<String> _dayLabels = [
-    'SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'
+    'SUN',
+    'MON',
+    'TUE',
+    'WED',
+    'THU',
+    'FRI',
+    'SAT'
   ];
   static const List<String> _dayFull = [
-    'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
+    'Sunday',
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday'
   ];
 
   // Flutter's date.weekday: Mon=1 ... Sat=6, Sun=7  →  map to 0=Sun..6=Sat
@@ -99,8 +111,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  bool _sameDay(DateTime a, DateTime b) =>
-      _dateOnly(a) == _dateOnly(b);
+  bool _sameDay(DateTime a, DateTime b) => _dateOnly(a) == _dateOnly(b);
 
   int _totalSelectedDayCount() {
     int n = 0;
@@ -119,8 +130,18 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   String _formatShortDate(DateTime? date) {
     if (date == null) return '—';
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final w = _dayLabels[date.weekday % 7];
     return '${date.day} ${months[date.month - 1]}, $w';
@@ -184,7 +205,9 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           padding: EdgeInsets.fromLTRB(
-            20, 12, 20,
+            20,
+            12,
+            20,
             20 + MediaQuery.of(ctx).viewInsets.bottom,
           ),
           child: Column(
@@ -194,7 +217,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
               // Drag handle
               Center(
                 child: Container(
-                  width: 40, height: 4,
+                  width: 40,
+                  height: 4,
                   decoration: BoxDecoration(
                     color: const Color(0xFFDDDDDD),
                     borderRadius: BorderRadius.circular(2),
@@ -207,7 +231,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
               Row(
                 children: [
                   Container(
-                    width: 36, height: 36,
+                    width: 36,
+                    height: 36,
                     decoration: BoxDecoration(
                       color: lightGreen,
                       borderRadius: BorderRadius.circular(10),
@@ -282,22 +307,22 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                 duration: const Duration(milliseconds: 200),
                 child: tempOffs.length == 1
                     ? Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline,
-                          size: 14, color: Colors.orange[700]),
-                      const SizedBox(width: 6),
-                      Text(
-                        'At least 1 weekly off must remain',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.orange[700],
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline,
+                                size: 14, color: Colors.orange[700]),
+                            const SizedBox(width: 6),
+                            Text(
+                              'At least 1 weekly off must remain',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.orange[700],
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
-                )
+                      )
                     : const SizedBox.shrink(),
               ),
 
@@ -306,8 +331,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
               // Summary chip
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: lightGreen,
                   borderRadius: BorderRadius.circular(10),
@@ -363,8 +388,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                         setState(() {
                           weeklyOffs = Set.from(tempOffs);
                           _selectedRanges = _selectedRanges
-                              .where((r) =>
-                                  !_rangeContainsWeekOff(r, tempOffs))
+                              .where((r) => !_rangeContainsWeekOff(r, tempOffs))
                               .toList();
                           if (_selectedSingleDate != null &&
                               _isWeekOffForSet(
@@ -468,36 +492,36 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
         }
       },
       child: Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildHeader(),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 16),
-                    _buildProgressBar(),
-                    const SizedBox(height: 20),
-                    _buildLoginToggle(),
-                    const SizedBox(height: 16),
-                    _buildWeeklyOffs(),
-                    const SizedBox(height: 24),
-                    _buildDateRangeSection(),
-                    const SizedBox(height: 16),
-                    _buildStatus(),
-                    const SizedBox(height: 16),
-                  ],
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 16),
+                      _buildProgressBar(),
+                      const SizedBox(height: 20),
+                      _buildLoginToggle(),
+                      const SizedBox(height: 16),
+                      _buildWeeklyOffs(),
+                      const SizedBox(height: 16),
+                      _buildDateRangeSection(),
+                      const SizedBox(height: 16),
+                      _buildStatus(),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            _buildNextButton(),
-          ],
+              _buildNextButton(),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -509,7 +533,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
         children: [
           InkWell(
               splashColor: Colors.transparent,
-              onTap: (){
+              onTap: () {
                 Navigator.of(context).pop();
               },
               child: Icon(Icons.arrow_back, color: primaryGreen, size: 22)),
@@ -564,9 +588,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   Widget _buildToggleBtn(String label, bool isActive, {bool enabled = true}) {
     return Expanded(
       child: GestureDetector(
-        onTap: enabled
-            ? () => setState(() => isLogIn = label == 'Log In')
-            : null,
+        onTap:
+            enabled ? () => setState(() => isLogIn = label == 'Log In') : null,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           margin: const EdgeInsets.all(3),
@@ -575,12 +598,12 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
             borderRadius: BorderRadius.circular(26),
             boxShadow: isActive
                 ? [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 4,
-                offset: const Offset(0, 1),
-              )
-            ]
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    )
+                  ]
                 : [],
           ),
           alignment: Alignment.center,
@@ -601,11 +624,12 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
     final sortedOffs = weeklyOffs.toList()..sort();
     return BlocBuilder<WeeklyOffBloc, WeeklyOffState>(
       builder: (context, state) {
-        final isLoading = state is WeeklyOffLoading || state is WeeklyOffInitial;
+        final isLoading =
+            state is WeeklyOffLoading || state is WeeklyOffInitial;
         return GestureDetector(
           onTap: isLoading ? null : _showEditWeeklyOffsSheet,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
@@ -677,8 +701,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   }
 
   Widget _buildDateRangeSection() {
-    final hasSelection =
-        _rangeStartDisplay != null || _rangeEndDisplay != null;
+    final hasSelection = _rangeStartDisplay != null || _rangeEndDisplay != null;
     final today = _dateOnly(DateTime.now());
     final lastDate = DateTime(today.year + 1, 12, 31);
 
@@ -724,15 +747,15 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                 child: Text(
                   'Select travel dates',
                   style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
                     color: primaryGreen.withValues(alpha: 0.85),
                   ),
                 ),
               ),
               const SizedBox(height: 4),
               SizedBox(
-                height: 268,
+                height: 340,
                 child: _HorizontalDateRangePicker(
                   key: ValueKey(_initialPickerRange),
                   initialRange: _initialPickerRange,
@@ -759,7 +782,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
     required bool isActive,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
         color: isActive ? lightGreen : Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -784,7 +807,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
           Text(
             isPlaceholder ? 'Tap to select' : value,
             style: TextStyle(
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
               color: isPlaceholder
                   ? const Color(0xFFAAAAAA)
@@ -958,10 +981,21 @@ class _HorizontalDateRangePicker extends StatefulWidget {
       _HorizontalDateRangePickerState();
 }
 
-class _HorizontalDateRangePickerState extends State<_HorizontalDateRangePicker> {
+class _HorizontalDateRangePickerState
+    extends State<_HorizontalDateRangePicker> {
   static const _monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
   static const _dayLetters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -1169,11 +1203,9 @@ class _HorizontalDateRangePickerState extends State<_HorizontalDateRangePicker> 
     BorderRadius? stripRadius;
     switch (role) {
       case _PickerDayRole.start:
-        stripRadius =
-            const BorderRadius.horizontal(left: Radius.circular(18));
+        stripRadius = const BorderRadius.horizontal(left: Radius.circular(18));
       case _PickerDayRole.end:
-        stripRadius =
-            const BorderRadius.horizontal(right: Radius.circular(18));
+        stripRadius = const BorderRadius.horizontal(right: Radius.circular(18));
       case _PickerDayRole.middle:
         stripRadius = BorderRadius.zero;
       default:
@@ -1211,7 +1243,7 @@ class _HorizontalDateRangePickerState extends State<_HorizontalDateRangePicker> 
                   child: Text(
                     '$day',
                     style: const TextStyle(
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
                     ),
@@ -1221,7 +1253,7 @@ class _HorizontalDateRangePickerState extends State<_HorizontalDateRangePicker> 
                 Text(
                   '$day',
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: inRange ? FontWeight.w600 : FontWeight.w400,
                     color: isDisabled
                         ? const Color(0xFFCCCCCC)

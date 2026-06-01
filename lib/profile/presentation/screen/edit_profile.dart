@@ -1844,3 +1844,634 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     );
   }
 }
+
+/// Opens the address-change dialog standalone (no full edit-profile screen).
+/// Reads initial field values from the [ProfileBloc] in scope and submits via
+/// [SubmitAddressChange] / waits for [ProfileAddressChangeSuccess] or
+/// [ProfileAddressChangeFailed].
+void showAddressChangeDialog(BuildContext context) {
+  ProfileBloc? bloc;
+  try {
+    bloc = context.read<ProfileBloc>();
+  } catch (_) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Profile not available. Please try again.'),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+    return;
+  }
+
+  final state = bloc.state;
+  String initAddr = '';
+  String initCity = '';
+  String initState = '';
+  String initPin = '';
+  if (state is ProfileLoaded) {
+    final d = ProfileUserData.fromApiResponse(state.profile);
+    initAddr = d.address;
+    initCity = d.city;
+    initState = d.state;
+    initPin = d.pincode;
+  }
+
+  final addrCtrl = TextEditingController(text: initAddr);
+  final cityCtrl = TextEditingController(text: initCity);
+  final stateCtrl = TextEditingController(text: initState);
+  final pinCtrl = TextEditingController(text: initPin);
+
+  LocationData? dialogPinnedLocation;
+  bool isGeocoding = false;
+  bool isSaving = false;
+
+  const Color primaryGreen = Color(0xFF1A6B4A);
+  const Color bgColor = Colors.white;
+
+  Widget buildTextField({
+    required TextEditingController controller,
+    required String hintText,
+    TextInputType keyboardType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
+    int maxLines = 1,
+    bool readOnly = false,
+    String? Function(String?)? validator,
+  }) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      maxLines: maxLines,
+      inputFormatters: inputFormatters,
+      validator: validator,
+      readOnly: readOnly,
+      style: TextStyle(
+          fontSize: 14, color: readOnly ? Colors.black45 : Colors.black87),
+      decoration: InputDecoration(
+        hintText: hintText,
+        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+        filled: true,
+        fillColor:
+            readOnly ? const Color(0xFFEAEAE9) : const Color(0xFFF5F5F5),
+        contentPadding:
+            EdgeInsets.symmetric(horizontal: 14, vertical: maxLines > 1 ? 14 : 0),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF2E7D32), width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 1),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 1.5),
+        ),
+        errorStyle: const TextStyle(fontSize: 11),
+      ),
+    );
+  }
+
+  Widget buildLabeledField({required String label, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+            color: Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 6),
+        child,
+      ],
+    );
+  }
+
+  Future<void> saveLocation({
+    required BuildContext dialogContext,
+    required void Function(void Function()) setDialogState,
+    required void Function(bool) onSavingChanged,
+    required LocationData? pinnedLocation,
+  }) async {
+    final address = addrCtrl.text.trim();
+    final city = cityCtrl.text.trim();
+    final state2 = stateCtrl.text.trim();
+    final pin = pinCtrl.text.trim();
+
+    if (address.isEmpty || city.isEmpty || state2.isEmpty || pin.length != 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content:
+              const Text('Please complete address, city, state and pincode.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+    if (pinnedLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Pin your location on the map before saving.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    final currentBloc = bloc;
+    if (currentBloc == null) return;
+    final blocState = currentBloc.state;
+    if (blocState is! ProfileLoaded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Profile is still loading. Please wait.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
+
+    onSavingChanged(true);
+    currentBloc.add(
+      SubmitAddressChange(
+        address: address,
+        city: city,
+        state: state2,
+        pin: pin,
+        empLat: pinnedLocation.latitude,
+        empLng: pinnedLocation.longitude,
+      ),
+    );
+
+    try {
+      final result = await currentBloc.stream.firstWhere(
+        (s) =>
+            s is ProfileAddressChangeSuccess ||
+            s is ProfileAddressChangeFailed ||
+            s is ProfileUnauthorized,
+      );
+
+      if (result is ProfileAddressChangeSuccess) {
+        if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result.message),
+              backgroundColor: primaryGreen,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+      } else if (result is ProfileUnauthorized) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result.message),
+              backgroundColor: Colors.redAccent,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+      } else if (result is ProfileAddressChangeFailed) {
+        if (dialogContext.mounted) {
+          showDialog<void>(
+            context: dialogContext,
+            barrierDismissible: true,
+            builder: (ctx) => Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F4),
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFB71C1C),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close_rounded,
+                          color: Colors.white, size: 48),
+                    ),
+                    const SizedBox(height: 26),
+                    const Text(
+                      'Address change request already sent',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1B1F22),
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFB71C1C),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          minimumSize: const Size.fromHeight(44),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(26),
+                          ),
+                        ),
+                        child: const Text(
+                          'Go Back',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+      }
+    } finally {
+      onSavingChanged(false);
+    }
+  }
+
+  showDialog<void>(
+    context: context,
+    builder: (dialogCtx) {
+      return StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          // Geocode address on first open when no pin exists
+          if (dialogPinnedLocation == null && !isGeocoding) {
+            final query = [
+              addrCtrl.text.trim(),
+              cityCtrl.text.trim(),
+              stateCtrl.text.trim(),
+              pinCtrl.text.trim(),
+            ].where((s) => s.isNotEmpty).join(', ');
+
+            if (query.isNotEmpty) {
+              isGeocoding = true;
+              locationFromAddress(query).then((locations) {
+                if (!ctx.mounted) return;
+                if (locations.isEmpty) {
+                  setDialogState(() => isGeocoding = false);
+                  return;
+                }
+                final loc = locations.first;
+                setDialogState(() {
+                  isGeocoding = false;
+                  dialogPinnedLocation = LocationData(
+                    latitude: loc.latitude,
+                    longitude: loc.longitude,
+                    city: cityCtrl.text.trim(),
+                    state: stateCtrl.text.trim(),
+                    pincode: pinCtrl.text.trim(),
+                    fullAddress: addrCtrl.text.trim(),
+                  );
+                });
+              }).catchError((_) {
+                if (!ctx.mounted) return;
+                setDialogState(() => isGeocoding = false);
+              });
+            }
+          }
+
+          return Dialog(
+            backgroundColor: bgColor,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 32),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.location_on,
+                              color: primaryGreen, size: 20),
+                          SizedBox(width: 6),
+                          Text(
+                            'Location Details',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: primaryGreen,
+                            ),
+                          ),
+                        ],
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final result =
+                              await Navigator.of(ctx).push<LocationData>(
+                            MaterialPageRoute(
+                                builder: (_) => const PinMapScreen()),
+                          );
+                          if (result == null) return;
+                          setDialogState(() {
+                            dialogPinnedLocation = result;
+                            addrCtrl.text = result.fullAddress;
+                            cityCtrl.text = result.city;
+                            stateCtrl.text = result.state;
+                            pinCtrl.text =
+                                result.pincode == 'N/A' ? '' : result.pincode;
+                          });
+                        },
+                        icon: const Icon(Icons.location_searching,
+                            size: 16, color: primaryGreen),
+                        label: const Text(
+                          'PIN ON MAP',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: primaryGreen,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: primaryGreen),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Map preview
+                  InkWell(
+                    splashColor: Colors.transparent,
+                    onTap: () async {
+                      final result =
+                          await Navigator.of(ctx).push<LocationData>(
+                        MaterialPageRoute(
+                            builder: (_) => const PinMapScreen()),
+                      );
+                      if (result == null) return;
+                      setDialogState(() {
+                        dialogPinnedLocation = result;
+                        addrCtrl.text = result.fullAddress;
+                        cityCtrl.text = result.city;
+                        stateCtrl.text = result.state;
+                        pinCtrl.text =
+                            result.pincode == 'N/A' ? '' : result.pincode;
+                      });
+                    },
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: SizedBox(
+                        height: 160,
+                        child: isGeocoding
+                            ? Container(
+                                color: const Color(0xFFE8F0EE),
+                                child: Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const CircularProgressIndicator(
+                                        color: primaryGreen,
+                                        strokeWidth: 2.5,
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        'Locating address…',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : dialogPinnedLocation != null
+                                ? IgnorePointer(
+                                    child: GoogleMap(
+                                      initialCameraPosition: CameraPosition(
+                                        target: LatLng(
+                                          dialogPinnedLocation!.latitude,
+                                          dialogPinnedLocation!.longitude,
+                                        ),
+                                        zoom: 15,
+                                      ),
+                                      zoomControlsEnabled: false,
+                                      myLocationButtonEnabled: false,
+                                      scrollGesturesEnabled: false,
+                                      zoomGesturesEnabled: false,
+                                      tiltGesturesEnabled: false,
+                                      rotateGesturesEnabled: false,
+                                      markers: {
+                                        Marker(
+                                          markerId:
+                                              const MarkerId('dialog_pinned'),
+                                          position: LatLng(
+                                            dialogPinnedLocation!.latitude,
+                                            dialogPinnedLocation!.longitude,
+                                          ),
+                                        ),
+                                      },
+                                      onMapCreated: (_) {},
+                                    ),
+                                  )
+                                : Container(
+                                    color: const Color(0xFFE8F0EE),
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.map_outlined,
+                                              size: 40,
+                                              color: primaryGreen.withValues(
+                                                  alpha: 0.5)),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Tap "PIN ON MAP" to set location',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.grey.shade500,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Address
+                  buildLabeledField(
+                    label: 'CURRENT ADDRESS',
+                    child: AbsorbPointer(
+                      child: buildTextField(
+                        controller: addrCtrl,
+                        hintText: 'Pin on map to set address',
+                        maxLines: 3,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // City / State / Pincode
+                  Row(
+                    children: [
+                      Expanded(
+                        child: buildLabeledField(
+                          label: 'CITY',
+                          child: AbsorbPointer(
+                            child: buildTextField(
+                              controller: cityCtrl,
+                              hintText: 'City',
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: buildLabeledField(
+                          label: 'STATE',
+                          child: AbsorbPointer(
+                            child: buildTextField(
+                              controller: stateCtrl,
+                              hintText: 'State',
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: buildLabeledField(
+                          label: 'PINCODE',
+                          child: AbsorbPointer(
+                            child: buildTextField(
+                              controller: pinCtrl,
+                              hintText: 'Pincode',
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(6),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Action buttons
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: primaryGreen),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: primaryGreen,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: isSaving
+                              ? null
+                              : () => saveLocation(
+                                    dialogContext: ctx,
+                                    setDialogState: setDialogState,
+                                    onSavingChanged: (saving) {
+                                      setDialogState(() => isSaving = saving);
+                                    },
+                                    pinnedLocation: dialogPinnedLocation,
+                                  ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryGreen,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: isSaving
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text(
+                                  'Save',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}

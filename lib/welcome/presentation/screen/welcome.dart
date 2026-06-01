@@ -63,6 +63,7 @@ import '../../../weekly_off/presentation/screen/weekly_off.dart';
 import '../../../features/trip_detail/data/repository/user_feedback_repo.dart';
 import '../../../features/share_cab/data/repository/share_cab_repo.dart';
 import '../../../features/share_cab/data/repository/call_driver_ivr_repo.dart';
+import '../../../profile/presentation/screen/edit_profile.dart';
 
 enum _TripHistoryStatus {
   completed,
@@ -2043,6 +2044,8 @@ class _WelcomeState extends State<_WelcomeView> {
         children: [
           Image.asset(
             'assets/images/welcome_header.png',
+            width: double.infinity,
+            height: double.infinity,
             fit: BoxFit.cover,
           ),
           SafeArea(
@@ -5412,7 +5415,10 @@ class AppDrawer extends StatelessWidget {
               _DrawerItem(
                 icon: Icons.home_outlined,
                 label: 'Request Address Change',
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  Navigator.pop(context);
+                  showAddressChangeDialog(context);
+                },
               ),
 
               const SizedBox(height: 4),
