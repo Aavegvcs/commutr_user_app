@@ -61,7 +61,7 @@ class ProfileUserData {
   String get formattedPhone {
     final digits = phone.replaceAll(RegExp(r'\D'), '');
     if (digits.length == 10) {
-      return '+91 ${digits.substring(0, 5)}-${digits.substring(5)}';
+      return '${digits.substring(0, 5)}${digits.substring(5)}';
     }
     return phone.startsWith('+') ? phone : '+91 $phone';
   }

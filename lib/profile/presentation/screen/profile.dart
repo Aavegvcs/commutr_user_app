@@ -250,7 +250,7 @@ class _ProfileViewState extends State<_ProfileView> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      'ID: ${userData.phone}',
+                                      'ID: ${userData.empId}',
                                       style: TextStyle(
                                         color: Colors.white.withValues(alpha: 0.8),
                                         fontSize: 11,

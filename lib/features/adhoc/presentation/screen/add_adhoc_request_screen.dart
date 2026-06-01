@@ -153,10 +153,9 @@ class _AddAdhocRequestViewState extends State<_AddAdhocRequestView> {
             if (state is AdhocUnauthorized) {
               _handleSessionExpired(state.message);
             } else if (state is AdhocSubmitSuccess) {
-              _showSnack(state.message);
-              Navigator.pop(context);
+              _showSuccessDialog(state.message);
             } else if (state is AdhocSubmitError) {
-              _showSnack(state.message);
+              _showErrorDialog(state.message);
             }
           },
         ),
@@ -241,7 +240,7 @@ class _AddAdhocRequestViewState extends State<_AddAdhocRequestView> {
               _buildRemarksField(),
               const SizedBox(height: 32),
 
-              _buildSubmitButton(),
+              _buildSubmitButton(enabled: _selectedMemberIndices.isNotEmpty),
             ],
           ),
         ),
@@ -681,7 +680,7 @@ class _AddAdhocRequestViewState extends State<_AddAdhocRequestView> {
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
-  Widget _buildSubmitButton() {
+  Widget _buildSubmitButton({required bool enabled}) {
     return BlocBuilder<AdhocBloc, AdhocState>(
       builder: (context, state) {
         final isLoading = state is AdhocSubmitting;
@@ -689,7 +688,7 @@ class _AddAdhocRequestViewState extends State<_AddAdhocRequestView> {
           width: double.infinity,
           height: 52,
           child: ElevatedButton(
-            onPressed: isLoading ? null : _onSubmit,
+            onPressed: isLoading || !enabled ? null : _onSubmit,
             style: ElevatedButton.styleFrom(
               backgroundColor: _green,
               foregroundColor: Colors.white,
@@ -777,6 +776,154 @@ class _AddAdhocRequestViewState extends State<_AddAdhocRequestView> {
             remarks: _remarksController.text.trim(),
           ),
         );
+  }
+
+  void _showSuccessDialog(String message) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE8F5EE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check_rounded, color: _green, size: 36),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Request Submitted',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'Manrope',
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message.isNotEmpty
+                  ? message
+                  : 'Your ADHOC request has been submitted successfully.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF596064),
+                fontFamily: 'Manrope',
+              ),
+            ),
+          ],
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _green,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: const Text(
+                'Done',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'Manrope',
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: const BoxDecoration(
+                color: Color(0xFFFFF0EE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_outline_rounded,
+                  color: Color(0xFFB40D1A), size: 36),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Submission Failed',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'Manrope',
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message.isNotEmpty ? message : 'Something went wrong. Please try again.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF596064),
+                fontFamily: 'Manrope',
+              ),
+            ),
+          ],
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFB40D1A),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: const Text(
+                'Try Again',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'Manrope',
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSnack(String message) {

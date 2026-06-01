@@ -10,4 +10,7 @@ abstract final class ApiConstants {
 
   static const String authBaseUrl = 'https://dev-auth.commutr.in/api/v1';
   static const String appBaseUrl = 'https://dev-core.commutr.in/api/v1';
+
+  /// SignalR chat hub — negotiate endpoint and WebSocket base.
+  static const String chatHubUrl = 'https://dev-core.commutr.in/hubs/chat';
 }

@@ -29,3 +29,22 @@ class SubmitAdhocRequest extends AdhocEvent {
   @override
   List<Object?> get props => [locCode, tripDate, tripType, shiftId, reqBy, reqFor, remarks];
 }
+
+class FetchAdhocList extends AdhocEvent {
+  final int empId;
+
+  const FetchAdhocList({required this.empId});
+
+  @override
+  List<Object?> get props => [empId];
+}
+
+class CancelAdhocRequest extends AdhocEvent {
+  final int reqId;
+  final int empId;
+
+  const CancelAdhocRequest({required this.reqId, required this.empId});
+
+  @override
+  List<Object?> get props => [reqId, empId];
+}

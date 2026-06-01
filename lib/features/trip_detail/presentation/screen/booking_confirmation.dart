@@ -184,11 +184,12 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                   child: ElevatedButton(
                     onPressed: () {
                       // Navigate back to home
-                      Navigator.push(
+                      Navigator.pushAndRemoveUntil(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => Welcome(),
+                          builder: (context) => const Welcome(),
                         ),
+                        (route) => false,
                       );                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E7A3C),

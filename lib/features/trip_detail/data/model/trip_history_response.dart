@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:commutr_main/trip_summary/trip_directions_service.dart';
+
 /// Top-level `POST /UserApp/UserTripHistory` body.
 ///
 /// ```json
@@ -179,11 +181,32 @@ class TripHistoryPassenger {
       tripType: json['Triptype']?.toString(),
       pickupAddress: json['Pickupadd']?.toString(),
       pickTime: _readPickTime(json),
-      paxOrder: (json['Paxorder'] as num?)?.toInt(),
+      paxOrder: _readPaxOrder(json),
       isBoarded: _readBool(json['IsBoarded']),
       isDeBoarded: _readBool(json['IsDeBoarded']),
       noShowOrCancelled: json['NoShowOrCancelled']?.toString(),
     );
+  }
+
+  /// Sort key for route waypoints — lower [paxOrder] is visited first.
+  int get routeSortKey => paxOrder ?? 999;
+
+  /// Whether this passenger row is a PICK (login) trip.
+  bool get isPickTrip => isPickTripType(tripType);
+
+  /// Whether this passenger row is a DROP (logout) trip.
+  bool get isDropTrip => !isPickTripType(tripType, defaultPick: false);
+
+  static int? _readPaxOrder(Map<String, dynamic> json) {
+    for (final key in ['Paxorder', 'PaxOrder', 'Paxcode', 'PaxCode']) {
+      final raw = json[key];
+      if (raw is num) return raw.toInt();
+      if (raw is String) {
+        final parsed = int.tryParse(raw.trim());
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
   }
 
   static String? _readPickTime(Map<String, dynamic> json) {
@@ -205,6 +228,32 @@ class TripHistoryPassenger {
   }
 }
 
+/// One stop on the trip route map — passengers ordered by [paxOrder], office
+/// marked separately.
+class TripHistoryRouteStop {
+  const TripHistoryRouteStop({
+    required this.id,
+    this.latLng,
+    this.title,
+    this.snippet,
+    this.paxOrder,
+    this.isOffice = false,
+    this.isOrigin = false,
+    this.isDestination = false,
+  });
+
+  final String id;
+  final String? latLng;
+  final String? title;
+  final String? snippet;
+
+  /// Passenger pickup sequence (P1, P2, …). Null for the office stop.
+  final int? paxOrder;
+  final bool isOffice;
+  final bool isOrigin;
+  final bool isDestination;
+}
+
 /// Flattened trip row for a single employee (used by bloc/UI).
 class TripHistoryItem {
   final int? tripId;
@@ -222,6 +271,10 @@ class TripHistoryItem {
   final bool isDeBoarded;
   final String? noShowOrCancelled;
   final int? rating;
+  final String? officeLatLng;
+  final String? empLatLng;
+  final List<TripHistoryPassenger>? passengers;
+  final int? paxOrder;
 
   const TripHistoryItem({
     this.tripId,
@@ -239,14 +292,26 @@ class TripHistoryItem {
     this.isDeBoarded = false,
     this.noShowOrCancelled,
     this.rating,
+    this.officeLatLng,
+    this.empLatLng,
+    this.passengers,
+    this.paxOrder,
   });
 
-  /// PICK = login (home → office), DROP = logout.
-  bool get isLogin {
-    final t = (tripType ?? '').trim().toLowerCase();
-    if (t == 'pick' || t == 'login' || t == '1') return true;
-    if (t == 'drop' || t == 'logout' || t == '2') return false;
-    return true;
+  /// PICK = login (home → office), DROP = logout (office → home).
+  bool get isLogin => isPickTrip;
+
+  /// True when this is a PICK trip; false for DROP.
+  bool get isPickTrip => _resolvePickDropTrip(defaultPick: true);
+
+  bool _resolvePickDropTrip({required bool defaultPick}) {
+    final fromItem = parsePickDropTripType(tripType);
+    if (fromItem != null) return fromItem;
+    for (final pax in passengers ?? const <TripHistoryPassenger>[]) {
+      final fromPax = parsePickDropTripType(pax.tripType);
+      if (fromPax != null) return fromPax;
+    }
+    return defaultPick;
   }
 
   bool get isCompleted =>
@@ -266,6 +331,76 @@ class TripHistoryItem {
   }
 
   String get _statusLower => (tripStatus ?? '').trim().toLowerCase();
+
+  /// All passengers for this trip sorted by [TripHistoryPassenger.paxOrder]
+  /// (P1 → P2 → P3 …). Falls back to a single synthetic row when only the
+  /// flattened employee coordinates are available.
+  List<TripHistoryPassenger> get passengersSortedByPaxOrder {
+    final list = List<TripHistoryPassenger>.from(passengers ?? const []);
+    if (list.isEmpty && empLatLng != null) {
+      list.add(
+        TripHistoryPassenger(
+          empId: empId,
+          empName: employeeName,
+          empLatLng: empLatLng,
+          userAddress: pickupAddress,
+          tripType: tripType,
+          pickupAddress: pickupAddress,
+          pickTime: pickTime,
+          paxOrder: paxOrder ?? 1,
+        ),
+      );
+    }
+    list.sort((a, b) {
+      final orderCmp = a.routeSortKey.compareTo(b.routeSortKey);
+      if (orderCmp != 0) return orderCmp;
+      return (a.empId ?? 0).compareTo(b.empId ?? 0);
+    });
+    return list;
+  }
+
+  /// Builds every map waypoint in route order:
+  /// - **PICK (login):** P1 → P2 → … → Office
+  /// - **DROP (logout):** Office → P1 → P2 → … (ascending [paxOrder])
+  List<TripHistoryRouteStop> buildOrderedRouteStops() {
+    final mapStops = buildOrderedMapRouteStops(
+      isPick: isPickTrip,
+      officeLatLng: officeLatLng,
+      officeAddress: officeAddress,
+      passengers: passengersSortedByPaxOrder
+          .map(
+            (p) => MapRoutePassenger(
+              empId: p.empId,
+              empName: p.empName,
+              empLatLng: p.empLatLng,
+              paxOrder: p.paxOrder,
+            ),
+          )
+          .toList(growable: false),
+    );
+
+    return mapStops
+        .map(
+          (s) => TripHistoryRouteStop(
+            id: s.id,
+            latLng: s.latLng,
+            title: s.title,
+            snippet: s.snippet,
+            paxOrder: s.paxOrder,
+            isOffice: s.isOffice,
+            isOrigin: s.isOrigin,
+            isDestination: s.isDestination,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  /// Ordered `"lat,lng"` strings suitable for Directions API waypoints.
+  List<String> get orderedRouteLatLngs => buildOrderedRouteStops()
+      .map((s) => s.latLng)
+      .whereType<String>()
+      .where((s) => s.isNotEmpty)
+      .toList(growable: false);
 
   /// Builds one [TripHistoryItem] per passenger matching [empId].
   static List<TripHistoryItem> flattenForEmployee(
@@ -292,6 +427,10 @@ class TripHistoryItem {
             isBoarded: pax.isBoarded,
             isDeBoarded: pax.isDeBoarded,
             noShowOrCancelled: pax.noShowOrCancelled,
+            officeLatLng: trip.officeLatLng,
+            empLatLng: pax.empLatLng,
+            passengers: trip.passengers,
+            paxOrder: pax.paxOrder,
           ),
         );
       }

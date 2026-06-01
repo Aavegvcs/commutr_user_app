@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:commutr_main/trip_summary/trip_directions_service.dart';
+
 /// Wraps the `GET /UserApp/GetTripHomePage` response.
 ///
 /// ```json
@@ -77,6 +79,40 @@ class TripDayGroup {
   }
 }
 
+/// Passenger entry from the `B` array inside a home-page trip object.
+class TripHomePax {
+  final int? empId;
+  final String? empName;
+  final String? empLatLng;
+  final String? userAddress;
+  final int? paxOrder;
+
+  const TripHomePax({
+    this.empId,
+    this.empName,
+    this.empLatLng,
+    this.userAddress,
+    this.paxOrder,
+  });
+
+  factory TripHomePax.fromJson(Map<String, dynamic> json) {
+    String? rs(String key) {
+      final v = json[key];
+      if (v == null) return null;
+      final s = v.toString().trim();
+      return s.isEmpty ? null : s;
+    }
+
+    return TripHomePax(
+      empId: (json['Empid'] as num?)?.toInt(),
+      empName: rs('Empname'),
+      empLatLng: rs('EmpLatLng'),
+      userAddress: rs('UserAddress'),
+      paxOrder: (json['Paxorder'] as num?)?.toInt(),
+    );
+  }
+}
+
 /// A single trip from `GetTripHomePage`.
 class TripHomeItem {
   final int? tripId;
@@ -103,6 +139,9 @@ class TripHomeItem {
   final int? isReached;
   final String? userAppIvrNumber;
   final int? tripTypeCode;
+  final String? officeLatLng;
+  final String? empLatLng;
+  final List<TripHomePax>? passengers;
 
   const TripHomeItem({
     this.tripId,
@@ -128,7 +167,10 @@ class TripHomeItem {
     this.reachedHomeReq,
     this.isReached,
     this.userAppIvrNumber,
-    this.tripTypeCode
+    this.tripTypeCode,
+    this.officeLatLng,
+    this.empLatLng,
+    this.passengers,
   });
 
   factory TripHomeItem.fromJson(Map<String, dynamic> json) {
@@ -149,6 +191,14 @@ class TripHomeItem {
       }
       return false;
     }
+
+    final rawB = json['B'];
+    final passengers = (rawB is List)
+        ? rawB
+            .whereType<Map>()
+            .map((m) => TripHomePax.fromJson(Map<String, dynamic>.from(m)))
+            .toList(growable: false)
+        : const <TripHomePax>[];
 
     return TripHomeItem(
       tripId: (json['TripID'] as num?)?.toInt(),
@@ -174,11 +224,57 @@ class TripHomeItem {
       reachedHomeReq: (json['ReachedHomeReq'] as num?)?.toInt(),
       isReached: (json['IsReached'] as num?)?.toInt(),
       userAppIvrNumber: readString('UserAppIVRNumber'),
-      tripTypeCode: (json['TripTypeCode'] as num?)?.toInt()
+      tripTypeCode: (json['TripTypeCode'] as num?)?.toInt(),
+      officeLatLng: readString('OfficeLatLng'),
+      empLatLng: readString('EmpLatLng'),
+      passengers: passengers,
     );
   }
 
-  bool get isLogin => (tripType ?? '').trim().toLowerCase() == 'login';
+  bool get isLogin => isPickTrip;
+
+  /// True for PICK/Login, false for DROP/Logout.
+  bool get isPickTrip => isPickTripType(tripType);
+
+  /// Passengers sorted by ascending [paxOrder] (P1 → P2 → P3 …).
+  List<TripHomePax> get passengersSortedByPaxOrder {
+    final list = List<TripHomePax>.from(passengers ?? const []);
+    if (list.isEmpty && empLatLng != null) {
+      list.add(
+        TripHomePax(
+          empId: empId,
+          empName: userName,
+          empLatLng: empLatLng,
+          userAddress: userAddress,
+          paxOrder: paxOrder ?? 1,
+        ),
+      );
+    }
+    list.sort((a, b) {
+      final ao = a.paxOrder ?? 999;
+      final bo = b.paxOrder ?? 999;
+      if (ao != bo) return ao.compareTo(bo);
+      return (a.empId ?? 0).compareTo(b.empId ?? 0);
+    });
+    return list;
+  }
+
+  /// Map route stops: PICK = pax → office, DROP = office → pax (ascending paxOrder).
+  List<MapRouteStop> buildOrderedRouteStops() => buildOrderedMapRouteStops(
+        isPick: isPickTrip,
+        officeLatLng: officeLatLng,
+        officeAddress: officeAddress,
+        passengers: passengersSortedByPaxOrder
+            .map(
+              (p) => MapRoutePassenger(
+                empId: p.empId,
+                empName: p.empName,
+                empLatLng: p.empLatLng,
+                paxOrder: p.paxOrder,
+              ),
+            )
+            .toList(growable: false),
+      );
 
   bool get isScheduledStatus =>
       (tripStatusName ?? '').trim().toLowerCase() == 'scheduled';

@@ -12,6 +12,8 @@ class AdhocBloc extends Bloc<AdhocEvent, AdhocState> {
 
   AdhocBloc(this._repository) : super(const AdhocInitial()) {
     on<SubmitAdhocRequest>(_onSubmit);
+    on<FetchAdhocList>(_onFetchList);
+    on<CancelAdhocRequest>(_onCancel);
   }
 
   @override
@@ -43,16 +45,52 @@ class AdhocBloc extends Bloc<AdhocEvent, AdhocState> {
         reqFor: event.reqFor,
         remarks: event.remarks,
       );
-      debugPrint('[ADHOC_BLOC] SubmitAdhocRequest ✓ message="${response.message}"');
-      emit(AdhocSubmitSuccess(
-        response.message.isNotEmpty ? response.message : 'Adhoc request submitted successfully',
-      ));
+      debugPrint(
+        '[ADHOC_BLOC] SubmitAdhocRequest response → '
+        'errorCode=${response.errorCode} isSuccess=${response.isSuccess} '
+        'message="${response.displayMessage}"',
+      );
+      if (response.errorCode == 0) {
+        emit(AdhocSubmitSuccess(response.displayMessage));
+      } else {
+        emit(AdhocSubmitError(response.displayMessage));
+      }
     } catch (e) {
       debugPrint('[ADHOC_BLOC] SubmitAdhocRequest ✖ $e');
       if (_isUnauthorized(e)) {
         emit(const AdhocUnauthorized());
       } else {
         emit(AdhocSubmitError(_friendlyMessage(e)));
+      }
+    }
+  }
+
+  Future<void> _onCancel(CancelAdhocRequest event, Emitter<AdhocState> emit) async {
+    emit(AdhocCancelling(event.reqId));
+    try {
+      await _repository.cancelAdhocRequest(reqId: event.reqId, empId: event.empId);
+      emit(const AdhocCancelSuccess());
+    } catch (e) {
+      debugPrint('[ADHOC_BLOC] CancelAdhocRequest ✖ $e');
+      if (_isUnauthorized(e)) {
+        emit(const AdhocUnauthorized());
+      } else {
+        emit(AdhocCancelError(_friendlyMessage(e)));
+      }
+    }
+  }
+
+  Future<void> _onFetchList(FetchAdhocList event, Emitter<AdhocState> emit) async {
+    emit(const AdhocListLoading());
+    try {
+      final response = await _repository.fetchAdhocList(empId: event.empId);
+      emit(AdhocListLoaded(response.items));
+    } catch (e) {
+      debugPrint('[ADHOC_BLOC] FetchAdhocList ✖ $e');
+      if (_isUnauthorized(e)) {
+        emit(const AdhocUnauthorized());
+      } else {
+        emit(AdhocListError(_friendlyMessage(e)));
       }
     }
   }

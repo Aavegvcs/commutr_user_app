@@ -1,4 +1,11 @@
 import 'package:commutr_main/features/adhoc/bloc/adhoc_bloc.dart';
+import 'package:commutr_main/features/notification/bloc/notification_bloc.dart';
+import 'package:commutr_main/features/share_cab/data/repository/share_cab_repo.dart';
+import 'package:commutr_main/features/share_cab/data/repository/call_driver_ivr_repo.dart';
+import 'package:commutr_main/features/notification/data/repository/notification_repository.dart';
+import 'package:commutr_main/features/trip_chat/bloc/chat_bloc.dart';
+import 'package:commutr_main/features/trip_chat/data/repository/chat_repository.dart';
+import 'package:commutr_main/features/trip_chat/service/chat_signalr_service.dart';
 import 'package:commutr_main/features/adhoc/data/repository/adhoc_repo.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/data/repository/profile_repository.dart';
@@ -179,6 +186,33 @@ void setupDependencies() {
 
   sl.registerFactory<ProfileBloc>(
     () => ProfileBloc(sl()),
+  );
+
+  sl.registerLazySingleton<ChatRepository>(
+    () => ChatRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<ChatSignalRService>(() => ChatSignalRService());
+
+  sl.registerFactory<ChatBloc>(
+    () => ChatBloc(
+      repository: sl(),
+      signalRService: sl(),
+    ),
+  );
+
+  sl.registerLazySingleton<NotificationRepository>(
+    () => NotificationRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<NotificationBloc>(() => NotificationBloc(sl()));
+
+  sl.registerLazySingleton<ShareCabRepository>(
+    () => ShareCabRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerLazySingleton<CallDriverIvrRepository>(
+    () => CallDriverIvrRepository(sl(instanceName: appApiClientKey)),
   );
 
   syncBearerTokenToApiClients();

@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:commutr_main/features/trip_detail/data/model/trip_history_response.dart';
+import 'package:commutr_main/trip_summary/trip_directions_service.dart';
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class TripSummaryScreen extends StatelessWidget {
   const TripSummaryScreen({super.key, required this.tripItem});
@@ -108,7 +112,7 @@ class TripSummaryScreen extends StatelessWidget {
                 child: Column(
                   children: [
                     // Map Card
-                    _MapCard(status: _statusLabel(), statusColor: _statusColor()),
+                    _MapCard(tripItem: tripItem, status: _statusLabel(), statusColor: _statusColor()),
                     const SizedBox(height: 16),
 
                     // Trip Detail Card
@@ -151,8 +155,13 @@ class TripSummaryScreen extends StatelessWidget {
 // ─── Map Card ────────────────────────────────────────────────────────────────
 
 class _MapCard extends StatelessWidget {
-  const _MapCard({required this.status, required this.statusColor});
+  const _MapCard({
+    required this.tripItem,
+    required this.status,
+    required this.statusColor,
+  });
 
+  final TripHistoryItem tripItem;
   final String status;
   final Color statusColor;
 
@@ -172,7 +181,6 @@ class _MapCard extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Map area
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             child: SizedBox(
@@ -180,9 +188,7 @@ class _MapCard extends StatelessWidget {
               width: double.infinity,
               child: Stack(
                 children: [
-                  _MapPlaceholder(),
-
-                  // Status Badge
+                  _TripRouteMap(tripItem: tripItem),
                   Positioned(
                     bottom: 14,
                     left: 14,
@@ -194,7 +200,9 @@ class _MapCard extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: statusColor.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(30),
-                        border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+                        border: Border.all(
+                          color: statusColor.withValues(alpha: 0.4),
+                        ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -224,78 +232,171 @@ class _MapCard extends StatelessWidget {
   }
 }
 
-// ─── Map Placeholder (custom painted route) ──────────────────────────────────
+// ─── Trip Route Google Map ────────────────────────────────────────────────────
 
-class _MapPlaceholder extends StatelessWidget {
+class _TripRouteMap extends StatefulWidget {
+  const _TripRouteMap({required this.tripItem});
+
+  final TripHistoryItem tripItem;
+
   @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _MapPainter(),
-      child: Container(color: Colors.transparent),
-    );
-  }
+  State<_TripRouteMap> createState() => _TripRouteMapState();
 }
 
-class _MapPainter extends CustomPainter {
+class _TripRouteMapState extends State<_TripRouteMap> {
+  final Completer<GoogleMapController> _ctrl = Completer();
+
+  Set<Marker> _markers = {};
+  Set<Polyline> _polylines = {};
+  bool _loading = false;
+  CameraPosition _camera = const CameraPosition(
+    target: LatLng(20.5937, 78.9629),
+    zoom: 5,
+  );
+
   @override
-  void paint(Canvas canvas, Size size) {
-    final landPaint = Paint()..color = const Color(0xFFECECE0);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), landPaint);
+  void initState() {
+    super.initState();
+    _buildRoute();
+  }
 
-    final waterPaint = Paint()..color = const Color(0xFFB8D8EA);
-    final coastPath = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width * 0.52, 0)
-      ..lineTo(size.width * 0.38, size.height * 0.45)
-      ..lineTo(size.width * 0.25, size.height * 0.65)
-      ..lineTo(size.width * 0.18, size.height * 0.85)
-      ..lineTo(0, size.height * 0.9)
-      ..close();
-    canvas.drawPath(coastPath, waterPaint);
+  Future<void> _buildRoute() async {
+    final item = widget.tripItem;
+    final routeStops = item.buildOrderedRouteStops();
 
-    final roadPaint = Paint()
-      ..color = const Color(0xFFE8CB6A)
-      ..strokeWidth = 5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(size.width * 0.55, 0), Offset(size.width * 0.55, size.height), roadPaint);
-    canvas.drawLine(Offset(size.width * 0.4, 0), Offset(size.width * 0.75, size.height), roadPaint);
-    canvas.drawLine(Offset(size.width * 0.3, size.height * 0.35), Offset(size.width, size.height * 0.35), roadPaint);
-    canvas.drawLine(Offset(size.width * 0.3, size.height * 0.65), Offset(size.width, size.height * 0.65), roadPaint);
+    final validStops = <TripHistoryRouteStop>[];
+    final stopPoints = <LatLng>[];
+    for (final stop in routeStops) {
+      final ll = parseLatLngString(stop.latLng);
+      if (ll == null) continue;
+      validStops.add(stop);
+      stopPoints.add(ll);
+    }
 
-    final parkPaint = Paint()..color = const Color(0xFFBED8A0);
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.65, size.height * 0.15, size.width * 0.2, size.height * 0.25), const Radius.circular(8)), parkPaint);
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.6, size.height * 0.5, size.width * 0.15, size.height * 0.15), const Radius.circular(6)), parkPaint);
+    final Set<Marker> markers = {};
+    for (var i = 0; i < validStops.length; i++) {
+      final stop = validStops[i];
+      markers.add(Marker(
+        markerId: MarkerId(stop.id),
+        position: stopPoints[i],
+        icon: locationMarker,
+        infoWindow: InfoWindow(title: stop.title, snippet: stop.snippet),
+      ));
+    }
 
-    final routePaint = Paint()
-      ..color = const Color(0xFF1A3A8F)
-      ..strokeWidth = 5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    final routePath = Path()
-      ..moveTo(size.width * 0.52, size.height * 0.08)
-      ..lineTo(size.width * 0.65, size.height * 0.10)
-      ..lineTo(size.width * 0.72, size.height * 0.12)
-      ..quadraticBezierTo(size.width * 0.78, size.height * 0.14, size.width * 0.74, size.height * 0.22)
-      ..lineTo(size.width * 0.65, size.height * 0.30)
-      ..lineTo(size.width * 0.60, size.height * 0.35)
-      ..lineTo(size.width * 0.52, size.height * 0.37)
-      ..lineTo(size.width * 0.44, size.height * 0.40)
-      ..lineTo(size.width * 0.44, size.height * 0.60)
-      ..quadraticBezierTo(size.width * 0.44, size.height * 0.72, size.width * 0.42, size.height * 0.82)
-      ..lineTo(size.width * 0.40, size.height * 0.95);
-    canvas.drawPath(routePath, routePaint);
+    if (stopPoints.length < 2) {
+      // Not enough points — just show markers at whatever we have.
+      final camera = stopPoints.isNotEmpty
+          ? CameraPosition(target: stopPoints.first, zoom: 14)
+          : _camera;
+      if (mounted) setState(() { _markers = markers; _camera = camera; });
+      return;
+    }
 
-    canvas.drawCircle(Offset(size.width * 0.52, size.height * 0.08), 6, Paint()..color = const Color(0xFF1A3A8F));
-    canvas.drawCircle(Offset(size.width * 0.52, size.height * 0.08), 3, Paint()..color = Colors.white);
-    canvas.drawCircle(Offset(size.width * 0.44, size.height * 0.40), 7, Paint()..color = const Color(0xFFE87A3A));
-    canvas.drawCircle(Offset(size.width * 0.40, size.height * 0.95), 7, Paint()..color = const Color(0xFF2E8B6A));
-    canvas.drawCircle(Offset(size.width * 0.40, size.height * 0.95), 4, Paint()..color = Colors.white);
+    // Set markers + fallback straight-line polyline while Directions loads.
+    final fallbackBounds = boundsFromPoints(stopPoints);
+    final fallbackCamera = fallbackBounds != null
+        ? CameraPosition(
+            target: LatLng(
+              (fallbackBounds.southwest.latitude +
+                      fallbackBounds.northeast.latitude) /
+                  2,
+              (fallbackBounds.southwest.longitude +
+                      fallbackBounds.northeast.longitude) /
+                  2,
+            ),
+            zoom: 12,
+          )
+        : _camera;
+
+    if (mounted) {
+      setState(() {
+        _markers = markers;
+        _camera = fallbackCamera;
+        _loading = true;
+        _polylines = {
+          Polyline(
+            polylineId: const PolylineId('trip_route'),
+            color: const Color(0xFF1A3A8F).withValues(alpha: 0.4),
+            width: 2,
+            points: stopPoints,
+            patterns: [PatternItem.dash(16), PatternItem.gap(8)],
+          ),
+        };
+      });
+    }
+
+    // Fetch real road polyline through every stop in paxOrder sequence.
+    final roadPoints = await fetchRoutePolylineThroughPoints(stopPoints);
+
+    if (!mounted) return;
+
+    final polylinePoints = roadPoints.isNotEmpty ? roadPoints : stopPoints;
+    final bounds = boundsFromPoints(polylinePoints);
+
+    setState(() {
+      _loading = false;
+      _polylines = {
+        Polyline(
+          polylineId: const PolylineId('trip_route'),
+          color: const Color(0xFF1A3A8F),
+          width: 3,
+          points: polylinePoints,
+        ),
+      };
+    });
+
+    if (bounds != null && _ctrl.isCompleted) {
+      final ctrl = await _ctrl.future;
+      ctrl.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
+    }
+  }
+
+  void _fitCamera(List<LatLng> points) {
+    final bounds = boundsFromPoints(points);
+    if (bounds == null) return;
+    _ctrl.future.then((ctrl) {
+      ctrl.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
+    });
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        GoogleMap(
+          style: kTripMapStyle,
+          initialCameraPosition: _camera,
+          onMapCreated: (controller) {
+            if (!_ctrl.isCompleted) _ctrl.complete(controller);
+            final pts = _polylines.isNotEmpty
+                ? _polylines.first.points
+                : <LatLng>[];
+            if (pts.length >= 2) _fitCamera(pts);
+          },
+          markers: _markers,
+          polylines: _polylines,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          mapToolbarEnabled: false,
+          compassEnabled: false,
+        ),
+        if (_loading)
+          const Positioned(
+            top: 8,
+            right: 8,
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Color(0xFF1A3A8F),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 // ─── Trip Detail Card ─────────────────────────────────────────────────────────

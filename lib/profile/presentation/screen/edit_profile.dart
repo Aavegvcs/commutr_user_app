@@ -1,13 +1,17 @@
+import 'dart:convert';
+
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/location_data.dart';
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/pin_map_screen.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:commutr_main/core/network/api_client.dart';
+import 'package:commutr_main/core/network/api_constants.dart';
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/bloc/profile_event.dart';
 import 'package:commutr_main/profile/bloc/profile_state.dart';
 import 'package:commutr_main/profile/data/repository/profile_repository.dart';
 import 'package:commutr_main/profile/presentation/profile_user_data.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -44,6 +48,26 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   LocationData? _pinnedLocation;
   GoogleMapController? _mapPreviewController;
   bool _isSavingProfile = false;
+
+  // Mobile OTP state
+  final TextEditingController _otpController = TextEditingController();
+  bool _showOtpField = false;
+  bool _sendingOtp = false;
+  bool _verifyingOtp = false;
+  bool _mobileOtpVerified = false;
+  String? _otpSentForMobile;
+  String? _verifiedMobile;
+
+  static const String _otpSendUrl =
+      '${ApiConstants.appBaseUrl}/Otp/send';
+  static const String _otpVerifyUrl =
+      '${ApiConstants.appBaseUrl}/Otp/verify';
+
+  late final Dio _otpDio = Dio(BaseOptions(
+    connectTimeout: const Duration(seconds: 30),
+    receiveTimeout: const Duration(seconds: 30),
+    headers: {'Content-Type': 'application/json'},
+  ));
 
   @override
   void initState() {
@@ -105,7 +129,170 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     _cityController.dispose();
     _stateController.dispose();
     _pincodeController.dispose();
+    _otpController.dispose();
+    _otpDio.close();
     super.dispose();
+  }
+
+  // ── OTP helpers (mirrors signup.dart pattern) ────────────────────────────
+
+  static final RegExp _mobileRegex = RegExp(r'^[6-9]\d{9}$');
+
+  dynamic _otpResponseAsJson(dynamic raw) {
+    if (raw is String) {
+      final t = raw.trim();
+      if (t.isEmpty) return raw;
+      try {
+        return jsonDecode(t);
+      } catch (_) {
+        return raw;
+      }
+    }
+    return raw;
+  }
+
+  bool _otpApiTruthy(dynamic data, [int depth = 0]) {
+    if (depth > 5) return false;
+    data = _otpResponseAsJson(data);
+    if (data == true || data == 'true') return true;
+    if (data is String) {
+      final lower = data.trim().toLowerCase();
+      if (lower == 'true' || lower == 'success') return true;
+    }
+    if (data is List && data.isNotEmpty) return _otpApiTruthy(data.first, depth + 1);
+    if (data is Map) {
+      final m = Map<dynamic, dynamic>.from(data);
+      if (m['isSuccess'] == true || m['success'] == true || m['succeeded'] == true) return true;
+      final status = m['status'];
+      if (status == 1 || status == '1') return true;
+      final result = m['result'];
+      if (result == true) return true;
+      if (result != null && _otpApiTruthy(result, depth + 1)) return true;
+      final inner = m['data'];
+      if (inner != null && _otpApiTruthy(inner, depth + 1)) return true;
+    }
+    return false;
+  }
+
+  String _otpErrorMessage(DioException e) {
+    var data = _otpResponseAsJson(e.response?.data);
+    if (data is Map) {
+      final m = Map<dynamic, dynamic>.from(data);
+      final errors = m['errors'];
+      if (errors is Map) {
+        for (final v in errors.values) {
+          if (v is List && v.isNotEmpty) return v.first.toString();
+          if (v is String && v.trim().isNotEmpty) return v.trim();
+        }
+      }
+      for (final key in ['detail', 'title', 'message', 'error', 'errorMessage']) {
+        final v = m[key];
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+    }
+    if (data is String && data.trim().isNotEmpty) return data.trim();
+    return e.message ?? 'Could not send OTP';
+  }
+
+  Future<void> _sendMobileOtp({required bool fromResend}) async {
+    final mobile = _mobileController.text.trim();
+    if (mobile.isEmpty || !_mobileRegex.hasMatch(mobile)) {
+      _showOtpSnackBar('Enter a valid 10-digit mobile number');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _sendingOtp = true);
+    try {
+      final response = await _otpDio.post<dynamic>(
+        _otpSendUrl,
+        data: {'mobileNo': mobile, 'requestType': 'S'},
+        options: Options(headers: {'X-CorporateCode': 'asnd'}),
+      );
+      if (!mounted) return;
+      final ok = _otpApiTruthy(_otpResponseAsJson(response.data));
+      if (ok) {
+        setState(() {
+          _showOtpField = true;
+          _otpSentForMobile = mobile;
+          _mobileOtpVerified = false;
+          _verifiedMobile = null;
+        });
+      } else {
+        _showOtpSnackBar('Could not send OTP. Please try again.');
+        if (!fromResend) {
+          setState(() {
+            _showOtpField = false;
+            _otpSentForMobile = null;
+            _otpController.clear();
+          });
+        }
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      _showOtpSnackBar(_otpErrorMessage(e));
+      if (!fromResend) {
+        setState(() {
+          _showOtpField = false;
+          _otpSentForMobile = null;
+          _otpController.clear();
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      _showOtpSnackBar('Could not send OTP');
+    } finally {
+      if (mounted) setState(() => _sendingOtp = false);
+    }
+  }
+
+  Future<void> _verifyMobileOtp() async {
+    final otp = _otpController.text.trim();
+    if (otp.length != 4) {
+      _showOtpSnackBar('Please enter a valid 4-digit OTP');
+      return;
+    }
+    final mobile = _mobileController.text.trim();
+    if (!mounted) return;
+    setState(() => _verifyingOtp = true);
+    try {
+      final response = await _otpDio.post<dynamic>(
+        _otpVerifyUrl,
+        data: {'mobileNo': mobile, 'otp': otp, 'requestType': 'S'},
+        options: Options(headers: {'X-CorporateCode': 'asnd'}),
+      );
+      if (!mounted) return;
+      final ok = _otpApiTruthy(_otpResponseAsJson(response.data));
+      if (ok) {
+        setState(() {
+          _mobileOtpVerified = true;
+          _verifiedMobile = mobile;
+          _showOtpField = false;
+          _otpController.clear();
+        });
+      } else {
+        _showOtpSnackBar('Invalid OTP. Please try again.');
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      _showOtpSnackBar(_otpErrorMessage(e));
+    } catch (_) {
+      if (!mounted) return;
+      _showOtpSnackBar('Could not verify OTP');
+    } finally {
+      if (mounted) setState(() => _verifyingOtp = false);
+    }
+  }
+
+  void _showOtpSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
 
   @override
@@ -139,44 +326,23 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               Center(
                 child: Column(
                   children: [
-                    Stack(
-                      children: [
-                        CircleAvatar(
-                          radius: 50,
-                          backgroundColor: const Color(0xFFCFE3D4),
-                          child: const Icon(
-                            Icons.person,
-                            size: 50,
-                            color: Color(0xFFA8C7B0),
-                          ),
+                    CircleAvatar(
+                      radius: 50,
+                      backgroundColor: const Color(0xFFCFE3D4),
+                      child: Text(
+                        () {
+                          final first = _firstNameController.text.trim();
+                          final last = _lastNameController.text.trim();
+                          final f = first.isNotEmpty ? first[0].toUpperCase() : '';
+                          final l = last.isNotEmpty ? last[0].toUpperCase() : '';
+                          return '$f$l'.isNotEmpty ? '$f$l' : '?';
+                        }(),
+                        style: const TextStyle(
+                          fontSize: 34,
+                          fontWeight: FontWeight.bold,
+                          color: _primaryGreen,
+                          letterSpacing: 1,
                         ),
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: Container(
-                            width: 30,
-                            height: 30,
-                            decoration: const BoxDecoration(
-                              color: _primaryGreen,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.edit,
-                              color: Colors.white,
-                              size: 16,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'CHANGE PHOTO',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.2,
-                        color: Colors.black54,
                       ),
                     ),
                   ],
@@ -196,12 +362,13 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                       child: _buildTextField(
                         controller: _firstNameController,
                         hintText: 'First Name',
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
+                        ],
                         validator: (val) {
                           if (val == null || val.trim().isEmpty)
                             return 'Required';
                           if (val.trim().length < 2) return 'Min 2 chars';
-                          if (!RegExp(r'^[a-zA-Z\s]+$').hasMatch(val))
-                            return 'Letters only';
                           return null;
                         },
                       ),
@@ -214,12 +381,13 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                       child: _buildTextField(
                         controller: _lastNameController,
                         hintText: 'Last Name',
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
+                        ],
                         validator: (val) {
                           if (val == null || val.trim().isEmpty)
                             return 'Required';
                           if (val.trim().length < 2) return 'Min 2 chars';
-                          if (!RegExp(r'^[a-zA-Z\s]+$').hasMatch(val))
-                            return 'Letters only';
                           return null;
                         },
                       ),
@@ -301,22 +469,229 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
 
               _buildLabeledField(
                 label: 'MOBILE NO.',
-                child: _buildTextField(
-                  controller: _mobileController,
-                  hintText: '+91 XXXXXXXXXX',
-                  keyboardType: TextInputType.phone,
-                  suffixIcon:
-                      const Icon(Icons.edit, size: 18, color: Colors.grey),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9+\- ]'))
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Mobile number field with Resend button
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _mobileController,
+                            keyboardType: TextInputType.phone,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(10),
+                            ],
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Colors.black87,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: '9XXXXXXXXX',
+                              hintStyle: TextStyle(
+                                  color: Colors.grey.shade400, fontSize: 14),
+                              filled: true,
+                              fillColor: const Color(0xFFF5F5F5),
+                              prefixIcon: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 13),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFE8E8E8),
+                                  borderRadius: BorderRadius.only(
+                                    topLeft: Radius.circular(12),
+                                    bottomLeft: Radius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  '+91',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              prefixIconConstraints:
+                                  const BoxConstraints(minWidth: 0, minHeight: 0),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 0),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                    color: Color(0xFF2E7D32), width: 1.5),
+                              ),
+                              errorBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                    color: Colors.redAccent, width: 1),
+                              ),
+                              focusedErrorBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                    color: Colors.redAccent, width: 1.5),
+                              ),
+                              errorStyle: const TextStyle(fontSize: 11),
+                            ),
+                            validator: (val) {
+                              if (val == null || val.trim().isEmpty) {
+                                return 'Mobile number required';
+                              }
+                              if (val.trim().length != 10 ||
+                                  !_mobileRegex.hasMatch(val.trim())) {
+                                return 'Enter valid 10-digit mobile number';
+                              }
+                              return null;
+                            },
+                            onChanged: (val) {
+                              if (_mobileOtpVerified &&
+                                  _verifiedMobile != null &&
+                                  val != _verifiedMobile) {
+                                setState(() {
+                                  _mobileOtpVerified = false;
+                                  _verifiedMobile = null;
+                                  _showOtpField = false;
+                                  _otpSentForMobile = null;
+                                  _otpController.clear();
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: TextButton(
+                            onPressed: (_sendingOtp || _verifyingOtp)
+                                ? null
+                                : () => _sendMobileOtp(fromResend: _showOtpField),
+                            style: TextButton.styleFrom(
+                              foregroundColor: _primaryGreen,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: _sendingOtp
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: _primaryGreen),
+                                  )
+                                : Text(
+                                    _showOtpField ? 'Resend' : 'Send OTP',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // Verified banner
+                    if (_mobileOtpVerified) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEBF5F0),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: _primaryGreen.withValues(alpha: 0.25)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.check_circle,
+                                color: _primaryGreen, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              () {
+                                final digits = _verifiedMobile!.replaceAll(RegExp(r'\D'), '');
+                                final ten = digits.length >= 10 ? digits.substring(digits.length - 10) : digits;
+                                return '+91 ${ten.substring(0, 5)}${ten.substring(5)} verified';
+                              }(),
+                              style: const TextStyle(
+                                color: _primaryGreen,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    // OTP field + Submit button
+                    if (_showOtpField) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _buildTextField(
+                              controller: _otpController,
+                              hintText: 'Enter 4-digit OTP',
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(4),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: ElevatedButton(
+                              onPressed: (_verifyingOtp || _sendingOtp)
+                                  ? null
+                                  : _verifyMobileOtp,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _primaryGreen,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 12),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: _verifyingOtp
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white),
+                                    )
+                                  : const Text(
+                                      'Submit',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty)
-                      return 'Mobile number required';
-                    final digits = val.replaceAll(RegExp(r'\D'), '');
-                    if (digits.length < 10) return 'Enter valid mobile number';
-                    return null;
-                  },
                 ),
               ),
               const SizedBox(height: 16),
@@ -329,14 +704,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                   keyboardType: TextInputType.emailAddress,
                   prefixIcon: const Icon(Icons.mail_outline,
                       size: 18, color: Colors.grey),
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty)
-                      return 'Email required';
-                    if (!RegExp(r'^[\w.-]+@[\w.-]+\.\w{2,}$').hasMatch(val)) {
-                      return 'Enter a valid email';
-                    }
-                    return null;
-                  },
+                  readOnly: true,
                 ),
               ),
               const SizedBox(height: 28),
@@ -617,6 +985,8 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     Widget? suffixIcon,
     int maxLines = 1,
     List<TextInputFormatter>? inputFormatters,
+    ValueChanged<String>? onChanged,
+    bool readOnly = false,
   }) {
     return TextFormField(
       controller: controller,
@@ -624,12 +994,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       maxLines: maxLines,
       inputFormatters: inputFormatters,
       validator: validator,
-      style: const TextStyle(fontSize: 14, color: Colors.black87),
+      onChanged: onChanged,
+      readOnly: readOnly,
+      style: TextStyle(fontSize: 14, color: readOnly ? Colors.black45 : Colors.black87),
       decoration: InputDecoration(
         hintText: hintText,
         hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
         filled: true,
-        fillColor: _fieldBg,
+        fillColor: readOnly ? const Color(0xFFEAEAE9) : const Color(0xFFF5F5F5),
         prefixIcon: prefixIcon,
         suffixIcon: suffixIcon,
         contentPadding: EdgeInsets.symmetric(
@@ -646,7 +1018,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: _primaryGreen, width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFF2E7D32), width: 1.5),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -660,6 +1032,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       ),
     );
   }
+
 
   void _openLocationDialog() {
     // Local controllers seeded from the current state so the dialog is
@@ -1255,10 +1628,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         city: _cityController.text,
         pin: _pincodeController.text,
         emailId: _emailController.text,
-        mobileNo: _mobileController.text.replaceFirst(
-          RegExp(r'^\s*\+?91'),
-          '',
-        ).trim(),
+        mobileNo: _mobileController.text.trim(),
         depCode: current.profile.depCode,
         proCode: current.profile.proCode,
         lobCode: current.profile.lobCode,
@@ -1267,14 +1637,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Profile saved successfully!'),
-          backgroundColor: _primaryGreen,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
+      await _showSaveSuccessDialog();
+      if (!mounted) return;
+      context.read<ProfileBloc>().add(const FetchUserProfile());
+      Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       if (ApiClient.refreshFailedFor(e)) {
@@ -1337,6 +1703,75 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _showSaveSuccessDialog() {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F4),
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: const BoxDecoration(
+                    color: _primaryGreen,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.check_rounded,
+                      color: Colors.white, size: 48),
+                ),
+                const SizedBox(height: 26),
+                const Text(
+                  'Profile saved successfully!',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    height: 1.2,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1B1F22),
+                  ),
+                ),
+                const SizedBox(height: 30),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _primaryGreen,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      minimumSize: const Size.fromHeight(44),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(26),
+                      ),
+                    ),
+                    child: const Text(
+                      'OK',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

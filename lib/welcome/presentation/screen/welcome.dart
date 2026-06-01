@@ -1,4 +1,8 @@
+import 'dart:async';
 import 'dart:math' show pi;
+
+import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:in_app_review/in_app_review.dart';
 
 import 'package:url_launcher/url_launcher.dart';
 
@@ -46,6 +50,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../features/ai_chatbot/chat_popup.dart';
 import '../../../features/complaint/presentation/screen/raise_complaint_screen.dart';
+import '../../../features/notification/notification_screen.dart';
+import '../../../features/trip_chat/presentation/trip_group_chat_screen.dart';
 import '../../../features/trip_detail/presentation/screen/trip_detail.dart';
 import '../../../trip_summary/trip_summary_welcome.dart';
 import '../../../features/adhoc/presentation/screen/adhoc_request_screen.dart';
@@ -55,8 +61,17 @@ import '../../../features/sos/bloc/sos_state.dart';
 import '../../../features/team_cab/presentation/screen/team_cab_screen.dart';
 import '../../../weekly_off/presentation/screen/weekly_off.dart';
 import '../../../features/trip_detail/data/repository/user_feedback_repo.dart';
+import '../../../features/share_cab/data/repository/share_cab_repo.dart';
+import '../../../features/share_cab/data/repository/call_driver_ivr_repo.dart';
 
-enum _TripHistoryStatus { completed, noShow, cancelled, expired }
+enum _TripHistoryStatus {
+  completed,
+  inProgress,
+  upcoming,
+  noShow,
+  cancelled,
+  expired,
+}
 
 enum _TripHistoryFilterCategory { tripStatus, tripRating, tripDate }
 
@@ -145,6 +160,7 @@ class _WelcomeView extends StatefulWidget {
 class _WelcomeState extends State<_WelcomeView> {
   int _selectedIndex = 0;
   bool _tripHistoryFetchDispatched = false;
+  Timer? _pollingTimer;
 
   @override
   void initState() {
@@ -152,6 +168,31 @@ class _WelcomeState extends State<_WelcomeView> {
     // BlocListener does not replay the current state; fetch if roster already loaded.
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _ensureTripHistoryFetched());
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollingTimer = Timer.periodic(const Duration(seconds: 500000), (_) {
+      if (!mounted) return;
+      context.read<TripHomeBloc>().add(const FetchTripHome());
+      context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
+      context.read<RosterBloc>().add(const FetchRosterUserDetails());
+      context.read<ProfileBloc>().add(const FetchUserProfile());
+      final rosterState = context.read<RosterBloc>().state;
+      if (rosterState is RosterLoaded) {
+        context.read<TripHistoryBloc>().add(FetchTripHistory(
+              empId: rosterState.details.empId,
+              fromDate: _defaultFromDate(),
+              toDate: _defaultToDate(),
+            ));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollingTimer?.cancel();
+    super.dispose();
   }
 
   void _ensureTripHistoryFetched() {
@@ -173,7 +214,15 @@ class _WelcomeState extends State<_WelcomeView> {
 
   void _selectTripHistoryTab() {
     setState(() => _selectedIndex = 1);
-    _ensureTripHistoryFetched();
+    _forceFetchTripHistory();
+  }
+
+  void _forceFetchTripHistory() {
+    final rosterState = context.read<RosterBloc>().state;
+    if (rosterState is RosterLoaded) {
+      _tripHistoryFetchDispatched = false;
+      _maybeDispatchTripHistoryFetch(rosterState.details.empId);
+    }
   }
 
   /// Keys for which active-trip cards are expanded (prefix `trip_`).
@@ -392,37 +441,434 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
-  void _openTripGroupChat() {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => const ChatPopup(),
+  void _openTripGroupChat(TripHomeItem item) {
+    final tripId = item.tripId;
+    if (tripId == null || tripId == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Trip ID is not available.')),
+      );
+      return;
+    }
+
+    final rosterState = context.read<RosterBloc>().state;
+    final myEmpId = rosterState is RosterLoaded
+        ? rosterState.details.empId
+        : (item.empId ?? 0);
+
+    // Use the first driver in drList as the chat recipient; fall back to 0
+    // (the chat API treats 0 as a broadcast to the whole trip group).
+    final driver =
+        rosterState is RosterLoaded && rosterState.details.drList.isNotEmpty
+            ? rosterState.details.drList.first
+            : null;
+    final otherEmpId = driver?.empId ?? 0;
+    final otherName = driver?.empName.isNotEmpty == true
+        ? driver!.empName
+        : 'Trip Group Chat';
+
+    // Build participants subtitle from the logged-in user's name + pax count.
+    final userName = item.userName?.trim() ?? '';
+    final paxCount = item.paxCount ?? 0;
+    final extra = paxCount > 1 ? ' +${paxCount - 1}' : '';
+    final participants =
+        userName.isNotEmpty ? '$userName$extra' : 'Trip passengers';
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TripGroupChatScreen(
+          tripId: tripId,
+          myEmpId: myEmpId,
+          // otherEmpId: otherEmpId,
+          otherEmpId: 373,
+          otherName: otherName,
+          participants: participants,
+        ),
       ),
     );
   }
 
-  void _shareActiveTrip(TripHomeItem item) {
-    final parts = <String>[];
-    final otp = item.otp?.trim();
-    if (otp != null && otp.isNotEmpty) {
-      parts.add('Boarding OTP: $otp');
-    }
-    final vehicle = item.vehicleInfo?.trim();
-    if (vehicle != null && vehicle.isNotEmpty) {
-      parts.add('Vehicle: $vehicle');
-    }
-    final pickup = _plannedPickupLabel(item);
-    if (pickup != null) {
-      parts.add('Planned pickup: $pickup');
-    }
-    if (parts.isEmpty) {
+  Future<void> _shareActiveTrip(TripHomeItem item) async {
+    final empId = item.empId;
+    final tripId = item.tripId;
+    if (empId == null || empId == 0 || tripId == null || tripId == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nothing to share for this trip')),
+        const SnackBar(content: Text('Trip details are not available.')),
       );
       return;
     }
-    Clipboard.setData(ClipboardData(text: parts.join('\n')));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Trip details copied')),
+
+    // Pick a contact from the phone's contact list
+    final hasPermission =
+        await FlutterContacts.requestPermission(readonly: true);
+    if (!hasPermission) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Contacts permission denied.')),
+        );
+      }
+      return;
+    }
+
+    final Contact? contact = await FlutterContacts.openExternalPick();
+    if (contact == null || !mounted) return;
+
+    // Reload with phone numbers
+    final full = await FlutterContacts.getContact(contact.id);
+    final phone = full?.phones.isNotEmpty == true
+        ? full!.phones.first.number.replaceAll(RegExp(r'\s+|-'), '')
+        : null;
+
+    if (phone == null || phone.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Selected contact has no phone number.')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    // Get logged-in user info from local storage
+    final authStorage = sl<AuthLocalStorage>();
+    final userMobileNo = authStorage.getContactNumber() ?? '';
+    final userName = authStorage.getAuthData()?.data?.user?.name ??
+        item.userName?.trim() ??
+        '';
+
+    // Show loading and call the API
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final repo = sl<ShareCabRepository>();
+      final response = await repo.shareCabToFamily(
+        empId: empId,
+        tripId: tripId,
+        name: userName,
+        userMobileNo: userMobileNo,
+        recepientMobileNo: phone,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
+
+      if (response.isSuccess == true) {
+        final url = response.result?.firstOrNull?.urlWithPara;
+        _showShareCabSuccessDialog(
+          message: response.message ?? 'Cab location shared successfully.',
+          url: url,
+        );
+      } else {
+        _showShareCabErrorDialog(
+          message: response.message ?? 'Failed to share cab location.',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
+      _showShareCabErrorDialog(
+          message: 'Something went wrong. Please try again.');
+    }
+  }
+
+  Future<void> _callDriverIvr(TripHomeItem item) async {
+    final empId = item.empId;
+    final tripId = item.tripId;
+    if (empId == null || empId == 0 || tripId == null || tripId == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Trip details are not available.')),
+      );
+      return;
+    }
+
+    final authStorage = sl<AuthLocalStorage>();
+    final userMobileNo = authStorage.getContactNumber() ?? '';
+
+    // Confirmation dialog before calling
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE8F5EE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.phone, color: Color(0xFF1A6B3C), size: 28),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Call Driver',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'We\'ll connect you to the driver via IVR. Do you want to proceed?',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Color(0xFF555555)),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF444444),
+                      side: const BorderSide(color: Color(0xFFD1D5DB)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                    ),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1A6B3C),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                    ),
+                    child: const Text('Call',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final repo = sl<CallDriverIvrRepository>();
+      final response = await repo.callToDriverIvr(
+        empId: empId,
+        userMobileNo: userMobileNo,
+        tripId: tripId,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
+
+      if (response.isSuccess == true) {
+        final driverPhone =
+            response.result?.firstOrNull?.driverMobileNo?.trim() ?? '';
+        if (driverPhone.isNotEmpty) {
+          final uri = Uri(scheme: 'tel', path: driverPhone);
+          if (await canLaunchUrl(uri)) {
+            launchUrl(uri);
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(response.message ?? 'IVR call initiated.'),
+            ),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text(response.message ?? 'Failed to connect. Please retry.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Something went wrong. Please try again.')),
+      );
+    }
+  }
+
+  void _showShareCabSuccessDialog({required String message, String? url}) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F5EE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check_circle_outline,
+                  color: Color(0xFF1A6B3C), size: 32),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Shared Successfully',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF555555)),
+            ),
+            if (url != null && url.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final uri = Uri.tryParse(url);
+                  if (uri != null && await canLaunchUrl(uri)) {
+                    launchUrl(uri, mode: LaunchMode.externalApplication);
+                  }
+                  Clipboard.setData(ClipboardData(text: url));
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('Link copied to clipboard')),
+                  );
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.link,
+                          size: 16, color: Color(0xFF2563EB)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          url,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF2563EB),
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1A6B3C),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+                child: const Text('Done',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showShareCabErrorDialog({required String message}) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF0EE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_outline,
+                  color: Color(0xFFB40D1A), size: 32),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Share Failed',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF555555)),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFB40D1A),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+                child: const Text('Close',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -564,7 +1010,7 @@ class _WelcomeState extends State<_WelcomeView> {
             ),
             const SizedBox(width: 10),
             _buildTripCircleAction(
-              onTap: _openTripGroupChat,
+              onTap: () => _openTripGroupChat(item),
               icon: Icons.chat_bubble_outline,
               iconColor: accentColor,
               backgroundColor: tagBgColor,
@@ -779,7 +1225,6 @@ class _WelcomeState extends State<_WelcomeView> {
 
   List<_TripHistoryItem> _filteredItems(List<_TripHistoryItem> all) {
     return all.where((item) {
-      if (item.status == _TripHistoryStatus.expired) return false;
       if (!_tripHistoryStatusAll &&
           !_tripHistoryStatusFilters.contains(item.status)) {
         return false;
@@ -880,14 +1325,35 @@ class _WelcomeState extends State<_WelcomeView> {
       status = _TripHistoryStatus.completed;
     } else {
       final s = (api.tripStatus ?? '').trim().toLowerCase();
-      if (s.contains('expir') || s == 'printed') {
+      if (s.contains('expir')) {
         status = _TripHistoryStatus.expired;
-      } else if (s.contains('start') && api.isBoarded) {
+      } else if (s == 'end' || s.contains('complet')) {
         status = _TripHistoryStatus.completed;
+      } else if (s.contains('start') ||
+          s.contains('progress') ||
+          api.isBoarded) {
+        // Trip in motion: started by driver or this passenger is already boarded
+        status = _TripHistoryStatus.inProgress;
+      } else if (s.isEmpty ||
+          s == 'created' ||
+          s == 'printed' ||
+          s == 'planned' ||
+          s.contains('plan') ||
+          s.contains('schedul')) {
+        // Yet to start (Created / Printed / Planned / Scheduled / unknown)
+        status = _TripHistoryStatus.upcoming;
       } else {
-        status = _TripHistoryStatus.expired;
+        // Unknown status — keep it visible as upcoming so the user can still
+        // see the trip and decide.
+        status = _TripHistoryStatus.upcoming;
       }
     }
+
+    // Allow the user to open the trip summary for any trip that has a real
+    // route (i.e. not no-show / cancelled).
+    final canNavigate = status == _TripHistoryStatus.completed ||
+        status == _TripHistoryStatus.inProgress ||
+        status == _TripHistoryStatus.upcoming;
 
     return _TripHistoryItem(
       cardId: 'api_${api.tripId ?? index}_${api.empId ?? index}',
@@ -898,20 +1364,20 @@ class _WelcomeState extends State<_WelcomeView> {
       status: status,
       apiItem: api,
       rating: api.rating,
-      navigateOnTap: status == _TripHistoryStatus.completed,
+      navigateOnTap: canNavigate,
     );
   }
 
   Widget _buildTripHistorySection() {
     return BlocBuilder<TripHistoryBloc, TripHistoryState>(
       builder: (context, historyState) {
+        Widget body;
+
         if (historyState is TripHistoryInitial ||
             historyState is TripHistoryLoading) {
-          return _buildSectionLoader();
-        }
-
-        if (historyState is TripHistoryUnauthorized) {
-          return _buildSchedulesEmptyState(
+          body = _buildSectionLoader();
+        } else if (historyState is TripHistoryUnauthorized) {
+          body = _buildSchedulesEmptyState(
             title: 'Session expired',
             subtitle: historyState.message,
             onRetry: () =>
@@ -921,11 +1387,9 @@ class _WelcomeState extends State<_WelcomeView> {
             ),
             retryLabel: 'Sign in again',
           );
-        }
-
-        if (historyState is TripHistoryError) {
+        } else if (historyState is TripHistoryError) {
           final rosterState = context.read<RosterBloc>().state;
-          return _buildSchedulesEmptyState(
+          body = _buildSchedulesEmptyState(
             title: 'Could not load trip history',
             subtitle: historyState.message,
             onRetry: rosterState is RosterLoaded
@@ -936,19 +1400,33 @@ class _WelcomeState extends State<_WelcomeView> {
                 : null,
             retryLabel: 'Retry',
           );
+        } else {
+          final apiItems = historyState is TripHistoryLoaded
+              ? historyState.items
+              : <TripHistoryItem>[];
+
+          final allUiItems = apiItems
+              .asMap()
+              .entries
+              .map((e) => _toUiItem(e.value, e.key))
+              .toList();
+
+          body = _buildTripHistoryList(allUiItems);
         }
 
-        final apiItems = historyState is TripHistoryLoaded
-            ? historyState.items
-            : <TripHistoryItem>[];
+        final isScrollable = historyState is TripHistoryLoaded ||
+            historyState is TripHistoryInitial ||
+            historyState is TripHistoryLoading;
 
-        final allUiItems = apiItems
-            .asMap()
-            .entries
-            .map((e) => _toUiItem(e.value, e.key))
-            .toList();
-
-        return _buildTripHistoryList(allUiItems);
+        return RefreshIndicator(
+          onRefresh: () async => _forceFetchTripHistory(),
+          child: isScrollable
+              ? body
+              : SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: body,
+                ),
+        );
       },
     );
   }
@@ -979,54 +1457,57 @@ class _WelcomeState extends State<_WelcomeView> {
           !_tripHistoryRatingAll ||
           _tripHistoryFromDate != null ||
           _tripHistoryToDate != null;
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(32, 48, 32, 100),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                hasActiveFilters
-                    ? Icons.filter_list_off_outlined
-                    : Icons.history_toggle_off_outlined,
-                size: 48,
-                color: _tripHistoryPrimaryGreen.withOpacity(0.5),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                hasActiveFilters
-                    ? 'No trips match your filters'
-                    : 'No trip history found',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF333333),
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(32, 48, 32, 100),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  hasActiveFilters
+                      ? Icons.filter_list_off_outlined
+                      : Icons.history_toggle_off_outlined,
+                  size: 48,
+                  color: _tripHistoryPrimaryGreen.withValues(alpha: 0.5),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                hasActiveFilters
-                    ? 'Try adjusting or resetting the filters.'
-                    : 'No trips found for the selected date range.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-              ),
-              if (hasActiveFilters) ...[
-                const SizedBox(height: 20),
-                OutlinedButton(
-                  onPressed: () => _openTripHistoryFilters(allItems),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _tripHistoryPrimaryGreen,
-                    side: const BorderSide(color: Color(0xFFB8DEC9)),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
-                    ),
+                const SizedBox(height: 16),
+                Text(
+                  hasActiveFilters
+                      ? 'No trips match your filters'
+                      : 'No trip history found',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF333333),
                   ),
-                  child: const Text('Change filters'),
                 ),
+                const SizedBox(height: 8),
+                Text(
+                  hasActiveFilters
+                      ? 'Try adjusting or resetting the filters.'
+                      : 'No trips found for the selected date range.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                ),
+                if (hasActiveFilters) ...[
+                  const SizedBox(height: 20),
+                  OutlinedButton(
+                    onPressed: () => _openTripHistoryFilters(allItems),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _tripHistoryPrimaryGreen,
+                      side: const BorderSide(color: Color(0xFFB8DEC9)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                    ),
+                    child: const Text('Change filters'),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       );
@@ -1053,6 +1534,9 @@ class _WelcomeState extends State<_WelcomeView> {
           accentLogin: loginGreen,
           accentLogout: logoutMaroon,
           completedBlue: completedBlue,
+          apiItem: item.apiItem,
+          tripDate: item.tripDate,
+          rating: item.rating,
           onTap: item.navigateOnTap
               ? () {
                   Navigator.push(
@@ -1069,6 +1553,7 @@ class _WelcomeState extends State<_WelcomeView> {
     }
 
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1085,6 +1570,9 @@ class _WelcomeState extends State<_WelcomeView> {
       required Color accentLogin,
       required Color accentLogout,
       required Color completedBlue,
+      required TripHistoryItem apiItem,
+      required DateTime tripDate,
+      int? rating,
       required void Function()? onTap}) {
     final accentColor = isLogin ? accentLogin : accentLogout;
     final Color tagBgColor =
@@ -1102,6 +1590,16 @@ class _WelcomeState extends State<_WelcomeView> {
         statusLabel = 'Trip Completed';
         statusIcon = Icons.check_circle_outline;
         statusColor = completedBlue;
+        break;
+      case _TripHistoryStatus.inProgress:
+        statusLabel = 'In Progress';
+        statusIcon = Icons.directions_car_filled_outlined;
+        statusColor = const Color(0xFFEA580C); // amber-orange
+        break;
+      case _TripHistoryStatus.upcoming:
+        statusLabel = 'Upcoming';
+        statusIcon = Icons.event_available_outlined;
+        statusColor = _tripHistoryPrimaryGreen;
         break;
       case _TripHistoryStatus.noShow:
         statusLabel = 'No Show';
@@ -1221,17 +1719,13 @@ class _WelcomeState extends State<_WelcomeView> {
               if (isExpanded) ...[
                 const SizedBox(height: 14),
                 Container(height: 1, color: const Color(0xFFE8E8E8)),
-                const SizedBox(height: 12),
-                const Padding(
-                  padding: EdgeInsets.only(left: 4),
-                  child: Text(
-                    'Route and timing details will appear here when connected to your trip data.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xff596064),
-                      height: 1.35,
-                    ),
-                  ),
+                const SizedBox(height: 14),
+                _buildTripHistoryDetails(
+                  apiItem: apiItem,
+                  isLogin: isLogin,
+                  tripDate: tripDate,
+                  rating: rating,
+                  accentColor: accentColor,
                 ),
               ],
             ],
@@ -1242,6 +1736,237 @@ class _WelcomeState extends State<_WelcomeView> {
   }
 
   static const Color _tripHistoryPrimaryGreen = Color(0xFF1A6B3C);
+
+  /// Detailed body shown when a Trip History card is expanded. Renders every
+  /// field we have from the API so the user never sees a stale placeholder.
+  Widget _buildTripHistoryDetails({
+    required TripHistoryItem apiItem,
+    required bool isLogin,
+    required DateTime tripDate,
+    required int? rating,
+    required Color accentColor,
+  }) {
+    String orDash(String? raw) {
+      final s = raw?.trim();
+      return (s == null || s.isEmpty) ? '—' : s;
+    }
+
+    final pickupAddr = orDash(apiItem.pickupAddress);
+    final officeAddr = orDash(apiItem.officeAddress);
+    final fromLabel = isLogin ? 'Pickup' : 'Office';
+    final toLabel = isLogin ? 'Office' : 'Drop';
+    final fromAddress = isLogin ? pickupAddr : officeAddr;
+    final toAddress = isLogin ? officeAddr : pickupAddr;
+
+    final shiftTime =
+        _formatShiftTime(apiItem.shiftTime) ?? orDash(apiItem.shiftTime);
+    final pickTime =
+        _formatShiftTime(apiItem.pickTime) ?? orDash(apiItem.pickTime);
+    final vehicle = orDash(apiItem.vehicleRegistrationNo);
+    final tripTypeLabel = isLogin ? 'Login (Pickup)' : 'Logout (Drop)';
+
+    TripHistoryPassenger? selfPax;
+    final passengers = apiItem.passengers ?? const <TripHistoryPassenger>[];
+    if (apiItem.empId != null) {
+      for (final p in passengers) {
+        if (p.empId == apiItem.empId) {
+          selfPax = p;
+          break;
+        }
+      }
+    }
+    final paxOrder = selfPax?.paxOrder;
+    final totalPax = passengers.length;
+    final String sequence;
+    if (paxOrder != null && totalPax > 0) {
+      sequence = 'P$paxOrder / $totalPax';
+    } else if (paxOrder != null) {
+      sequence = 'P$paxOrder';
+    } else if (totalPax > 0) {
+      sequence = '$totalPax pax';
+    } else {
+      sequence = '—';
+    }
+
+    final dateLabel =
+        '${tripDate.day.toString().padLeft(2, '0')}/${tripDate.month.toString().padLeft(2, '0')}/${tripDate.year}';
+    final reason = (apiItem.noShowOrCancelled ?? '').trim();
+    final statusLabel = orDash(apiItem.tripStatus);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _tripHistoryRouteRow(
+          accentColor: accentColor,
+          fromLabel: fromLabel,
+          fromAddress: fromAddress,
+          toLabel: toLabel,
+          toAddress: toAddress,
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _tripHistoryDetailChip(Icons.event_outlined, 'Date', dateLabel),
+            _tripHistoryDetailChip(Icons.alarm_on_outlined, 'Pickup', pickTime),
+            _tripHistoryDetailChip(Icons.schedule_outlined, 'Shift', shiftTime),
+            _tripHistoryDetailChip(
+                Icons.directions_car_outlined, 'Vehicle', vehicle),
+            _tripHistoryDetailChip(
+                Icons.format_list_numbered, 'Sequence', sequence),
+            _tripHistoryDetailChip(
+                Icons.swap_vert_circle_outlined, 'Type', tripTypeLabel),
+            _tripHistoryDetailChip(Icons.info_outline, 'Status', statusLabel),
+            if (rating != null)
+              _tripHistoryDetailChip(Icons.star_rounded, 'Rating', '$rating/5'),
+          ],
+        ),
+        if (reason.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF5F5),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFEE2E2)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    size: 16, color: Color(0xFFDC2626)),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    reason,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFB91C1C),
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _tripHistoryRouteRow({
+    required Color accentColor,
+    required String fromLabel,
+    required String fromAddress,
+    required String toLabel,
+    required String toAddress,
+  }) {
+    Widget node(Color color, IconData icon) => Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 14, color: color),
+        );
+
+    Widget line() => Container(
+          width: 2,
+          height: 22,
+          margin: const EdgeInsets.symmetric(vertical: 2),
+          color: const Color(0xFFE5E7EB),
+        );
+
+    Widget block(String label, String address, Widget leading) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          leading,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF9CA3AF),
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  address,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF1F2937),
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        block(fromLabel, fromAddress,
+            node(accentColor, Icons.radio_button_checked)),
+        Padding(
+          padding: const EdgeInsets.only(left: 10),
+          child: line(),
+        ),
+        block(toLabel, toAddress,
+            node(const Color(0xFF2563EB), Icons.location_on)),
+      ],
+    );
+  }
+
+  Widget _tripHistoryDetailChip(IconData icon, String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: const Color(0xFF4B5563)),
+          const SizedBox(width: 6),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              fontSize: 11.5,
+              color: Color(0xFF6B7280),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 180),
+            child: Text(
+              value,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: Color(0xFF111827),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildTripHistoryAppBar() {
     return Material(
@@ -1394,21 +2119,31 @@ class _WelcomeState extends State<_WelcomeView> {
                           ),
                         ),
                       ),
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.2),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.5),
-                            width: 1,
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => NotificationsScreen(),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.2),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.5),
+                              width: 1,
+                            ),
                           ),
-                        ),
-                        child: const Icon(
-                          Icons.notification_add_outlined,
-                          color: Colors.white,
-                          size: 20,
+                          child: const Icon(
+                            Icons.notification_add_outlined,
+                            color: Colors.white,
+                            size: 20,
+                          ),
                         ),
                       ),
                     ],
@@ -2565,6 +3300,9 @@ class _WelcomeState extends State<_WelcomeView> {
         : null;
     final ivr = item.userAppIvrNumber?.trim();
 
+    final bool isPrinted =
+        (item.tripStatusName ?? '').trim().toLowerCase() == 'printed';
+
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
     final Color trackBg = isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
     final Color trackFg = isScheduled ? const Color(0xFFB0B0B0) : accentColor;
@@ -2864,7 +3602,47 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ),
                 ),
-              ] else if (!isScheduled) ...[
+              ] else if (!isScheduled && isPrinted) ...[
+                // ─── Printed: Planned Pickup only ────────────────────────
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFFE8E8E8)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Planned Pickup',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Color(0xff6B7280),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              plannedPickup,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1A1A1A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ] else if (!isScheduled && !isPrinted) ...[
                 // ─── Non-completed: Planned Pickup + Vehicle Info ─────────
                 const SizedBox(height: 16),
                 Row(
@@ -2943,7 +3721,7 @@ class _WelcomeState extends State<_WelcomeView> {
                                 !isFullyDeboarded)
                               InkWell(
                                 splashColor: Colors.transparent,
-                                onTap: () {},
+                                onTap: () => _callDriverIvr(item),
                                 child: Container(
                                   width: 36,
                                   height: 36,
@@ -3017,6 +3795,30 @@ class _WelcomeState extends State<_WelcomeView> {
               const SizedBox(height: 14),
               if (isCompleted)
                 const SizedBox.shrink()
+              else if (isPrinted)
+                Row(
+                  children: [
+                    InkWell(
+                      splashColor: Colors.transparent,
+                      onTap: () =>
+                          _showCancelActiveTripDialog(context, item: item),
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0x33BA1A1A)),
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Color(0xFFBA1A1A),
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                )
               else if (showBoardDeboardActions)
                 _buildTripStartedExpandedActions(
                   item: item,
@@ -3026,7 +3828,7 @@ class _WelcomeState extends State<_WelcomeView> {
                   trackFg: trackFg,
                   trackVehicleAction: trackVehicleAction,
                 )
-              else if (!isFullyDeboarded)
+              else if (!isFullyDeboarded && !isPrinted)
                 Row(
                   children: [
                     if (!isScheduled)
@@ -3088,7 +3890,7 @@ class _WelcomeState extends State<_WelcomeView> {
             ] else if (isCompleted) ...[
               // ─── Collapsed: inline "Trip Completed" (no extra chip border) ─
               const SizedBox(height: 8),
-            ] else if (!isScheduled && !isFullyDeboarded) ...[
+            ] else if (!isScheduled && !isFullyDeboarded && !isPrinted) ...[
               // ─── Collapsed: Boarding OTP + Track Vehicle ─
               const SizedBox(height: 12),
               Container(height: 1, color: const Color(0xFFE8E8E8)),
@@ -4391,14 +5193,18 @@ class AppDrawer extends StatelessWidget {
     );
   }
 
-  void _showRateAppDialog(BuildContext context) {
+  Future<void> _showRateAppDialog(BuildContext context) async {
     Navigator.pop(context);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      builder: (_) => const _RateAppDialog(),
-    );
+    try {
+      final inAppReview = InAppReview.instance;
+      if (await inAppReview.isAvailable()) {
+        await inAppReview.requestReview();
+      } else {
+        await inAppReview.openStoreListing();
+      }
+    } catch (_) {
+      // Plugin not available on this build/device — fail silently.
+    }
   }
 
   void _showLogoutDialog(BuildContext context) {
@@ -4585,11 +5391,15 @@ class AppDrawer extends StatelessWidget {
                 icon: Icons.people_outline,
                 label: 'ADHOC Request',
                 onTap: () {
+                  final rosterState = context.read<RosterBloc>().state;
+                  final empId = rosterState is RosterLoaded
+                      ? rosterState.details.empId
+                      : 0;
                   Navigator.pop(context);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const AdhocRequestScreen(),
+                      builder: (_) => AdhocRequestScreen(empId: empId),
                     ),
                   );
                 },
@@ -4626,11 +5436,11 @@ class AppDrawer extends StatelessWidget {
                 label: 'Call Help Desk',
                 onTap: () => _showHelpDeskCallDialog(context),
               ),
-              _DrawerItem(
-                icon: Icons.directions_bus_outlined,
-                label: 'Contact Travel Desk',
-                onTap: () => Navigator.pop(context),
-              ),
+              // _DrawerItem(
+              //   icon: Icons.directions_bus_outlined,
+              //   label: 'Contact Travel Desk',
+              //   onTap: () => Navigator.pop(context),
+              // ),
               _DrawerItem(
                 icon: Icons.directions_bus_outlined,
                 label: 'Raise Complaint',
@@ -4648,28 +5458,28 @@ class AppDrawer extends StatelessWidget {
                   );
                 },
               ),
-              _DrawerItem(
-                icon: Icons.quiz_outlined,
-                label: "FAQ's",
-                onTap: () => Navigator.pop(context),
-              ),
+              // _DrawerItem(
+              //   icon: Icons.quiz_outlined,
+              //   label: "FAQ's",
+              //   onTap: () => Navigator.pop(context),
+              // ),
 
               const SizedBox(height: 4),
 
               // ── APP section ──────────────────────────────────────────
-              _SectionLabel('APP'),
-              _DrawerItem(
-                icon: Icons.feedback_outlined,
-                label: 'App Feedback',
-                onTap: () => Navigator.pop(context),
-              ),
-              _DrawerItem(
-                icon: Icons.star_outline,
-                label: 'Rate This App',
-                onTap: () => _showRateAppDialog(context),
-              ),
+              // _SectionLabel('APP'),
+              // _DrawerItem(
+              //   icon: Icons.feedback_outlined,
+              //   label: 'App Feedback',
+              //   onTap: () => Navigator.pop(context),
+              // ),
+              // _DrawerItem(
+              //   icon: Icons.star_outline,
+              //   label: 'Rate This App',
+              //   onTap: () => _showRateAppDialog(context),
+              // ),
 
-              const SizedBox(height: 4),
+              // const SizedBox(height: 4),
 
               // ── ACCOUNT section ──────────────────────────────────────────────
               _SectionLabel('ACCOUNT'),
@@ -4760,9 +5570,8 @@ class _DrawerHeader extends StatelessWidget {
               },
               child: BlocBuilder<ProfileBloc, ProfileState>(
                 builder: (context, state) {
-                  final fullName = state is ProfileLoaded
-                      ? state.profile.fullName
-                      : '';
+                  final fullName =
+                      state is ProfileLoaded ? state.profile.fullName : '';
                   final empId = state is ProfileLoaded
                       ? (state.profile.empId?.toString() ?? '')
                       : '';
@@ -5122,7 +5931,8 @@ class _RateAppDialogState extends State<_RateAppDialog> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: (_rating == 0 || _isSubmitting) ? null : _submitFeedback,
+                onPressed:
+                    (_rating == 0 || _isSubmitting) ? null : _submitFeedback,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _primaryGreen,
                   disabledBackgroundColor: const Color(0xFFB0C4B8),
@@ -5549,6 +6359,38 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
             }),
           ),
           _checkRow(
+            label: 'In Progress',
+            count: _statusCount(_TripHistoryStatus.inProgress),
+            checked: !_statusAll &&
+                _statuses.contains(_TripHistoryStatus.inProgress),
+            enabled: _statusCount(_TripHistoryStatus.inProgress) > 0,
+            onTap: () => setState(() {
+              _statusAll = false;
+              if (_statuses.contains(_TripHistoryStatus.inProgress)) {
+                _statuses.remove(_TripHistoryStatus.inProgress);
+                if (_statuses.isEmpty) _statusAll = true;
+              } else {
+                _statuses.add(_TripHistoryStatus.inProgress);
+              }
+            }),
+          ),
+          _checkRow(
+            label: 'Upcoming',
+            count: _statusCount(_TripHistoryStatus.upcoming),
+            checked:
+                !_statusAll && _statuses.contains(_TripHistoryStatus.upcoming),
+            enabled: _statusCount(_TripHistoryStatus.upcoming) > 0,
+            onTap: () => setState(() {
+              _statusAll = false;
+              if (_statuses.contains(_TripHistoryStatus.upcoming)) {
+                _statuses.remove(_TripHistoryStatus.upcoming);
+                if (_statuses.isEmpty) _statusAll = true;
+              } else {
+                _statuses.add(_TripHistoryStatus.upcoming);
+              }
+            }),
+          ),
+          _checkRow(
             label: 'No Show',
             count: _statusCount(_TripHistoryStatus.noShow),
             checked:
@@ -5931,8 +6773,7 @@ class _HelpDeskCallDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: const Color(0xFFF3F4F6),
                 borderRadius: BorderRadius.circular(12),
