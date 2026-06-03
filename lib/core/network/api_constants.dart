@@ -13,4 +13,8 @@ abstract final class ApiConstants {
 
   /// SignalR chat hub — negotiate endpoint and WebSocket base.
   static const String chatHubUrl = 'https://dev-core.commutr.in/hubs/chat';
+
+  /// SignalR route-tracking hub for live cab GPS updates.
+  static const String routeTrackingHubUrl =
+      'https://dev-core.commutr.in/hubs/route-tracking';
 }

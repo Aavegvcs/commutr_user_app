@@ -4,6 +4,14 @@
 <dict>
 	<key>NSContactsUsageDescription</key>
 	<string>Used to select a contact to share your cab location with.</string>
+	<!-- Let Firebase Messaging handle APNS registration automatically -->
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<false/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

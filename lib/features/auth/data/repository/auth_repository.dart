@@ -1,4 +1,9 @@
+import 'dart:io';
+
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:commutr_main/core/error/exceptions.dart';
 import 'package:commutr_main/core/error/failures.dart';
 import 'package:commutr_main/core/network/api_client.dart';
@@ -69,7 +74,40 @@ class AuthRepository {
   Future<({OtpVerifyResponse? data, Failure? failure})> verifyOtp(
       String contact, String otp) async {
     const url = '/Auth/otp/verify';
-    final payload = {'contactNumber': contact, 'otp': otp};
+
+    final fcmToken = await FirebaseMessaging.instance.getToken() ?? '';
+    final packageInfo = await PackageInfo.fromPlatform();
+    final deviceInfo = DeviceInfoPlugin();
+
+    final int platform;
+    final String modelName;
+    final String modelVersion;
+
+    if (Platform.isAndroid) {
+      platform = 1;
+      final info = await deviceInfo.androidInfo;
+      modelName = info.model;
+      modelVersion = info.version.release;
+    } else if (Platform.isIOS) {
+      platform = 2;
+      final info = await deviceInfo.iosInfo;
+      modelName = info.utsname.machine;
+      modelVersion = info.systemVersion;
+    } else {
+      platform = 0;
+      modelName = '';
+      modelVersion = '';
+    }
+
+    final payload = {
+      'contactNumber': contact,
+      'otp': otp,
+      'fcmToken': fcmToken,
+      'platform': platform,
+      'modelName': modelName,
+      'appVersion': packageInfo.version,
+      'modelVersion': modelVersion,
+    };
     debugPrint('[AuthRepository] verifyOtp url: $url');
     debugPrint('[AuthRepository] verifyOtp payload: $payload');
     try {

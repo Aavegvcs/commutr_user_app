@@ -1,5 +1,151 @@
 import 'dart:convert';
 
+/// Wraps `GET /Tracking/gps-route?DsId=<tripId>`.
+class GpsRouteResponse {
+  final int? dsId;
+  final bool isTripFound;
+  final String? trackingMode;
+  final String? plannedRoutePolyline;
+  final String? actualRoutePolyline;
+  final GpsPoint? latestGps;
+
+  const GpsRouteResponse({
+    this.dsId,
+    this.isTripFound = false,
+    this.trackingMode,
+    this.plannedRoutePolyline,
+    this.actualRoutePolyline,
+    this.latestGps,
+  });
+
+  factory GpsRouteResponse.fromJson(Map<String, dynamic> json) {
+    return GpsRouteResponse(
+      dsId: (json['dsId'] as num?)?.toInt(),
+      isTripFound: json['isTripFound'] == true,
+      trackingMode: json['trackingMode']?.toString(),
+      plannedRoutePolyline: json['plannedRoutePolyline']?.toString(),
+      actualRoutePolyline: json['actualRoutePolyline']?.toString(),
+      latestGps: json['latestGps'] is Map<String, dynamic>
+          ? GpsPoint.fromJson(json['latestGps'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+}
+
+class GpsPoint {
+  final double? latitude;
+  final double? longitude;
+  final String? tripStatusName;
+  final String? gpsTime;
+
+  const GpsPoint({
+    this.latitude,
+    this.longitude,
+    this.tripStatusName,
+    this.gpsTime,
+  });
+
+  factory GpsPoint.fromJson(Map<String, dynamic> json) {
+    double? readDouble(Object? v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    return GpsPoint(
+      latitude: readDouble(json['latitude']),
+      longitude: readDouble(json['longitude']),
+      tripStatusName: json['tripStatusName']?.toString(),
+      gpsTime: json['gpsTime']?.toString(),
+    );
+  }
+}
+
+/// Wraps `POST /Tracking/status?DsId=<tripId>`.
+class TrackingStatusResponse {
+  final int? dsId;
+  final bool isTripFound;
+  final String? trackingMode;
+  final bool shouldUseSignalR;
+  final bool shouldUsePolyline;
+  final double? latestLat;
+  final double? latestLng;
+  final String? driverName;
+  final String? driverMobileNo;
+  final String? vehicleNo;
+  final String? trackingMessage;
+
+  const TrackingStatusResponse({
+    this.dsId,
+    this.isTripFound = false,
+    this.trackingMode,
+    this.shouldUseSignalR = false,
+    this.shouldUsePolyline = false,
+    this.latestLat,
+    this.latestLng,
+    this.driverName,
+    this.driverMobileNo,
+    this.vehicleNo,
+    this.trackingMessage,
+  });
+
+  bool get hasLocation =>
+      latestLat != null &&
+      latestLng != null &&
+      (latestLat != 0 || latestLng != 0);
+
+  TrackingStatusResponse withLocation({
+    required double lat,
+    required double lng,
+  }) {
+    return TrackingStatusResponse(
+      dsId: dsId,
+      isTripFound: isTripFound,
+      trackingMode: trackingMode,
+      shouldUseSignalR: shouldUseSignalR,
+      shouldUsePolyline: shouldUsePolyline,
+      latestLat: lat,
+      latestLng: lng,
+      driverName: driverName,
+      driverMobileNo: driverMobileNo,
+      vehicleNo: vehicleNo,
+      trackingMessage: trackingMessage,
+    );
+  }
+
+  factory TrackingStatusResponse.fromJson(Map<String, dynamic> json) {
+    double? readDouble(Object? v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    bool readBool(Object? v) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final lower = v.toLowerCase();
+        return lower == 'true' || lower == '1';
+      }
+      return false;
+    }
+
+    return TrackingStatusResponse(
+      dsId: (json['dsId'] as num?)?.toInt(),
+      isTripFound: readBool(json['isTripFound']),
+      trackingMode: json['trackingMode']?.toString(),
+      shouldUseSignalR: readBool(json['shouldUseSignalR']),
+      shouldUsePolyline: readBool(json['shouldUsePolyline']),
+      latestLat: readDouble(json['latestLat']),
+      latestLng: readDouble(json['latestLng']),
+      driverName: json['driverName']?.toString(),
+      driverMobileNo: json['driverMobileNo']?.toString(),
+      vehicleNo: json['vehicleNo']?.toString(),
+      trackingMessage: json['trackingMessage']?.toString(),
+    );
+  }
+}
+
 /// Wraps `GET /UserApp/GetUserCabTracking`.
 class UserCabTrackingResponse {
   final int? errorCode;

@@ -64,3 +64,18 @@ class ChatMarkRead extends ChatEvent {
   @override
   List<Object?> get props => [tripId, senderEmpId, recipientEmpId];
 }
+
+class ChatRefreshMessages extends ChatEvent {
+  final int tripId;
+  final int myEmpId;
+  final int otherEmpId;
+
+  const ChatRefreshMessages({
+    required this.tripId,
+    required this.myEmpId,
+    required this.otherEmpId,
+  });
+
+  @override
+  List<Object?> get props => [tripId, myEmpId, otherEmpId];
+}

@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'location_data.dart';
+import 'place_autocomplete_screen.dart';
 
 
 class PinMapScreen extends StatefulWidget {
@@ -248,6 +249,21 @@ class _PinMapScreenState extends State<PinMapScreen>
     });
   }
 
+  Future<void> _openPlaceSearch() async {
+    final result = await Navigator.push<PlaceResult>(
+      context,
+      MaterialPageRoute(builder: (_) => const PlaceAutocompleteScreen()),
+    );
+    if (result == null || !mounted) return;
+    final latLng = LatLng(result.lat, result.lng);
+    setState(() {
+      _pinnedLocation = latLng;
+      _isPinned = false;
+      _placePreview = '';
+    });
+    await _applyMapCenter(latLng, move: false);
+  }
+
   Future<void> _confirmLocation() async {
     setState(() => _isLoading = true);
 
@@ -397,34 +413,37 @@ class _PinMapScreenState extends State<PinMapScreen>
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Column(
                 children: [
-                  // Search bar decoration (non-functional, UI only)
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.12),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.search,
-                            color: Color(0xFF1A73E8), size: 20),
-                        const SizedBox(width: 10),
-                        Text(
-                          'Move map to pin a location',
-                          style: TextStyle(
-                            color: Colors.grey.shade500,
-                            fontSize: 14,
+                  // Search bar — tapping opens Google Places autocomplete
+                  GestureDetector(
+                    onTap: _openPlaceSearch,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.12),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.search,
+                              color: Color(0xFF1A73E8), size: 20),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Search for a location',
+                            style: TextStyle(
+                              color: Colors.grey.shade500,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],

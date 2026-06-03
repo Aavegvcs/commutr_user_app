@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/network/api_constants.dart';
 import '../../../core/storage/auth_local_storage.dart';
+import '../../trip_detail/data/model/user_details_roaster_response.dart';
 import '../bloc/chat_bloc.dart';
 import '../bloc/chat_event.dart';
 import '../bloc/chat_state.dart';
@@ -21,6 +22,8 @@ class TripGroupChatScreen extends StatelessWidget {
   final int otherEmpId;
   final String otherName;
   final String participants;
+  final String myName;
+  final List<DrModel> drList;
 
   const TripGroupChatScreen({
     super.key,
@@ -29,6 +32,8 @@ class TripGroupChatScreen extends StatelessWidget {
     required this.otherEmpId,
     required this.otherName,
     required this.participants,
+    this.myName = 'You',
+    this.drList = const [],
   });
 
   @override
@@ -69,6 +74,8 @@ class TripGroupChatScreen extends StatelessWidget {
         otherEmpId: otherEmpId,
         otherName: otherName,
         participants: participants,
+        myName: myName,
+        drList: drList,
         signalR: signalR,
       ),
     );
@@ -81,6 +88,8 @@ class _ChatView extends StatefulWidget {
   final int otherEmpId;
   final String otherName;
   final String participants;
+  final String myName;
+  final List<DrModel> drList;
   final ChatSignalRService signalR;
 
   const _ChatView({
@@ -89,6 +98,8 @@ class _ChatView extends StatefulWidget {
     required this.otherEmpId,
     required this.otherName,
     required this.participants,
+    required this.myName,
+    required this.drList,
     required this.signalR,
   });
 
@@ -132,6 +143,49 @@ class _ChatViewState extends State<_ChatView> {
     _controller.clear();
   }
 
+  bool _isMyMessage(ChatMessage msg) {
+    if (msg.isMine(widget.myEmpId)) return true;
+    final recipientId = msg.recipientEmpId;
+    final senderId = msg.senderEmpId;
+    if (recipientId == widget.myEmpId &&
+        senderId != null &&
+        senderId != widget.myEmpId) {
+      return false;
+    }
+    return false;
+  }
+
+  String _senderDisplayName(ChatMessage msg, bool isMine) {
+    if (isMine) {
+      return 'You';
+    }
+
+    final driver = widget.drList
+        .where((d) => d.empId == msg.senderEmpId)
+        .firstOrNull;
+    if (driver != null && driver.empName.trim().isNotEmpty) {
+      return driver.empName.trim();
+    }
+
+    final senderName = msg.senderName?.trim() ?? '';
+    final myNameNorm = widget.myName.trim().toLowerCase();
+    if (senderName.isNotEmpty &&
+        senderName.toLowerCase() != myNameNorm &&
+        msg.senderEmpId != widget.myEmpId) {
+      return senderName;
+    }
+
+    if (msg.senderEmpId == widget.otherEmpId && widget.otherEmpId != 0) {
+      final other = widget.otherName.trim();
+      if (other.isNotEmpty) return other;
+    }
+
+    if (msg.senderEmpId != null && msg.senderEmpId != 0) {
+      return 'Participant';
+    }
+    return 'Unknown';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -158,7 +212,7 @@ class _ChatViewState extends State<_ChatView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            widget.otherName,
+            'Trip Group Chat',
             style: const TextStyle(
               fontFamily: 'Manrope',
               fontSize: 17,
@@ -217,14 +271,17 @@ class _ChatViewState extends State<_ChatView> {
             itemCount: state.messages.length,
             itemBuilder: (context, index) {
               final msg = state.messages[index];
-              final prev =
-                  index > 0 ? state.messages[index - 1] : null;
+              final prev = index > 0 ? state.messages[index - 1] : null;
+              final isMine = _isMyMessage(msg);
               final showLabel = prev == null ||
+                  _isMyMessage(prev) != isMine ||
                   prev.senderEmpId != msg.senderEmpId;
+              final displayName = _senderDisplayName(msg, isMine);
               return _MessageBubble(
                 message: msg,
-                isMine: msg.isMine(widget.myEmpId),
+                isMine: isMine,
                 showSenderLabel: showLabel,
+                displayName: displayName,
               );
             },
           );
@@ -276,8 +333,7 @@ class _ChatViewState extends State<_ChatView> {
           const SizedBox(width: 8),
           BlocBuilder<ChatBloc, ChatState>(
             builder: (context, state) {
-              final sending =
-                  state is ChatLoaded && state.isSending;
+              final sending = state is ChatLoaded && state.isSending;
               return GestureDetector(
                 onTap: sending ? null : () => _send(context),
                 child: Container(
@@ -316,11 +372,13 @@ class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final bool isMine;
   final bool showSenderLabel;
+  final String displayName;
 
   const _MessageBubble({
     required this.message,
     required this.isMine,
     required this.showSenderLabel,
+    required this.displayName,
   });
 
   @override
@@ -331,16 +389,22 @@ class _MessageBubble extends StatelessWidget {
         crossAxisAlignment:
             isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          if (!isMine && showSenderLabel && message.senderName != null)
+          if (showSenderLabel)
             Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 4),
+              padding: EdgeInsets.only(
+                left: isMine ? 0 : 4,
+                right: isMine ? 4 : 0,
+                bottom: 4,
+              ),
               child: Text(
-                message.senderName!.toUpperCase(),
-                style: const TextStyle(
+                displayName.toUpperCase(),
+                style: TextStyle(
                   fontFamily: 'Manrope',
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF8E8E93),
+                  color: isMine
+                      ? const Color(0xFF1A5C38)
+                      : const Color(0xFF8E8E93),
                   letterSpacing: 0.5,
                 ),
               ),
@@ -358,9 +422,7 @@ class _MessageBubble extends StatelessWidget {
                     vertical: 10,
                   ),
                   decoration: BoxDecoration(
-                    color: isMine
-                        ? const Color(0xFF1A5C38)
-                        : Colors.white,
+                    color: isMine ? const Color(0xFF1A5C38) : Colors.white,
                     borderRadius: BorderRadius.only(
                       topLeft: const Radius.circular(18),
                       topRight: const Radius.circular(18),
@@ -390,9 +452,9 @@ class _MessageBubble extends StatelessWidget {
           ),
           Padding(
             padding: EdgeInsets.only(
-              top: 4,
-              left: isMine ? 0 : 4,
-              right: isMine ? 4 : 0,
+              top: 3,
+              left: isMine ? 0 : 8,
+              right: isMine ? 8 : 0,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -406,12 +468,12 @@ class _MessageBubble extends StatelessWidget {
                   ),
                 ),
                 if (isMine) ...[
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 3),
                   Icon(
                     message.isRead == true
                         ? Icons.done_all_rounded
                         : Icons.done_rounded,
-                    size: 14,
+                    size: 13,
                     color: message.isRead == true
                         ? const Color(0xFF1A5C38)
                         : const Color(0xFF8E8E93),
@@ -426,7 +488,7 @@ class _MessageBubble extends StatelessWidget {
   }
 
   String _formatTime(DateTime? dt) {
-    if (dt == null) return '';
+    if (dt == null) return '--:--';
     final local = dt.toLocal();
     final h = local.hour;
     final m = local.minute.toString().padLeft(2, '0');

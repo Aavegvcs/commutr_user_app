@@ -255,7 +255,13 @@ class _WelcomeState extends State<_WelcomeView> {
     final locCode =
         rosterState is RosterLoaded ? rosterState.details.locCode : null;
     final scheduleDateIso = _scheduleDateIsoForCancel(item, isLogin);
-    final empIdStr = _empIdForCancelPayload(item);
+    // Use the logged-in user's empId from the roster response as the primary
+    // source; fall back to the schedule item's own empId fields.
+    final rosterEmpId =
+        rosterState is RosterLoaded ? rosterState.details.empId : null;
+    final empIdStr = (rosterEmpId != null && rosterEmpId != 0)
+        ? rosterEmpId.toString()
+        : _empIdForCancelPayload(item);
 
     void showBar(String msg) {
       ScaffoldMessenger.of(context)
@@ -484,6 +490,10 @@ class _WelcomeState extends State<_WelcomeView> {
           otherEmpId: 373,
           otherName: otherName,
           participants: participants,
+          myName: userName.isNotEmpty ? userName : 'You',
+          drList: rosterState is RosterLoaded
+              ? rosterState.details.drList
+              : const [],
         ),
       ),
     );
@@ -609,7 +619,8 @@ class _WelcomeState extends State<_WelcomeView> {
                 color: Color(0xFFE8F5EE),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.phone, color: Color(0xFF1A6B3C), size: 28),
+              child:
+                  const Icon(Icons.phone, color: Color(0xFF1A6B3C), size: 28),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -710,7 +721,8 @@ class _WelcomeState extends State<_WelcomeView> {
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Something went wrong. Please try again.')),
+        const SnackBar(
+            content: Text('Something went wrong. Please try again.')),
       );
     }
   }
@@ -894,7 +906,7 @@ class _WelcomeState extends State<_WelcomeView> {
         builder: (_) => BlocProvider(
           create: (_) => sl<CabTrackingBloc>()
             ..add(FetchCabTracking(empId: empId, tripId: tripId)),
-          child: RideTrackingScreen(userName: userName),
+          child: RideTrackingScreen(userName: userName, tripId: tripId, empId: empId),
         ),
       ),
     );
@@ -2266,6 +2278,20 @@ class _WelcomeState extends State<_WelcomeView> {
       }
     }
 
+    // Build a set of (dateIso, isLogin) keys from active trips so that schedule
+    // cards with the same date and trip type are suppressed.
+    final activeTripKeys = <String>{};
+    if (tripState is TripHomeLoaded) {
+      for (final group in tripState.groups) {
+        for (final item in group.data) {
+          final iso = scheduleDateToIso(item.tripDate);
+          if (iso != null && iso.isNotEmpty) {
+            activeTripKeys.add('${iso}_${item.isLogin}');
+          }
+        }
+      }
+    }
+
     if (scheduleLoading) {
       children.add(_buildSectionLoader(compact: true));
     } else if (scheduleState is ScheduleHomeError) {
@@ -2279,7 +2305,10 @@ class _WelcomeState extends State<_WelcomeView> {
         ),
       );
     } else if (scheduleState is ScheduleHomeLoaded) {
-      final scheduleCards = _buildScheduleGroupWidgets(scheduleState.groups);
+      final scheduleCards = _buildScheduleGroupWidgets(
+        scheduleState.groups,
+        activeTripKeys: activeTripKeys,
+      );
       if (scheduleCards.isNotEmpty) {
         children.add(_buildSubsectionLabel('Scheduled'));
         children.addAll(scheduleCards);
@@ -2675,7 +2704,10 @@ class _WelcomeState extends State<_WelcomeView> {
     return '$hour12:$mm $period';
   }
 
-  List<Widget> _buildScheduleGroupWidgets(List<ScheduleDateGroup> groups) {
+  List<Widget> _buildScheduleGroupWidgets(
+    List<ScheduleDateGroup> groups, {
+    Set<String> activeTripKeys = const {},
+  }) {
     final widgets = <Widget>[];
 
     for (final group in groups) {
@@ -2685,30 +2717,42 @@ class _WelcomeState extends State<_WelcomeView> {
       for (var i = 0; i < group.data.length; i++) {
         final item = group.data[i];
         if (item.shouldShowLoginCard) {
-          final key = '${group.dateIn ?? "_"}_login_$i';
-          groupCards.add(_buildScheduleCard(
-            type: 'login',
-            label: 'Login',
-            time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
-            isExpanded: _scheduleExpanded.contains(key),
-            onTap: () => _toggleScheduleExpansion(key),
-            isScheduled: item.isScheduledStatus,
-            item: item,
-          ));
-          groupCards.add(const SizedBox(height: 10));
+          final loginIso = scheduleDateToIso(item.loginScheduleDate);
+          final activeKey = '${loginIso}_true';
+          if (loginIso != null && activeTripKeys.contains(activeKey)) {
+            // Already shown as an active trip — skip this schedule card.
+          } else {
+            final key = '${group.dateIn ?? "_"}_login_$i';
+            groupCards.add(_buildScheduleCard(
+              type: 'login',
+              label: 'Login',
+              time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
+              isExpanded: _scheduleExpanded.contains(key),
+              onTap: () => _toggleScheduleExpansion(key),
+              isScheduled: item.isScheduledStatus,
+              item: item,
+            ));
+            groupCards.add(const SizedBox(height: 10));
+          }
         }
         if (item.shouldShowLogoutCard) {
-          final key = '${group.dateIn ?? "_"}_logout_$i';
-          groupCards.add(_buildScheduleCard(
-            type: 'logout',
-            label: 'Logout',
-            time: _formatShiftTime(item.logoutShiftTime) ?? '--:--',
-            isExpanded: _scheduleExpanded.contains(key),
-            onTap: () => _toggleScheduleExpansion(key),
-            isScheduled: item.isScheduledStatus,
-            item: item,
-          ));
-          groupCards.add(const SizedBox(height: 10));
+          final logoutIso = scheduleDateToIso(item.logoutScheduleDate);
+          final activeKey = '${logoutIso}_false';
+          if (logoutIso != null && activeTripKeys.contains(activeKey)) {
+            // Already shown as an active trip — skip this schedule card.
+          } else {
+            final key = '${group.dateIn ?? "_"}_logout_$i';
+            groupCards.add(_buildScheduleCard(
+              type: 'logout',
+              label: 'Logout',
+              time: _formatShiftTime(item.logoutShiftTime) ?? '--:--',
+              isExpanded: _scheduleExpanded.contains(key),
+              onTap: () => _toggleScheduleExpansion(key),
+              isScheduled: item.isScheduledStatus,
+              item: item,
+            ));
+            groupCards.add(const SizedBox(height: 10));
+          }
         }
       }
 
@@ -3986,15 +4030,7 @@ class _WelcomeState extends State<_WelcomeView> {
   }
 
   Widget _buildSOSButton() {
-    return GestureDetector(
-      onTap: () => _showSOSDialog(),
-      child: Image.asset(
-        'assets/images/sos.png',
-        width: 67,
-        height: 67,
-        fit: BoxFit.cover,
-      ),
-    );
+    return _SosHoldButton(onActivated: _showSOSDialog);
   }
 
   void _showSOSDialog() {
@@ -6856,6 +6892,109 @@ class _HelpDeskCallDialog extends StatelessWidget {
                 ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SosHoldButton extends StatefulWidget {
+  final VoidCallback onActivated;
+
+  const _SosHoldButton({required this.onActivated});
+
+  @override
+  State<_SosHoldButton> createState() => _SosHoldButtonState();
+}
+
+class _SosHoldButtonState extends State<_SosHoldButton>
+    with SingleTickerProviderStateMixin {
+  static const _holdDuration = Duration(seconds: 2);
+
+  late AnimationController _controller;
+  int _lastVibrationStep = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: _holdDuration);
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        _controller.reset();
+        HapticFeedback.heavyImpact();
+        widget.onActivated();
+      }
+    });
+    _controller.addListener(_onProgress);
+  }
+
+  void _onProgress() {
+    // Vibrate on every 10% increment while holding
+    final step = (_controller.value * 1).floor();
+    if (step > _lastVibrationStep) {
+      _lastVibrationStep = step;
+      HapticFeedback.lightImpact();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _start() {
+    _lastVibrationStep = 0;
+    HapticFeedback.mediumImpact();
+    _controller.forward(from: 0);
+  }
+
+  void _cancel() {
+    _controller.stop();
+    _controller.reset();
+    _lastVibrationStep = 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 67.0;
+    const strokeWidth = 4.0;
+    return GestureDetector(
+      onLongPressStart: (_) => _start(),
+      onLongPressEnd: (_) => _cancel(),
+      onLongPressCancel: _cancel,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Image.asset(
+              'assets/images/sos.png',
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+            ),
+            // AnimatedBuilder(
+            //   animation: _controller,
+            //   builder: (_, __) {
+            //     if (_controller.value == 0) return const SizedBox.shrink();
+            //     return SizedBox(
+            //       width: size,
+            //       height: size,
+            //       child: CircularProgressIndicator(
+            //         value: _controller.value,
+            //         strokeWidth: strokeWidth,
+            //         strokeCap: StrokeCap.round,
+            //         backgroundColor: Colors.white.withValues(alpha: 0.3),
+            //         valueColor: const AlwaysStoppedAnimation<Color>(
+            //           Color(0xFFB40D1A),
+            //         ),
+            //       ),
+            //     );
+            //   },
+            // ),
           ],
         ),
       ),

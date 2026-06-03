@@ -317,6 +317,7 @@ class _SelectOfficeViewState extends State<_SelectOfficeView> {
                           toDate: widget.toDate,
                           weekOffs: widget.weekOffs,
                           flowArgs: widget.flowArgs,
+                          drList: state.details.drList,
                         ),
                       ),
                     );

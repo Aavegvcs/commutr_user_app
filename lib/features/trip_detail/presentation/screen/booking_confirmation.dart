@@ -8,10 +8,18 @@ class BookingConfirmedScreen extends StatefulWidget {
   /// Message from `UpdateSchedules` API (optional).
   final String? successMessage;
 
+  /// The selected date string (e.g. "2026-06-01").
+  final String? selectedDate;
+
+  /// The selected time string (e.g. "09:00 AM").
+  final String? selectedTime;
+
   const BookingConfirmedScreen({
     super.key,
     this.isUpdate = false,
     this.successMessage,
+    this.selectedDate,
+    this.selectedTime,
   });
 
   @override
@@ -58,6 +66,36 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  String _formatAmPm(String raw) {
+    final trimmed = raw.trim();
+    // Already has AM/PM
+    if (trimmed.toUpperCase().contains('AM') ||
+        trimmed.toUpperCase().contains('PM')) {
+      return trimmed;
+    }
+    // Parse HH:mm or HH:mm:ss
+    final parts = trimmed.split(':');
+    if (parts.isEmpty) return trimmed;
+    final hour = int.tryParse(parts[0]);
+    final minute = parts.length > 1 ? int.tryParse(parts[1]) : 0;
+    if (hour == null || minute == null) return trimmed;
+    final period = hour < 12 ? 'AM' : 'PM';
+    final h = hour % 12 == 0 ? 12 : hour % 12;
+    return '${h.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')} $period';
+  }
+
+  String _buildSubtitle() {
+    final date = widget.selectedDate ?? '';
+    final rawTime = widget.selectedTime ?? '';
+    final time = rawTime.isNotEmpty ? _formatAmPm(rawTime) : '';
+    if (date.isNotEmpty && time.isNotEmpty) {
+      return 'Roster scheduled successfully for $date at $time';
+    }
+    return widget.isUpdate
+        ? 'Your ride schedule has\nbeen successfully updated.'
+        : 'Your ride schedule has\nbeen successfully booked.';
   }
 
   @override
@@ -146,11 +184,7 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      widget.successMessage?.isNotEmpty == true
-                          ? widget.successMessage!
-                          : widget.isUpdate
-                              ? 'Your ride schedule has\nbeen successfully updated.'
-                              : 'Your ride schedule has\nbeen successfully booked.',
+                      _buildSubtitle(),
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 15,
@@ -190,7 +224,8 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                           builder: (context) => const Welcome(),
                         ),
                         (route) => false,
-                      );                    },
+                      );
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E7A3C),
                       foregroundColor: Colors.white,

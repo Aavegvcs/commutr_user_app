@@ -205,6 +205,18 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
 
   void _onOtpChanged(String value, int index) {
     if (_hasError) setState(() => _hasError = false);
+
+    if (value.length > 1) {
+      // Keep only the last digit typed (handles replace-on-full-box edge case).
+      final digit = value[value.length - 1];
+      _controllers[index].value = TextEditingValue(
+        text: digit,
+        selection: TextSelection.collapsed(offset: 1),
+      );
+      if (index < _otpLength - 1) _focusNodes[index + 1].requestFocus();
+      return;
+    }
+
     if (value.length == 1 && index < _otpLength - 1) {
       _focusNodes[index + 1].requestFocus();
     } else if (value.isEmpty && index > 0) {
@@ -352,6 +364,9 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
                               focusNode: _focusNodes[index],
                               onChanged: (val) => _onOtpChanged(val, index),
                               hasError: _hasError,
+                              onBackspaceOnEmpty: index > 0
+                                  ? () => _focusNodes[index - 1].requestFocus()
+                                  : null,
                             );
                           }),
                         ),
@@ -503,12 +518,14 @@ class _OtpBox extends StatelessWidget {
   final FocusNode focusNode;
   final ValueChanged<String> onChanged;
   final bool hasError;
+  final VoidCallback? onBackspaceOnEmpty;
 
   const _OtpBox({
     required this.controller,
     required this.focusNode,
     required this.onChanged,
     this.hasError = false,
+    this.onBackspaceOnEmpty,
   });
 
   @override
@@ -516,43 +533,54 @@ class _OtpBox extends StatelessWidget {
     return SizedBox(
       width: 48,
       height: 56,
-      child: TextField(
-        controller: controller,
-        focusNode: focusNode,
-        onChanged: onChanged,
-        keyboardType: TextInputType.number,
-        textAlign: TextAlign.center,
-        maxLength: 1,
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: Colors.black87,
-        ),
-        decoration: InputDecoration(
-          counterText: '',
-          filled: true,
-          fillColor: hasError ? const Color(0xFFFFEBEB) : const Color(0xFFEEEEEE),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: hasError
-                ? const BorderSide(color: Colors.redAccent, width: 1.8)
-                : BorderSide.none,
+      child: KeyboardListener(
+        focusNode: FocusNode(),
+        onKeyEvent: (event) {
+          if (event is KeyDownEvent &&
+              (event.logicalKey == LogicalKeyboardKey.backspace ||
+                  event.logicalKey == LogicalKeyboardKey.delete) &&
+              controller.text.isEmpty) {
+            onBackspaceOnEmpty?.call();
+          }
+        },
+        child: TextField(
+          controller: controller,
+          focusNode: focusNode,
+          onChanged: onChanged,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          maxLength: 2,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
           ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: hasError
-                ? const BorderSide(color: Colors.redAccent, width: 1.8)
-                : BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: hasError ? Colors.redAccent : const Color(0xFF1A6B3C),
-              width: 1.8,
+          decoration: InputDecoration(
+            counterText: '',
+            filled: true,
+            fillColor: hasError ? const Color(0xFFFFEBEB) : const Color(0xFFEEEEEE),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: hasError
+                  ? const BorderSide(color: Colors.redAccent, width: 1.8)
+                  : BorderSide.none,
             ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: hasError
+                  ? const BorderSide(color: Colors.redAccent, width: 1.8)
+                  : BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: hasError ? Colors.redAccent : const Color(0xFF1A6B3C),
+                width: 1.8,
+              ),
+            ),
+            contentPadding: EdgeInsets.zero,
           ),
-          contentPadding: EdgeInsets.zero,
         ),
       ),
     );

@@ -7,6 +7,7 @@ import '../../bloc/shift_bloc.dart';
 import '../../bloc/shift_event.dart';
 import '../../bloc/shift_state.dart';
 import '../../data/model/roaster_shifts_response.dart';
+import '../../data/model/user_details_roaster_response.dart';
 import '../../model/trip_schedule_flow_args.dart';
 import 'booking_confirmation.dart';
 
@@ -18,6 +19,7 @@ class CommuteTimingScreen extends StatelessWidget {
   final String toDate;
   final String weekOffs;
   final TripScheduleFlowArgs? flowArgs;
+  final List<DrModel> drList;
 
   const CommuteTimingScreen({
     super.key,
@@ -28,6 +30,7 @@ class CommuteTimingScreen extends StatelessWidget {
     required this.toDate,
     required this.weekOffs,
     this.flowArgs,
+    this.drList = const [],
   });
 
   @override
@@ -35,7 +38,7 @@ class CommuteTimingScreen extends StatelessWidget {
     debugPrint(
       '[COMMUTE_TIMING] init → locCode=$locCode empId=$empId '
       'isLogIn=$isLogIn fromDate=$fromDate toDate=$toDate '
-      'weekOffs="$weekOffs"',
+      'weekOffs="$weekOffs" drList=${drList.length}',
     );
     return BlocProvider(
       create: (_) =>
@@ -48,6 +51,7 @@ class CommuteTimingScreen extends StatelessWidget {
         toDate: toDate,
         weekOffs: weekOffs,
         flowArgs: flowArgs,
+        drList: drList,
       ),
     );
   }
@@ -61,6 +65,7 @@ class _CommuteTimingView extends StatefulWidget {
   final String toDate;
   final String weekOffs;
   final TripScheduleFlowArgs? flowArgs;
+  final List<DrModel> drList;
 
   const _CommuteTimingView({
     required this.locCode,
@@ -70,6 +75,7 @@ class _CommuteTimingView extends StatefulWidget {
     required this.toDate,
     required this.weekOffs,
     this.flowArgs,
+    required this.drList,
   });
 
   @override
@@ -82,8 +88,26 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
   ShiftResult? _cachedShifts;
   bool _didApplyInitialShift = false;
 
+  // "Apply same timing to others" state
+  bool _showEmployeePanel = false;
+  final Set<int> _selectedEmpIds = {};
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
   static const Color primaryGreen = Color(0xFF1A6B4A);
   static const Color lightGreen = Color(0xFFB2D8C8);
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedEmpIds.add(widget.empId);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   void _handleSessionExpired(String message) {
     if (!mounted) return;
@@ -167,6 +191,10 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
     final shiftEnd =
         widget.isLogIn ? "NA" : (selectedDropShift?.shiftTime ?? '');
 
+    // Always include self; append any selected DR emp IDs
+    final allIds = <int>{widget.empId, ..._selectedEmpIds};
+    final userEmpIds = allIds.join(',');
+
     debugPrint(
       '[COMMUTE_TIMING] Next tapped → '
       'isLogIn=${widget.isLogIn} '
@@ -177,7 +205,8 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
       'weekOffs="${widget.weekOffs}" '
       'selectedPickShift=${selectedPickShift?.shiftId}/"${selectedPickShift?.shiftTime}" '
       'selectedDropShift=${selectedDropShift?.shiftId}/"${selectedDropShift?.shiftTime}" '
-      '→ shiftStart="$shiftStart" shiftEnd="$shiftEnd"',
+      '→ shiftStart="$shiftStart" shiftEnd="$shiftEnd" '
+      '→ userEmpIds="$userEmpIds"',
     );
 
     context.read<ShiftBloc>().add(
@@ -188,9 +217,23 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
             shiftStart: shiftStart,
             shiftEnd: shiftEnd,
             weekOffs: "",
-            userEmpIds: widget.empId.toString(),
+            userEmpIds: userEmpIds,
           ),
         );
+  }
+
+  String _selectedCountLabel() {
+    final count = _selectedEmpIds.length;
+    if (count == 0) return 'Select employees';
+    if (count == 1) return '1 employee selected';
+    return '$count employees selected';
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
   }
 
   @override
@@ -220,6 +263,10 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
                   builder: (_) => BookingConfirmedScreen(
                     isUpdate: widget.flowArgs?.isEdit == true,
                     successMessage: state.message,
+                    selectedDate: widget.fromDate,
+                    selectedTime: widget.isLogIn
+                        ? selectedPickShift?.shiftTime
+                        : selectedDropShift?.shiftTime,
                   ),
                 ),
               );
@@ -336,6 +383,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
   bool _isNextDisabled(ShiftState state) {
     if (state is ShiftUpdateInProgress) return true;
     if (_cachedShifts == null) return true;
+    if (_selectedEmpIds.isEmpty) return true;
     return widget.isLogIn
         ? selectedPickShift == null
         : selectedDropShift == null;
@@ -379,51 +427,343 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
     }
 
     final cached = _cachedShifts!;
+    final screenHeight = MediaQuery.of(context).size.height;
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (widget.isLogIn)
-            _ShiftCard(
-              title: 'Login Timing',
-              subtitle: 'Daily commute to office',
-              shifts: cached.pickShifts
-                  .map((s) => (id: s.shiftId, time: s.shiftTime))
-                  .toList(),
-              selectedId: selectedPickShift?.shiftId,
-              onSelect: (id) => setState(() => selectedPickShift = cached
-                  .pickShifts
-                  .firstWhere((s) => s.shiftId == id)),
-            ),
-          if (!widget.isLogIn)
-            _ShiftCard(
-              title: 'Logout Timing',
-              subtitle: 'Daily commute from office',
-              shifts: cached.dropShifts
-                  .map((s) => (id: s.shiftId, time: s.shiftTime))
-                  .toList(),
-              selectedId: selectedDropShift?.shiftId,
-              onSelect: (id) => setState(() => selectedDropShift = cached
-                  .dropShifts
-                  .firstWhere((s) => s.shiftId == id)),
-            ),
+          SizedBox(
+            height: screenHeight * 0.40,
+            child: widget.isLogIn
+                ? _ShiftCard(
+                    title: 'Login Timing',
+                    subtitle: 'Daily commute to office',
+                    shifts: cached.pickShifts
+                        .map((s) => (id: s.shiftId, time: s.shiftTime))
+                        .toList(),
+                    selectedId: selectedPickShift?.shiftId,
+                    onSelect: (id) => setState(() => selectedPickShift =
+                        cached.pickShifts
+                            .firstWhere((s) => s.shiftId == id)),
+                  )
+                : _ShiftCard(
+                    title: 'Logout Timing',
+                    subtitle: 'Daily commute from office',
+                    shifts: cached.dropShifts
+                        .map((s) => (id: s.shiftId, time: s.shiftTime))
+                        .toList(),
+                    selectedId: selectedDropShift?.shiftId,
+                    onSelect: (id) => setState(() => selectedDropShift =
+                        cached.dropShifts
+                            .firstWhere((s) => s.shiftId == id)),
+                  ),
+          ),
+
+          if (widget.drList.length > 1) ...[
+            const SizedBox(height: 28),
+            _buildApplyToOthersSection(),
+          ],
+
           const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildApplyToOthersSection() {
+    final selectedCount = _selectedEmpIds.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Apply same timing to others',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF1A1A1A),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Summary pill / trigger row
+        GestureDetector(
+          onTap: () => setState(() => _showEmployeePanel = !_showEmployeePanel),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: const Color(0xFFE0E0E0),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.people_alt_rounded,
+                  color: primaryGreen,
+                  size: 22,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _selectedCountLabel(),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF444444),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: lightGreen.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    selectedCount == 0
+                        ? '0 selected'
+                        : '$selectedCount selected',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: primaryGreen,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                AnimatedRotation(
+                  turns: _showEmployeePanel ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: Color(0xFF888888),
+                    size: 22,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Expandable employee list
+        AnimatedSize(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          child: _showEmployeePanel
+              ? _buildEmployeePanel()
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmployeePanel() {
+    // Prepend a synthetic "You" entry so self is always visible and toggleable
+    final selfEntry = DrModel(empId: widget.empId, empName: 'You');
+    final drOnly = _searchQuery.isEmpty
+        ? widget.drList
+        : widget.drList
+            .where((e) => e.empName.toLowerCase().contains(_searchQuery.toLowerCase()))
+            .toList();
+    final filtered = [
+      if (_searchQuery.isEmpty ||
+          'you'.contains(_searchQuery.toLowerCase()))
+        selfEntry,
+      ...drOnly,
+    ];
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: const Color(0xFFE0E0E0),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Search bar
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search employees...',
+                hintStyle: const TextStyle(
+                    color: Color(0xFFAAAAAA), fontSize: 14),
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: Color(0xFFAAAAAA),
+                  size: 20,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
+                filled: true,
+                fillColor: const Color(0xFFF5F5F5),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+
+          const Divider(height: 1, color: Color(0xFFEEEEEE)),
+
+          // DR list
+          if (filtered.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text(
+                  'No employees found',
+                  style: TextStyle(color: Color(0xFFAAAAAA), fontSize: 13),
+                ),
+              ),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filtered.length,
+              separatorBuilder: (_, __) => const Divider(
+                  height: 1, indent: 16, endIndent: 16,
+                  color: Color(0xFFEEEEEE)),
+              itemBuilder: (context, index) {
+                final emp = filtered[index];
+                final isSelected = _selectedEmpIds.contains(emp.empId);
+                return _EmployeeRow(
+                  initials: _initials(emp.empName),
+                  name: emp.empName,
+                  isSelected: isSelected,
+                  onTap: () => setState(() {
+                    if (isSelected) {
+                      _selectedEmpIds.remove(emp.empId);
+                    } else {
+                      _selectedEmpIds.add(emp.empId);
+                    }
+                  }),
+                );
+              },
+            ),
         ],
       ),
     );
   }
 }
 
-class _ShiftCard extends StatelessWidget {
+class _EmployeeRow extends StatelessWidget {
+  final String initials;
+  final String name;
+  final bool isSelected;
+  final VoidCallback? onTap;
+
+  static const Color _primaryGreen = Color(0xFF1A6B4A);
+  static const Color _lightGreen = Color(0xFFB2D8C8);
+
+  const _EmployeeRow({
+    required this.initials,
+    required this.name,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: _lightGreen.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                initials,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: _primaryGreen,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF222222),
+                ),
+              ),
+            ),
+            if (isSelected)
+              Container(
+                width: 24,
+                height: 24,
+                decoration: const BoxDecoration(
+                  color: _primaryGreen,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.check, color: Colors.white, size: 14),
+              )
+            else
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFFCCCCCC),
+                    width: 2,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ShiftCard extends StatefulWidget {
   final String title;
   final String subtitle;
   final List<({int id, String time})> shifts;
   final int? selectedId;
   final ValueChanged<int> onSelect;
-
-  static const Color _primaryGreen = Color(0xFF1A6B4A);
-  static const Color _lightGreen = Color(0xFFB2D8C8);
-  static const Color _unselected = Color(0xFFAAAAAA);
 
   const _ShiftCard({
     required this.title,
@@ -432,6 +772,23 @@ class _ShiftCard extends StatelessWidget {
     required this.selectedId,
     required this.onSelect,
   });
+
+  @override
+  State<_ShiftCard> createState() => _ShiftCardState();
+}
+
+class _ShiftCardState extends State<_ShiftCard> {
+  final ScrollController _scrollController = ScrollController();
+
+  static const Color _primaryGreen = Color(0xFF1A6B4A);
+  static const Color _lightGreen = Color(0xFFB2D8C8);
+  static const Color _unselected = Color(0xFFAAAAAA);
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -456,7 +813,7 @@ class _ShiftCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            title,
+            widget.title,
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
@@ -465,7 +822,7 @@ class _ShiftCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            subtitle,
+            widget.subtitle,
             style: const TextStyle(
               fontSize: 13,
               color: Color(0xFF888888),
@@ -473,39 +830,44 @@ class _ShiftCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 3.2,
-            ),
-            itemCount: shifts.length,
-            itemBuilder: (context, index) {
-              final shift = shifts[index];
-              final isSelected = selectedId == shift.id;
-              return GestureDetector(
-                onTap: () => onSelect(shift.id),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  decoration: BoxDecoration(
-                    color: isSelected ? _primaryGreen : Colors.transparent,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    shift.time,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: isSelected ? Colors.white : _unselected,
-                    ),
-                  ),
+          Expanded(
+            child: Scrollbar(
+              controller: _scrollController,
+              thumbVisibility: true,
+              child: GridView.builder(
+                controller: _scrollController,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 3.2,
                 ),
-              );
-            },
+                itemCount: widget.shifts.length,
+                itemBuilder: (context, index) {
+                  final shift = widget.shifts[index];
+                  final isSelected = widget.selectedId == shift.id;
+                  return GestureDetector(
+                    onTap: () => widget.onSelect(shift.id),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      decoration: BoxDecoration(
+                        color: isSelected ? _primaryGreen : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        shift.time,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? Colors.white : _unselected,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
           ),
         ],
       ),

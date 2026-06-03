@@ -1,4 +1,4 @@
-package com.example.commutr_main
+package com.user.commutr
 
 import io.flutter.embedding.android.FlutterActivity
 

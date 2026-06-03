@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
 
@@ -17,13 +18,33 @@ class CabTrackingLoading extends CabTrackingState {
   const CabTrackingLoading();
 }
 
-class CabTrackingLoaded extends CabTrackingState {
-  final CabTrackingData data;
+/// Unified state that holds all live tracking data for the screen.
+class RideTrackingDataState extends CabTrackingState {
+  final TrackingStatusResponse? status;
+  final CabTrackingData? detail;
+  final List<LatLng> plannedPolylinePoints;
 
-  const CabTrackingLoaded(this.data);
+  const RideTrackingDataState({
+    this.status,
+    this.detail,
+    this.plannedPolylinePoints = const [],
+  });
+
+  RideTrackingDataState copyWith({
+    TrackingStatusResponse? status,
+    CabTrackingData? detail,
+    List<LatLng>? plannedPolylinePoints,
+  }) {
+    return RideTrackingDataState(
+      status: status ?? this.status,
+      detail: detail ?? this.detail,
+      plannedPolylinePoints:
+          plannedPolylinePoints ?? this.plannedPolylinePoints,
+    );
+  }
 
   @override
-  List<Object?> get props => [data];
+  List<Object?> get props => [status, detail, plannedPolylinePoints];
 }
 
 class CabTrackingError extends CabTrackingState {

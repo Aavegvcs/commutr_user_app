@@ -38,13 +38,14 @@ class ChatRepository {
     required int empId1,
     required int empId2,
   }) async {
-    final path = '/ApiChatting/ViewChatMessage/$tripId/$empId1/$empId2';
+    final path = '/ApiChatting/ViewChatMessage/$tripId/0/0';
     debugPrint('[ChatRepo] getMessages → GET $path');
     try {
       final response = await _apiClient.dio.get<dynamic>(path);
       final raw = response.data;
       final list = raw is List ? raw : (raw is Map ? raw['data'] : null);
       if (list is! List) return [];
+      if (list.isNotEmpty) debugPrint('[ChatRepo] first message raw: ${list.first}');
       return list
           .whereType<Map<String, dynamic>>()
           .map(ChatMessage.fromJson)

@@ -1061,28 +1061,40 @@ class _HorizontalDateRangePickerState
     if (!widget.isSelectable(day)) return;
     final d = _dateOnly(day);
 
-    if (_rangeStart == null || (_rangeStart != null && _rangeEnd != null)) {
+    // No selection at all → first tap, select single day
+    if (_rangeStart == null) {
       setState(() {
         _rangeStart = d;
-        _rangeEnd = null;
+        _rangeEnd = d;
       });
-      return;
-    }
-
-    final start = _dateOnly(_rangeStart!);
-    if (_sameDay(start, d)) {
-      setState(() => _rangeEnd = d);
       widget.onRangeSelected(DateTimeRange(start: d, end: d));
       return;
     }
 
-    final rangeStart = d.isBefore(start) ? d : start;
-    final rangeEnd = d.isBefore(start) ? start : d;
+    final start = _dateOnly(_rangeStart!);
+
+    // Currently a single-day selection → second tap extends to range (or keeps single)
+    if (_rangeEnd != null && _sameDay(_rangeStart!, _rangeEnd!)) {
+      if (_sameDay(start, d)) {
+        // Tapped the same day again → keep as single
+        return;
+      }
+      final rangeStart = d.isBefore(start) ? d : start;
+      final rangeEnd = d.isBefore(start) ? start : d;
+      setState(() {
+        _rangeStart = rangeStart;
+        _rangeEnd = rangeEnd;
+      });
+      widget.onRangeSelected(DateTimeRange(start: rangeStart, end: rangeEnd));
+      return;
+    }
+
+    // A full range is already set → reset to new single-day selection
     setState(() {
-      _rangeStart = rangeStart;
-      _rangeEnd = rangeEnd;
+      _rangeStart = d;
+      _rangeEnd = d;
     });
-    widget.onRangeSelected(DateTimeRange(start: rangeStart, end: rangeEnd));
+    widget.onRangeSelected(DateTimeRange(start: d, end: d));
   }
 
   @override
