@@ -65,28 +65,108 @@ class GpsPoint {
 class TrackingStatusResponse {
   final int? dsId;
   final bool isTripFound;
-  final String? trackingMode;
-  final bool shouldUseSignalR;
-  final bool shouldUsePolyline;
+  final int? locCode;
+  final String? dsDate;
+  final int? tripTypeCode;
+  final int? tripType;
+  final String? tripTypeName;
+  final int? totalPax;
+  final String? scheduledStartTime;
+  final String? scheduledEndTime;
+  final String? actualStartTime;
+  final String? actualEndTime;
+  final double? startKm;
+  final double? endKm;
+  final double? plannedRouteDistance;
+  final String? plannedTotalDuration;
+  final bool hasPlannedRoutePolyline;
+  final int? transTripStatusCode;
+  final String? transTripStatusName;
+  final int? latestGpsStatusCode;
+  final String? latestGpsStatusName;
+  final int? effectiveTripStatusCode;
+  final String? effectiveTripStatusName;
   final double? latestLat;
   final double? latestLng;
+  final double? latestSpeed;
+  final String? latestGpsTime;
+  final String? latestGpsSource;
+  final bool? panic;
+  final int? driverId;
+  final String? driverGuid;
   final String? driverName;
   final String? driverMobileNo;
+  final String? driverAlternateMobileNo;
+  final String? driverProfileImage;
+  final int? transporterId;
+  final String? vendorName;
+  final String? vendorMobileNo;
+  final String? vendorEmailId;
+  final int? vehicleId;
   final String? vehicleNo;
+  final int? vehicleType;
+  final int? fuelType;
+  final bool isActive;
+  final bool isCompleted;
+  final bool shouldUseSignalR;
+  final bool shouldUsePolyline;
+  final bool isPassengerPickedUp;
   final String? trackingMessage;
+  final String? trackingMode;
+  final List<TripPassenger> passengers;
 
   const TrackingStatusResponse({
     this.dsId,
     this.isTripFound = false,
-    this.trackingMode,
-    this.shouldUseSignalR = false,
-    this.shouldUsePolyline = false,
+    this.locCode,
+    this.dsDate,
+    this.tripTypeCode,
+    this.tripType,
+    this.tripTypeName,
+    this.totalPax,
+    this.scheduledStartTime,
+    this.scheduledEndTime,
+    this.actualStartTime,
+    this.actualEndTime,
+    this.startKm,
+    this.endKm,
+    this.plannedRouteDistance,
+    this.plannedTotalDuration,
+    this.hasPlannedRoutePolyline = false,
+    this.transTripStatusCode,
+    this.transTripStatusName,
+    this.latestGpsStatusCode,
+    this.latestGpsStatusName,
+    this.effectiveTripStatusCode,
+    this.effectiveTripStatusName,
     this.latestLat,
     this.latestLng,
+    this.latestSpeed,
+    this.latestGpsTime,
+    this.latestGpsSource,
+    this.panic,
+    this.driverId,
+    this.driverGuid,
     this.driverName,
     this.driverMobileNo,
+    this.driverAlternateMobileNo,
+    this.driverProfileImage,
+    this.transporterId,
+    this.vendorName,
+    this.vendorMobileNo,
+    this.vendorEmailId,
+    this.vehicleId,
     this.vehicleNo,
+    this.vehicleType,
+    this.fuelType,
+    this.isActive = true,
+    this.isCompleted = false,
+    this.shouldUseSignalR = false,
+    this.shouldUsePolyline = false,
+    this.isPassengerPickedUp = false,
     this.trackingMessage,
+    this.trackingMode,
+    this.passengers = const [],
   });
 
   bool get hasLocation =>
@@ -101,15 +181,120 @@ class TrackingStatusResponse {
     return TrackingStatusResponse(
       dsId: dsId,
       isTripFound: isTripFound,
-      trackingMode: trackingMode,
-      shouldUseSignalR: shouldUseSignalR,
-      shouldUsePolyline: shouldUsePolyline,
+      locCode: locCode,
+      dsDate: dsDate,
+      tripTypeCode: tripTypeCode,
+      tripType: tripType,
+      tripTypeName: tripTypeName,
+      totalPax: totalPax,
+      scheduledStartTime: scheduledStartTime,
+      scheduledEndTime: scheduledEndTime,
+      actualStartTime: actualStartTime,
+      actualEndTime: actualEndTime,
+      startKm: startKm,
+      endKm: endKm,
+      plannedRouteDistance: plannedRouteDistance,
+      plannedTotalDuration: plannedTotalDuration,
+      hasPlannedRoutePolyline: hasPlannedRoutePolyline,
+      transTripStatusCode: transTripStatusCode,
+      transTripStatusName: transTripStatusName,
+      latestGpsStatusCode: latestGpsStatusCode,
+      latestGpsStatusName: latestGpsStatusName,
+      effectiveTripStatusCode: effectiveTripStatusCode,
+      effectiveTripStatusName: effectiveTripStatusName,
       latestLat: lat,
       latestLng: lng,
+      latestSpeed: latestSpeed,
+      latestGpsTime: latestGpsTime,
+      latestGpsSource: latestGpsSource,
+      panic: panic,
+      driverId: driverId,
+      driverGuid: driverGuid,
       driverName: driverName,
       driverMobileNo: driverMobileNo,
+      driverAlternateMobileNo: driverAlternateMobileNo,
+      driverProfileImage: driverProfileImage,
+      transporterId: transporterId,
+      vendorName: vendorName,
+      vendorMobileNo: vendorMobileNo,
+      vendorEmailId: vendorEmailId,
+      vehicleId: vehicleId,
       vehicleNo: vehicleNo,
+      vehicleType: vehicleType,
+      fuelType: fuelType,
+      isActive: isActive,
+      isCompleted: isCompleted,
+      shouldUseSignalR: shouldUseSignalR,
+      shouldUsePolyline: shouldUsePolyline,
+      isPassengerPickedUp: isPassengerPickedUp,
       trackingMessage: trackingMessage,
+      trackingMode: trackingMode,
+      passengers: passengers,
+    );
+  }
+
+  /// Patches all fields that the SignalR `ReceiveRouteLocation` payload carries.
+  TrackingStatusResponse withSignalRUpdate({
+    required double lat,
+    required double lng,
+    double? speed,
+    String? gpsTime,
+    int? tripStatusCode,
+    String? tripStatusName,
+    bool? panic,
+  }) {
+    return TrackingStatusResponse(
+      dsId: dsId,
+      isTripFound: isTripFound,
+      locCode: locCode,
+      dsDate: dsDate,
+      tripTypeCode: tripTypeCode,
+      tripType: tripType,
+      tripTypeName: tripTypeName,
+      totalPax: totalPax,
+      scheduledStartTime: scheduledStartTime,
+      scheduledEndTime: scheduledEndTime,
+      actualStartTime: actualStartTime,
+      actualEndTime: actualEndTime,
+      startKm: startKm,
+      endKm: endKm,
+      plannedRouteDistance: plannedRouteDistance,
+      plannedTotalDuration: plannedTotalDuration,
+      hasPlannedRoutePolyline: hasPlannedRoutePolyline,
+      transTripStatusCode: tripStatusCode ?? transTripStatusCode,
+      transTripStatusName: tripStatusName ?? transTripStatusName,
+      latestGpsStatusCode: latestGpsStatusCode,
+      latestGpsStatusName: latestGpsStatusName,
+      effectiveTripStatusCode: tripStatusCode ?? effectiveTripStatusCode,
+      effectiveTripStatusName: tripStatusName ?? effectiveTripStatusName,
+      latestLat: lat,
+      latestLng: lng,
+      latestSpeed: speed ?? latestSpeed,
+      latestGpsTime: gpsTime ?? latestGpsTime,
+      latestGpsSource: latestGpsSource,
+      panic: panic ?? this.panic,
+      driverId: driverId,
+      driverGuid: driverGuid,
+      driverName: driverName,
+      driverMobileNo: driverMobileNo,
+      driverAlternateMobileNo: driverAlternateMobileNo,
+      driverProfileImage: driverProfileImage,
+      transporterId: transporterId,
+      vendorName: vendorName,
+      vendorMobileNo: vendorMobileNo,
+      vendorEmailId: vendorEmailId,
+      vehicleId: vehicleId,
+      vehicleNo: vehicleNo,
+      vehicleType: vehicleType,
+      fuelType: fuelType,
+      isActive: isActive,
+      isCompleted: isCompleted,
+      shouldUseSignalR: shouldUseSignalR,
+      shouldUsePolyline: shouldUsePolyline,
+      isPassengerPickedUp: isPassengerPickedUp,
+      trackingMessage: trackingMessage,
+      trackingMode: trackingMode,
+      passengers: passengers,
     );
   }
 
@@ -130,18 +315,210 @@ class TrackingStatusResponse {
       return false;
     }
 
+    final rawPassengers = json['passengers'];
+    final passengers = (rawPassengers is List)
+        ? rawPassengers
+            .whereType<Map>()
+            .map((m) => TripPassenger.fromJson(Map<String, dynamic>.from(m)))
+            .toList(growable: false)
+        : const <TripPassenger>[];
+
     return TrackingStatusResponse(
       dsId: (json['dsId'] as num?)?.toInt(),
       isTripFound: readBool(json['isTripFound']),
-      trackingMode: json['trackingMode']?.toString(),
-      shouldUseSignalR: readBool(json['shouldUseSignalR']),
-      shouldUsePolyline: readBool(json['shouldUsePolyline']),
+      locCode: (json['locCode'] as num?)?.toInt(),
+      dsDate: json['dsDate']?.toString(),
+      tripTypeCode: (json['tripTypeCode'] as num?)?.toInt(),
+      tripType: (json['tripType'] as num?)?.toInt(),
+      tripTypeName: json['tripTypeName']?.toString(),
+      totalPax: (json['totalPax'] as num?)?.toInt(),
+      scheduledStartTime: json['scheduledStartTime']?.toString(),
+      scheduledEndTime: json['scheduledEndTime']?.toString(),
+      actualStartTime: json['actualStartTime']?.toString(),
+      actualEndTime: json['actualEndTime']?.toString(),
+      startKm: readDouble(json['startKm']),
+      endKm: readDouble(json['endKm']),
+      plannedRouteDistance: readDouble(json['plannedRouteDistance']),
+      plannedTotalDuration: json['plannedTotalDuration']?.toString(),
+      hasPlannedRoutePolyline: readBool(json['hasPlannedRoutePolyline']),
+      transTripStatusCode: (json['transTripStatusCode'] as num?)?.toInt(),
+      transTripStatusName: json['transTripStatusName']?.toString(),
+      latestGpsStatusCode: (json['latestGpsStatusCode'] as num?)?.toInt(),
+      latestGpsStatusName: json['latestGpsStatusName']?.toString(),
+      effectiveTripStatusCode: (json['effectiveTripStatusCode'] as num?)?.toInt(),
+      effectiveTripStatusName: json['effectiveTripStatusName']?.toString(),
       latestLat: readDouble(json['latestLat']),
       latestLng: readDouble(json['latestLng']),
+      latestSpeed: readDouble(json['latestSpeed']),
+      latestGpsTime: json['latestGpsTime']?.toString(),
+      latestGpsSource: json['latestGpsSource']?.toString(),
+      panic: json['panic'] is bool ? json['panic'] as bool : null,
+      driverId: (json['driverId'] as num?)?.toInt(),
+      driverGuid: json['driverGuid']?.toString(),
       driverName: json['driverName']?.toString(),
       driverMobileNo: json['driverMobileNo']?.toString(),
+      driverAlternateMobileNo: json['driverAlternateMobileNo']?.toString(),
+      driverProfileImage: json['driverProfileImage']?.toString(),
+      transporterId: (json['transporterId'] as num?)?.toInt(),
+      vendorName: json['vendorName']?.toString(),
+      vendorMobileNo: json['vendorMobileNo']?.toString(),
+      vendorEmailId: json['vendorEmailId']?.toString(),
+      vehicleId: (json['vehicleId'] as num?)?.toInt(),
       vehicleNo: json['vehicleNo']?.toString(),
+      vehicleType: (json['vehicleType'] as num?)?.toInt(),
+      fuelType: (json['fuelType'] as num?)?.toInt(),
+      isActive: readBool(json['isActive']),
+      isCompleted: readBool(json['isCompleted']),
+      shouldUseSignalR: readBool(json['shouldUseSignalR']),
+      shouldUsePolyline: readBool(json['shouldUsePolyline']),
+      isPassengerPickedUp: readBool(json['isPassengerPickedUp']),
       trackingMessage: json['trackingMessage']?.toString(),
+      trackingMode: json['trackingMode']?.toString(),
+      passengers: passengers,
+    );
+  }
+}
+
+class TripPassenger {
+  final int? empId;
+  final String? employeeID;
+  final String? firstname;
+  final String? lastName;
+  final String? gender;
+  final String? mobileno;
+  final int? empLocCode;
+  final int? tripType;
+  final int? paxOrder;
+  final String? address;
+  final double? plannedLat;
+  final double? plannedLng;
+  final bool noShow;
+  final int? noShowReasonId;
+  final bool orsDeviation;
+  final bool scheduled;
+  final bool paxAdded;
+  final String? paxType;
+  final double? empDistance;
+  final double? empDirectDistance;
+  final double? empCost;
+  final String? plannedScheduleTime;
+  final String? empSigninTime;
+  final double? empSigninLat;
+  final double? empSigninLng;
+  final String? empSignOutTime;
+  final double? empSignOutLat;
+  final double? empSignOutLng;
+  final String? cabReachedTime;
+  final double? cabReachedLat;
+  final double? cabReachedLng;
+  final String? reachedHomeTime;
+  final double? reachedHomeLat;
+  final double? reachedHomeLng;
+  final String? paxTrackingStatus;
+
+  String get fullName => [firstname, lastName].where((s) => s != null && s.isNotEmpty).join(' ');
+
+  const TripPassenger({
+    this.empId,
+    this.employeeID,
+    this.firstname,
+    this.lastName,
+    this.gender,
+    this.mobileno,
+    this.empLocCode,
+    this.tripType,
+    this.paxOrder,
+    this.address,
+    this.plannedLat,
+    this.plannedLng,
+    this.noShow = false,
+    this.noShowReasonId,
+    this.orsDeviation = false,
+    this.scheduled = false,
+    this.paxAdded = false,
+    this.paxType,
+    this.empDistance,
+    this.empDirectDistance,
+    this.empCost,
+    this.plannedScheduleTime,
+    this.empSigninTime,
+    this.empSigninLat,
+    this.empSigninLng,
+    this.empSignOutTime,
+    this.empSignOutLat,
+    this.empSignOutLng,
+    this.cabReachedTime,
+    this.cabReachedLat,
+    this.cabReachedLng,
+    this.reachedHomeTime,
+    this.reachedHomeLat,
+    this.reachedHomeLng,
+    this.paxTrackingStatus,
+  });
+
+  factory TripPassenger.fromJson(Map<String, dynamic> json) {
+    double? readDouble(Object? v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    bool readBool(Object? v) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final lower = v.toLowerCase();
+        return lower == 'true' || lower == '1';
+      }
+      return false;
+    }
+
+    // API may send combined 'passengerName' or split 'firstname'/'lastName'.
+    final combinedName = json['passengerName']?.toString();
+    String? firstNameVal = json['firstname']?.toString();
+    String? lastNameVal = json['lastName']?.toString();
+    if (combinedName != null && combinedName.isNotEmpty) {
+      final parts = combinedName.trim().split(RegExp(r'\s+'));
+      firstNameVal ??= parts.first;
+      lastNameVal ??= parts.length > 1 ? parts.sublist(1).join(' ') : null;
+    }
+
+    return TripPassenger(
+      empId: (json['empId'] as num?)?.toInt(),
+      employeeID: json['employeeID']?.toString(),
+      firstname: firstNameVal,
+      lastName: lastNameVal,
+      gender: json['gender']?.toString(),
+      mobileno: (json['mobileno'] ?? json['mobileNo'])?.toString(),
+      empLocCode: (json['empLocCode'] as num?)?.toInt(),
+      tripType: (json['tripType'] as num?)?.toInt(),
+      paxOrder: (json['paxOrder'] as num?)?.toInt(),
+      address: (json['address'] ?? json['pickupAddress'])?.toString(),
+      plannedLat: readDouble(json['plannedLat'] ?? json['lat']),
+      plannedLng: readDouble(json['plannedLng'] ?? json['lng']),
+      noShow: readBool(json['noShow']),
+      noShowReasonId: (json['noShowReasonId'] as num?)?.toInt(),
+      orsDeviation: readBool(json['orsDeviation']),
+      scheduled: readBool(json['scheduled']),
+      paxAdded: readBool(json['paxAdded']),
+      paxType: json['paxType']?.toString(),
+      empDistance: readDouble(json['empDistance']),
+      empDirectDistance: readDouble(json['empDirectDistance']),
+      empCost: readDouble(json['empCost']),
+      plannedScheduleTime: (json['plannedScheduleTime'] ?? json['pSchTime'])?.toString(),
+      empSigninTime: json['empSigninTime']?.toString(),
+      empSigninLat: readDouble(json['empSigninLat']),
+      empSigninLng: readDouble(json['empSigninLng']),
+      empSignOutTime: json['empSignOutTime']?.toString(),
+      empSignOutLat: readDouble(json['empSignOutLat']),
+      empSignOutLng: readDouble(json['empSignOutLng']),
+      cabReachedTime: json['cabReachedTime']?.toString(),
+      cabReachedLat: readDouble(json['cabReachedLat']),
+      cabReachedLng: readDouble(json['cabReachedLng']),
+      reachedHomeTime: json['reachedHomeTime']?.toString(),
+      reachedHomeLat: readDouble(json['reachedHomeLat']),
+      reachedHomeLng: readDouble(json['reachedHomeLng']),
+      paxTrackingStatus: json['paxTrackingStatus']?.toString(),
     );
   }
 }

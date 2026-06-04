@@ -51,6 +51,15 @@ class CabTrackingBloc extends Bloc<CabTrackingEvent, CabTrackingState> {
         detail: detail,
         plannedPolylinePoints: _cachedPolyline,
       ));
+
+      // If the route came back empty, retry via a fresh event after 5 s so the
+      // polyline still appears — important when SignalR cancels polling.
+      if (_cachedPolyline.isEmpty) {
+        await Future<void>.delayed(const Duration(seconds: 5));
+        if (!emit.isDone && _cachedPolyline.isEmpty) {
+          add(const RefreshCabTracking());
+        }
+      }
     } catch (e) {
       if (_isUnauthorized(e)) {
         emit(const CabTrackingUnauthorized());
@@ -72,16 +81,32 @@ class CabTrackingBloc extends Bloc<CabTrackingEvent, CabTrackingState> {
         state is RideTrackingDataState ? state as RideTrackingDataState : null;
 
     try {
-      final results = await Future.wait([
-        _repository.getTrackingStatus(tripId: tripId),
-        _repository.getUserCabTracking(empId: empId, tripId: tripId),
-      ]);
-
-      emit(RideTrackingDataState(
-        status: results[0] as dynamic,
-        detail: results[1] as dynamic,
-        plannedPolylinePoints: _cachedPolyline,
-      ));
+      // If the polyline cache is empty, re-fetch the route alongside status/detail.
+      if (_cachedPolyline.isEmpty) {
+        final results = await Future.wait([
+          _repository.getTrackingStatus(tripId: tripId),
+          _repository.getUserCabTracking(empId: empId, tripId: tripId),
+          _repository.getGpsRoute(tripId: tripId),
+        ]);
+        final decoded = _decodePolyline(
+            (results[2] as dynamic).plannedRoutePolyline as String?);
+        if (decoded.isNotEmpty) _cachedPolyline = decoded;
+        emit(RideTrackingDataState(
+          status: results[0] as dynamic,
+          detail: results[1] as dynamic,
+          plannedPolylinePoints: _cachedPolyline,
+        ));
+      } else {
+        final results = await Future.wait([
+          _repository.getTrackingStatus(tripId: tripId),
+          _repository.getUserCabTracking(empId: empId, tripId: tripId),
+        ]);
+        emit(RideTrackingDataState(
+          status: results[0] as dynamic,
+          detail: results[1] as dynamic,
+          plannedPolylinePoints: _cachedPolyline,
+        ));
+      }
     } catch (_) {
       // On refresh failure keep showing last good data.
       if (current != null) emit(current);
@@ -108,10 +133,18 @@ class CabTrackingBloc extends Bloc<CabTrackingEvent, CabTrackingState> {
         state is RideTrackingDataState ? state as RideTrackingDataState : null;
     if (current == null) return;
 
-    // Patch only the driver lat/lng into the existing status; keep everything else.
-    final patchedStatus = current.status?.withLocation(
-      lat: event.latitude,
-      lng: event.longitude,
+    final p = event.payload;
+    if (p.latitude == null || p.longitude == null) return;
+
+    // Patch all SignalR fields into the existing status in one shot.
+    final patchedStatus = current.status?.withSignalRUpdate(
+      lat: p.latitude!,
+      lng: p.longitude!,
+      speed: p.speed,
+      gpsTime: p.gpsTime,
+      tripStatusCode: p.tripStatusCode,
+      tripStatusName: p.tripStatusName,
+      panic: p.panic,
     );
 
     emit(current.copyWith(status: patchedStatus ?? current.status));

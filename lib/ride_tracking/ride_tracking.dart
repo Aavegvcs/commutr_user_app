@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
@@ -7,6 +8,8 @@ import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_state.dart';
 import 'package:commutr_main/ride_tracking/service/route_tracking_signalr_service.dart';
 import 'package:flutter/material.dart';
+import 'dart:ui' as ui;
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -31,12 +34,21 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   final Completer<GoogleMapController> _mapController = Completer();
 
   static const LatLng _fallbackCenter = LatLng(28.5930, 77.0490);
+  static const double _followZoom = 17.0;
 
   LatLng _driverLatLng = _fallbackCenter;
+  LatLng _animatedDriverLatLng = _fallbackCenter;
+  double _carBearing = 0.0;
+
   CameraPosition _initialCamera = const CameraPosition(
     target: _fallbackCenter,
-    zoom: 14.8,
+    zoom: _followZoom,
   );
+
+  // Smooth car movement animation (like Rapido/Ola).
+  late AnimationController _moveController;
+  Animation<double>? _latAnim;
+  Animation<double>? _lngAnim;
 
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
@@ -52,13 +64,105 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   final RouteTrackingSignalRService _signalR = RouteTrackingSignalRService();
   bool _signalREnabled = false;
 
+  BitmapDescriptor _carIcon = BitmapDescriptor.defaultMarker;
+
+  Future<void> _loadCarIcon() async {
+    final bytes = await rootBundle.load('assets/images/car_photo.png',);
+    final codec = await ui.instantiateImageCodec(
+      bytes.buffer.asUint8List(),
+      targetWidth: 50,
+    );
+    final frame = await codec.getNextFrame();
+    final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+    if (data != null && mounted) {
+      setState(() {
+        _carIcon = BitmapDescriptor.bytes(data.buffer.asUint8List());
+      });
+    }
+  }
+
   void _onSignalRLocation(RouteLocationPayload payload) {
     if (!mounted) return;
     if (payload.latitude == null || payload.longitude == null) return;
-    context.read<CabTrackingBloc>().add(SignalRLocationReceived(
-          latitude: payload.latitude!,
-          longitude: payload.longitude!,
-        ));
+    context.read<CabTrackingBloc>().add(SignalRLocationReceived(payload));
+    final newLatLng = LatLng(payload.latitude!, payload.longitude!);
+    _animateCarTo(newLatLng);
+  }
+
+  // Computes compass bearing (0–360°) from [from] to [to].
+  double _bearing(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final dLng = (to.longitude - from.longitude) * math.pi / 180;
+    final y = math.sin(dLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
+  void _animateCarTo(LatLng target) {
+    final from = _animatedDriverLatLng;
+
+    // Only update bearing when there's meaningful movement (>1m).
+    final dist = _approxDistanceMeters(from, target);
+    if (dist > 1) {
+      _carBearing = _bearing(from, target);
+    }
+
+    _moveController.stop();
+    _latAnim = Tween<double>(begin: from.latitude, end: target.latitude)
+        .animate(CurvedAnimation(parent: _moveController, curve: Curves.easeInOut));
+    _lngAnim = Tween<double>(begin: from.longitude, end: target.longitude)
+        .animate(CurvedAnimation(parent: _moveController, curve: Curves.easeInOut));
+
+    _moveController
+      ..reset()
+      ..addListener(_onMoveAnimTick)
+      ..forward().whenComplete(() => _moveController.removeListener(_onMoveAnimTick));
+  }
+
+  void _onMoveAnimTick() {
+    if (!mounted) return;
+    final lat = _latAnim?.value;
+    final lng = _lngAnim?.value;
+    if (lat == null || lng == null) return;
+
+    _animatedDriverLatLng = LatLng(lat, lng);
+
+    // Update driver marker position + rotation.
+    _markers.removeWhere((m) => m.markerId.value == 'driver');
+    _markers.add(Marker(
+      markerId: const MarkerId('driver'),
+      position: _animatedDriverLatLng,
+      icon: _carIcon,
+      anchor: const Offset(0.5, 0.5),
+      rotation: _carBearing,
+      flat: true,
+      zIndexInt: 1,
+    ));
+    setState(() {});
+
+    // Keep camera locked on car.
+    if (_mapController.isCompleted) {
+      _mapController.future.then((ctrl) {
+        ctrl.animateCamera(
+          CameraUpdate.newLatLngZoom(_animatedDriverLatLng, _followZoom),
+        );
+      });
+    }
+  }
+
+  double _approxDistanceMeters(LatLng a, LatLng b) {
+    const r = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * math.pi / 180;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180;
+    final sinLat = math.sin(dLat / 2);
+    final sinLng = math.sin(dLng / 2);
+    final h = sinLat * sinLat +
+        math.cos(a.latitude * math.pi / 180) *
+            math.cos(b.latitude * math.pi / 180) *
+            sinLng * sinLng;
+    return 2 * r * math.asin(math.sqrt(h));
   }
 
   Future<void> _connectSignalR(TrackingStatusResponse status) async {
@@ -89,7 +193,13 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   @override
   void initState() {
     super.initState();
+    _loadCarIcon();
     _setupFallbackMarkers();
+
+    _moveController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
 
     _pulseController = AnimationController(
       vsync: this,
@@ -114,6 +224,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   @override
   void dispose() {
     _pollingTimer?.cancel();
+    _moveController.dispose();
     _pulseController.dispose();
     _sheetController.dispose();
     // Clean up SignalR: leave the group and close the connection.
@@ -133,8 +244,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         Marker(
           markerId: const MarkerId('driver'),
           position: _driverLatLng,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          icon: _carIcon,
           infoWindow: const InfoWindow(title: 'Driver'),
+          anchor: const Offset(0.5, 0.5),
         ),
       );
   }
@@ -143,24 +255,62 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     final status = data.status;
 
     if (status != null && status.hasLocation) {
-      _driverLatLng = LatLng(status.latestLat!, status.latestLng!);
+      final newLatLng = LatLng(status.latestLat!, status.latestLng!);
+      // Only snap position on initial REST load — SignalR uses animated path.
+      if (_animatedDriverLatLng == _fallbackCenter) {
+        _animatedDriverLatLng = newLatLng;
+      }
+      _driverLatLng = newLatLng;
     }
 
-    _initialCamera = CameraPosition(target: _driverLatLng, zoom: 14.8);
+    _initialCamera = CameraPosition(target: _animatedDriverLatLng, zoom: _followZoom);
 
-    _markers
-      ..clear()
-      ..add(
-        Marker(
-          markerId: const MarkerId('driver'),
-          position: _driverLatLng,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-          infoWindow: InfoWindow(
-            title: status?.driverName ?? data.detail?.driverName ?? 'Driver',
-            snippet: status?.trackingMessage ?? 'Your driver is on the way',
+    _markers.clear();
+
+    // Passenger pickup markers ordered by paxOrder.
+    if (status != null && status.passengers.isNotEmpty) {
+      final sorted = List<TripPassenger>.from(status.passengers)
+        ..sort((a, b) => (a.paxOrder ?? 0).compareTo(b.paxOrder ?? 0));
+
+      for (final pax in sorted) {
+        final lat = pax.plannedLat;
+        final lng = pax.plannedLng;
+        if (lat == null || lng == null || (lat == 0 && lng == 0)) continue;
+
+        final order = pax.paxOrder ?? 0;
+        final name = pax.fullName.isNotEmpty ? pax.fullName : 'Passenger';
+        _markers.add(
+          Marker(
+            markerId: MarkerId('pax_$order'),
+            position: LatLng(lat, lng),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueOrange,
+            ),
+            infoWindow: InfoWindow(
+              title: '#$order · $name',
+              snippet: pax.plannedScheduleTime,
+            ),
           ),
+        );
+      }
+    }
+
+    // Driver marker — uses animated position + bearing for smooth direction.
+    _markers.add(
+      Marker(
+        markerId: const MarkerId('driver'),
+        position: _animatedDriverLatLng,
+        icon: _carIcon,
+        anchor: const Offset(0.5, 0.5),
+        rotation: _carBearing,
+        flat: true,
+        zIndexInt: 1,
+        infoWindow: InfoWindow(
+          title: status?.driverName ?? data.detail?.driverName ?? 'Driver',
+          snippet: status?.trackingMessage ?? 'Your driver is on the way',
         ),
-      );
+      ),
+    );
 
     // Draw planned polyline.
     _polylines.clear();
@@ -176,33 +326,12 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
     setState(() {});
 
+    // Always follow the car — no bounds zoom.
     if (_mapController.isCompleted) {
       _mapController.future.then((ctrl) {
-        if (points.length >= 2) {
-          double minLat = points.first.latitude;
-          double maxLat = points.first.latitude;
-          double minLng = points.first.longitude;
-          double maxLng = points.first.longitude;
-          for (final p in points) {
-            if (p.latitude < minLat) minLat = p.latitude;
-            if (p.latitude > maxLat) maxLat = p.latitude;
-            if (p.longitude < minLng) minLng = p.longitude;
-            if (p.longitude > maxLng) maxLng = p.longitude;
-          }
-          ctrl.animateCamera(
-            CameraUpdate.newLatLngBounds(
-              LatLngBounds(
-                southwest: LatLng(minLat, minLng),
-                northeast: LatLng(maxLat, maxLng),
-              ),
-              60,
-            ),
-          );
-        } else if (status != null && status.hasLocation) {
-          ctrl.animateCamera(
-            CameraUpdate.newLatLngZoom(_driverLatLng, 15.0),
-          );
-        }
+        ctrl.animateCamera(
+          CameraUpdate.newLatLngZoom(_animatedDriverLatLng, _followZoom),
+        );
       });
     }
   }
@@ -835,6 +964,7 @@ class _PassengerList extends StatelessWidget {
             userName: userName,
           ),
         ],
+        SizedBox(height: 16,),
         // Office destination row
         _OfficeRow(),
       ],
@@ -998,27 +1128,13 @@ class _OfficeRow extends StatelessWidget {
 
 const String _kMapStyle = '''
 [
-  { "elementType": "geometry", "stylers": [{ "color": "#f5f5f0" }] },
-  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
-  { "elementType": "labels.text.fill", "stylers": [{ "color": "#616161" }] },
-  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#f5f5f5" }] },
-  {
-    "featureType": "administrative.land_parcel",
-    "elementType": "labels.text.fill",
-    "stylers": [{ "color": "#bdbdbd" }]
-  },
-  { "featureType": "poi", "elementType": "geometry", "stylers": [{ "color": "#eeeeee" }] },
-  { "featureType": "poi", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
-  { "featureType": "poi.park", "elementType": "geometry", "stylers": [{ "color": "#d5e8ce" }] },
-  { "featureType": "poi.park", "elementType": "labels.text.fill", "stylers": [{ "color": "#9e9e9e" }] },
-  { "featureType": "road", "elementType": "geometry", "stylers": [{ "color": "#ffffff" }] },
-  { "featureType": "road.arterial", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
-  { "featureType": "road.highway", "elementType": "geometry", "stylers": [{ "color": "#dadada" }] },
-  { "featureType": "road.highway", "elementType": "labels.text.fill", "stylers": [{ "color": "#616161" }] },
-  { "featureType": "road.local", "elementType": "labels.text.fill", "stylers": [{ "color": "#9e9e9e" }] },
-  { "featureType": "transit.line", "elementType": "geometry", "stylers": [{ "color": "#e5e5e5" }] },
-  { "featureType": "transit.station", "elementType": "geometry", "stylers": [{ "color": "#eeeeee" }] },
-  { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#b8d4e8" }] },
-  { "featureType": "water", "elementType": "labels.text.fill", "stylers": [{ "color": "#9e9e9e" }] }
+  { "featureType": "landscape", "elementType": "labels", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "transit", "elementType": "labels", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "poi", "elementType": "labels", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "water", "elementType": "labels", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "road", "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
+  { "stylers": [{ "hue": "#00aaff" }, { "saturation": -100 }, { "gamma": 2.15 }, { "lightness": 12 }] },
+  { "featureType": "road", "elementType": "labels.text.fill", "stylers": [{ "visibility": "on" }, { "lightness": 24 }] },
+  { "featureType": "road", "elementType": "geometry", "stylers": [{ "lightness": 57 }] }
 ]
 ''';

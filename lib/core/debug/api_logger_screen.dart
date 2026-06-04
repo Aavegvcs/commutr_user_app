@@ -14,7 +14,8 @@ class ApiLoggerScreen extends StatefulWidget {
 }
 
 class _ApiLoggerScreenState extends State<ApiLoggerScreen> {
-  ApiLogStatus? _filter;
+  ApiLogStatus? _statusFilter;
+  ApiLogSource? _sourceFilter;
 
   @override
   Widget build(BuildContext context) {
@@ -29,8 +30,10 @@ class _ApiLoggerScreenState extends State<ApiLoggerScreen> {
         ),
         actions: [
           _FilterChipRow(
-            current: _filter,
-            onChanged: (f) => setState(() => _filter = f),
+            currentStatus: _statusFilter,
+            currentSource: _sourceFilter,
+            onStatusChanged: (f) => setState(() => _statusFilter = f),
+            onSourceChanged: (f) => setState(() => _sourceFilter = f),
           ),
           IconButton(
             tooltip: 'Clear all',
@@ -45,9 +48,13 @@ class _ApiLoggerScreenState extends State<ApiLoggerScreen> {
         listenable: ApiLoggerService.instance,
         builder: (context, _) {
           final all = ApiLoggerService.instance.entries;
-          final entries = _filter == null
-              ? all
-              : all.where((e) => e.status == _filter).toList();
+          var entries = all;
+          if (_statusFilter != null) {
+            entries = entries.where((e) => e.status == _statusFilter).toList();
+          }
+          if (_sourceFilter != null) {
+            entries = entries.where((e) => e.source == _sourceFilter).toList();
+          }
 
           if (entries.isEmpty) {
             return Center(
@@ -82,10 +89,17 @@ class _ApiLoggerScreenState extends State<ApiLoggerScreen> {
 // ── Filter chip row ──────────────────────────────────────────────────────────
 
 class _FilterChipRow extends StatelessWidget {
-  const _FilterChipRow({required this.current, required this.onChanged});
+  const _FilterChipRow({
+    required this.currentStatus,
+    required this.currentSource,
+    required this.onStatusChanged,
+    required this.onSourceChanged,
+  });
 
-  final ApiLogStatus? current;
-  final ValueChanged<ApiLogStatus?> onChanged;
+  final ApiLogStatus? currentStatus;
+  final ApiLogSource? currentSource;
+  final ValueChanged<ApiLogStatus?> onStatusChanged;
+  final ValueChanged<ApiLogSource?> onSourceChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -93,24 +107,35 @@ class _FilterChipRow extends StatelessWidget {
       children: [
         _Chip(
           label: 'All',
-          active: current == null,
+          active: currentStatus == null && currentSource == null,
           color: Colors.white,
-          onTap: () => onChanged(null),
+          onTap: () {
+            onStatusChanged(null);
+            onSourceChanged(null);
+          },
         ),
         _Chip(
           label: '2xx',
-          active: current == ApiLogStatus.success,
+          active: currentStatus == ApiLogStatus.success,
           color: const Color(0xFF4CAF50),
-          onTap: () => onChanged(
-            current == ApiLogStatus.success ? null : ApiLogStatus.success,
+          onTap: () => onStatusChanged(
+            currentStatus == ApiLogStatus.success ? null : ApiLogStatus.success,
           ),
         ),
         _Chip(
           label: 'Err',
-          active: current == ApiLogStatus.error,
+          active: currentStatus == ApiLogStatus.error,
           color: const Color(0xFFF44336),
-          onTap: () => onChanged(
-            current == ApiLogStatus.error ? null : ApiLogStatus.error,
+          onTap: () => onStatusChanged(
+            currentStatus == ApiLogStatus.error ? null : ApiLogStatus.error,
+          ),
+        ),
+        _Chip(
+          label: 'WS',
+          active: currentSource == ApiLogSource.signalR,
+          color: const Color(0xFFE5C07B),
+          onTap: () => onSourceChanged(
+            currentSource == ApiLogSource.signalR ? null : ApiLogSource.signalR,
           ),
         ),
       ],
@@ -191,6 +216,10 @@ class _LogTileState extends State<_LogTile> {
             Row(
               children: [
                 _Badge(label: e.method, color: methodColor),
+                if (e.source == ApiLogSource.signalR) ...[
+                  const SizedBox(width: 4),
+                  _Badge(label: 'SignalR', color: const Color(0xFFE5C07B)),
+                ],
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -212,6 +241,12 @@ class _LogTileState extends State<_LogTile> {
                       fontWeight: FontWeight.w700,
                       fontSize: 13,
                     ),
+                  )
+                else if (e.source == ApiLogSource.signalR ||
+                    e.method.toUpperCase() == 'WS')
+                  _Badge(
+                    label: _wsStatusLabel(e.status),
+                    color: statusColor,
                   ),
                 if (e.status == ApiLogStatus.pending)
                   const SizedBox(
@@ -259,6 +294,19 @@ class _LogTileState extends State<_LogTile> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                ] else if (e.status == ApiLogStatus.success &&
+                    e.responseBody != null) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _responsePreview(e.responseBody),
+                      style: TextStyle(
+                        color: statusColor.withValues(alpha: 0.85),
+                        fontSize: 11,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -280,9 +328,16 @@ class _LogTileState extends State<_LogTile> {
                   title: 'REQUEST BODY',
                   content: _prettyJson(e.requestBody),
                 ),
+              if (e.errorMessage != null)
+                _DetailSection(
+                  title: 'ERROR',
+                  content: e.errorMessage!,
+                ),
               if (e.responseBody != null)
                 _DetailSection(
-                  title: 'RESPONSE BODY',
+                  title: e.status == ApiLogStatus.error
+                      ? 'ERROR RESPONSE'
+                      : 'RESPONSE BODY',
                   content: _prettyJson(e.responseBody),
                 ),
             ],
@@ -317,6 +372,27 @@ class _LogTileState extends State<_LogTile> {
         return const Color(0xFFC678DD);
       default:
         return Colors.white54;
+    }
+  }
+
+  String _wsStatusLabel(ApiLogStatus status) {
+    switch (status) {
+      case ApiLogStatus.success:
+        return 'OK';
+      case ApiLogStatus.error:
+        return 'ERR';
+      case ApiLogStatus.pending:
+        return '…';
+    }
+  }
+
+  String _responsePreview(dynamic body) {
+    try {
+      final encoded = jsonEncode(body);
+      return encoded.length > 80 ? '${encoded.substring(0, 80)}…' : encoded;
+    } catch (_) {
+      final s = body.toString();
+      return s.length > 80 ? '${s.substring(0, 80)}…' : s;
     }
   }
 

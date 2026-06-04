@@ -34,9 +34,12 @@ class UpdateSchedulesResponse {
   /// a non-error `errorCode` (0).
   bool get isSuccess => envelopeSuccess && errorCode == 0;
 
-  /// Best-effort message for UI / logs. Prefers the envelope message; falls
-  /// back to the inner `dB_Response`.
+  /// Best-effort message for UI / logs.
+  /// On error (errorCode != 0) always shows dB_Response because the envelope
+  /// message ("Scheduling saved successfully!") can be misleading even when
+  /// the DB reports a failure.
   String get displayMessage {
+    if (errorCode != 0 && dbResponse.isNotEmpty) return dbResponse;
     if (message.isNotEmpty) return message;
     if (dbResponse.isNotEmpty) return dbResponse;
     return 'Schedule updated';

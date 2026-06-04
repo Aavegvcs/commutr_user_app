@@ -461,25 +461,20 @@ class _AuthInterceptor extends Interceptor {
 
   String? _apiMessageFromBody(dynamic data) {
     if (data is Map) {
-      final m =
-      (data['message'] ?? data['title'])
-          ?.toString();
-
-      if (m != null && m.isNotEmpty) {
-        return m;
+      // Backend envelope: dB_Response is the authoritative message.
+      final dbResponse = (data['dB_Response'] ?? data['dbResponse'])?.toString();
+      if (dbResponse != null && dbResponse.isNotEmpty && dbResponse.toLowerCase() != 'success') {
+        return dbResponse;
       }
 
-      final errors = data['errors'];
+      final m = (data['message'] ?? data['title'])?.toString();
+      if (m != null && m.isNotEmpty) return m;
 
+      final errors = data['errors'];
       if (errors is Map) {
         for (final v in errors.values) {
-          if (v is List && v.isNotEmpty) {
-            return v.first.toString();
-          }
-
-          if (v != null) {
-            return v.toString();
-          }
+          if (v is List && v.isNotEmpty) return v.first.toString();
+          if (v != null) return v.toString();
         }
       }
     }
@@ -614,9 +609,13 @@ class _ErrorInterceptor extends Interceptor {
 
   String? _extractMessage(dynamic data) {
     if (data is Map) {
-      return (data['message'] ??
-          data['title'])
-          ?.toString();
+      // Check backend envelope field first (dB_Response / dbResponse),
+      // then fall back to standard REST error fields.
+      final dbResponse = (data['dB_Response'] ?? data['dbResponse'])?.toString();
+      if (dbResponse != null && dbResponse.isNotEmpty && dbResponse.toLowerCase() != 'success') {
+        return dbResponse;
+      }
+      return (data['message'] ?? data['title'])?.toString();
     }
 
     return data?.toString();

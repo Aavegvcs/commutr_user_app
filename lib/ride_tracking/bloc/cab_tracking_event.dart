@@ -1,3 +1,4 @@
+import 'package:commutr_main/ride_tracking/service/route_tracking_signalr_service.dart';
 import 'package:equatable/equatable.dart';
 
 abstract class CabTrackingEvent extends Equatable {
@@ -27,15 +28,19 @@ class RefreshCabTracking extends CabTrackingEvent {
 }
 
 /// Fired by SignalR whenever the server pushes a new driver location.
+/// Carries the full payload so all fields (speed, status, panic, etc.) are updated.
 class SignalRLocationReceived extends CabTrackingEvent {
-  final double latitude;
-  final double longitude;
+  final RouteLocationPayload payload;
 
-  const SignalRLocationReceived({
-    required this.latitude,
-    required this.longitude,
-  });
+  const SignalRLocationReceived(this.payload);
 
   @override
-  List<Object?> get props => [latitude, longitude];
+  List<Object?> get props => [
+        payload.latitude,
+        payload.longitude,
+        payload.speed,
+        payload.tripStatusCode,
+        payload.gpsTime,
+        payload.panic,
+      ];
 }
