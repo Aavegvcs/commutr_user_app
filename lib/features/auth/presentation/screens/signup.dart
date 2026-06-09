@@ -33,6 +33,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _stateController = TextEditingController();
   final TextEditingController _pincodeController = TextEditingController();
+  final TextEditingController _fullAddressController = TextEditingController();
   final TextEditingController _officeHubController = TextEditingController();
   final TextEditingController _signupOtpController = TextEditingController();
   final FocusNode _mobileFocusNode = FocusNode();
@@ -61,6 +62,9 @@ class _SignupScreenState extends State<SignupScreen> {
   double? _empLng;
   double? _currentLat;
   double? _currentLng;
+
+  /// Resolved from [GET /State] by matching the selected state name; sent as `stateCode`.
+  int? _stateCode;
 
   /// App service (:5001) — [POST /UserStages].
   final Dio _dio = Dio(BaseOptions(
@@ -96,6 +100,9 @@ class _SignupScreenState extends State<SignupScreen> {
       'https://dev-core.commutr.in/api/v1/Otp/send';
   static const String _otpVerifyPath =
       'https://dev-core.commutr.in/api/v1/Otp/verify';
+
+  /// Core service — [GET /State]; resolves `stateCode` from the selected state name.
+  static const String _statePath = 'https://dev-core.commutr.in/api/v1/State';
 
   void _logApiRequest({
     required String tag,
@@ -659,6 +666,7 @@ class _SignupScreenState extends State<SignupScreen> {
     if (loc != null) {
       _cityController.text = loc.city;
       _stateController.text = loc.state;
+      _fullAddressController.text = loc.fullAddress;
       final pin = loc.pincode.trim();
       if (pin.isNotEmpty && pin != 'N/A') {
         _pincodeController.text = pin;
@@ -693,6 +701,114 @@ class _SignupScreenState extends State<SignupScreen> {
     } catch (_) {}
   }
 
+  /// Fetches [GET /State] (header `x-tenant` = company code) and matches [stateName]
+  /// to set [_stateCode]. No-op on empty name; clears [_stateCode] on no match/error.
+  Future<void> _resolveStateCode(String stateName) async {
+    final name = stateName.trim();
+    if (name.isEmpty) {
+      _stateCode = null;
+      return;
+    }
+    final query = <String, dynamic>{
+      'searchTerm': '',
+      'sortColumn': '',
+      'sortOrder': '',
+      'page': 1,
+      'pageSize': 50,
+    };
+    final corp = companyCodeController.text.trim();
+    final headers = <String, dynamic>{
+      if (corp.isNotEmpty) 'x-tenant': corp,
+    };
+    _logApiRequest(
+      tag: 'State list (core)',
+      method: 'GET',
+      path: _statePath,
+      queryParameters: query,
+      headers: headers,
+    );
+    try {
+      final response = await _dio.get<dynamic>(
+        _statePath,
+        queryParameters: query,
+        options: Options(headers: headers),
+      );
+      _logApiSuccess('State list (core)', response.statusCode, response.data);
+
+      // Response may be a bare list or wrapped ({result|data|items|states}).
+      final list = _extractStateList(response.data);
+      if (list == null || list.isEmpty) {
+        debugPrint('[State list] no usable list in response');
+        _stateCode = null;
+        return;
+      }
+
+      final target = _normalizeStateName(name);
+      int? exactMatch;
+      int? fuzzyMatch;
+      for (final entry in list) {
+        if (entry is! Map) continue;
+        final rawName = entry['stateName']?.toString() ?? '';
+        if (rawName.trim().isEmpty) continue;
+        final entryName = _normalizeStateName(rawName);
+        final code = _parseStateCode(entry['stateCode']);
+        if (code == null) continue;
+        if (entryName == target) {
+          exactMatch = code;
+          break;
+        }
+        // Fuzzy: one name contains the other (handles abbreviation/suffix diffs).
+        if (fuzzyMatch == null &&
+            (entryName.contains(target) || target.contains(entryName))) {
+          fuzzyMatch = code;
+        }
+      }
+      _stateCode = exactMatch ?? fuzzyMatch;
+      debugPrint('[State list] matched "$name" (normalized="$target") '
+          '-> stateCode=$_stateCode (exact=$exactMatch fuzzy=$fuzzyMatch)');
+    } on DioException catch (e) {
+      _logApiDioError('State list (core)', e);
+      _stateCode = null;
+    } catch (e) {
+      _logApiUnexpected('State list (core)', e);
+      _stateCode = null;
+    }
+  }
+
+  /// Pulls the state array out of a bare list or a wrapped object/JSON string.
+  List<dynamic>? _extractStateList(dynamic data) {
+    if (data is String) {
+      try {
+        data = jsonDecode(data);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (data is List) return data;
+    if (data is Map) {
+      for (final key in ['result', 'data', 'items', 'states', 'value']) {
+        final v = data[key];
+        if (v is List) return v;
+        if (v is Map) {
+          final nested = _extractStateList(v);
+          if (nested != null) return nested;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Lowercase + strip non-alphanumerics for tolerant name comparison.
+  String _normalizeStateName(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  int? _parseStateCode(dynamic code) {
+    if (code is int) return code;
+    if (code is num) return code.toInt();
+    if (code is String) return int.tryParse(code.trim());
+    return null;
+  }
+
   @override
   void dispose() {
     companyCodeController.dispose();
@@ -702,6 +818,7 @@ class _SignupScreenState extends State<SignupScreen> {
     _cityController.dispose();
     _stateController.dispose();
     _pincodeController.dispose();
+    _fullAddressController.dispose();
     _officeHubController.dispose();
     _signupOtpController.dispose();
     _mobileFocusNode.removeListener(_onMobileFocusChanged);
@@ -764,6 +881,14 @@ class _SignupScreenState extends State<SignupScreen> {
     try {
       final nameParts = _splitFullName(_fullNameController.text.trim());
 
+      // Resolve stateCode from the selected state name (only when state is present).
+      final stateName = _stateController.text.trim();
+      if (stateName.isNotEmpty) {
+        await _resolveStateCode(stateName);
+      } else {
+        _stateCode = null;
+      }
+
       // Build request body according to API specification
       final Map<String, dynamic> requestBody = {
         "locCode": null,
@@ -774,10 +899,12 @@ class _SignupScreenState extends State<SignupScreen> {
         "city": _cityController.text.trim(),
         "pin": _pincodeController.text.trim(),
         "state": _stateController.text.trim(),
-        "stateCode": null,
+        "stateCode": _stateCode,
         "phoneNo": null,
         "emerContactNo": null,
-        "address": null,
+        "address": _fullAddressController.text.trim().isEmpty
+            ? null
+            : _fullAddressController.text.trim(),
         "supId": null,
         "empType": null,
         "empTypeId": 1,
@@ -883,6 +1010,7 @@ class _SignupScreenState extends State<SignupScreen> {
     _cityController.clear();
     _stateController.clear();
     _pincodeController.clear();
+    _fullAddressController.clear();
     _officeHubController.clear();
     setState(() {
       _selectedGender = 'Male';
@@ -892,6 +1020,7 @@ class _SignupScreenState extends State<SignupScreen> {
       _otpSentForMobile = null;
       _mobileOtpVerified = false;
       _verifiedSignupMobile = null;
+      _stateCode = null;
     });
     _signupOtpController.clear();
   }
@@ -1526,6 +1655,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   if (loc != null) {
                     _cityController.text = loc.city;
                     _stateController.text = loc.state;
+                    _fullAddressController.text = loc.fullAddress;
                     final pin = loc.pincode.trim();
                     if (pin.isNotEmpty && pin != 'N/A') {
                       _pincodeController.text = pin;
@@ -1566,6 +1696,37 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(8),
+              border: const Border(
+                left: BorderSide(color: Color(0xFFF5C518), width: 3),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline,
+                    color: const Color(0xFFF5A623), size: 14),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Please choose the location from the map only. '
+                    'Tap the pin on the map to select your location.',
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 12),
           // Map preview
           ClipRRect(
@@ -1605,6 +1766,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         if (loc != null) {
                           _cityController.text = loc.city;
                           _stateController.text = loc.state;
+                          _fullAddressController.text = loc.fullAddress;
                           final pin = loc.pincode.trim();
                           if (pin.isNotEmpty && pin != 'N/A') {
                             _pincodeController.text = pin;
@@ -1626,6 +1788,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         if (loc != null) {
                           _cityController.text = loc.city;
                           _stateController.text = loc.state;
+                          _fullAddressController.text = loc.fullAddress;
                           final pin = loc.pincode.trim();
                           if (pin.isNotEmpty && pin != 'N/A') {
                             _pincodeController.text = pin;
@@ -1702,6 +1865,16 @@ class _SignupScreenState extends State<SignupScreen> {
             ],
             readOnly: true,
           ),
+          const SizedBox(height: 12),
+          _buildLabel('Full Address'),
+          const SizedBox(height: 6),
+          _buildInlineBoxField(
+            controller: _fullAddressController,
+            hint: 'Pin a location on the map',
+            validator: _validateFullAddress,
+            readOnly: true,
+            maxLines: 2,
+          ),
         ],
       ),
     );
@@ -1714,6 +1887,7 @@ class _SignupScreenState extends State<SignupScreen> {
     String? Function(String?)? validator,
     List<TextInputFormatter>? inputFormatters,
     bool readOnly = false,
+    int maxLines = 1,
   }) {
     return TextFormField(
       controller: controller,
@@ -1721,6 +1895,7 @@ class _SignupScreenState extends State<SignupScreen> {
       inputFormatters: inputFormatters,
       validator: validator,
       readOnly: readOnly,
+      maxLines: maxLines,
       style: const TextStyle(fontSize: 14, color: Colors.black87),
       decoration: InputDecoration(
         hintText: hint,
@@ -1817,6 +1992,13 @@ class _SignupScreenState extends State<SignupScreen> {
 
   String? _validateOfficeHub(String? value) {
     if (value == null || value.trim().isEmpty) return 'Please enter office hub';
+    return null;
+  }
+
+  String? _validateFullAddress(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'Please pin a location on the map';
+    }
     return null;
   }
 

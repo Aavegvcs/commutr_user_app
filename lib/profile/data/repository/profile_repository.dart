@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../core/network/api_client.dart';
@@ -13,6 +14,10 @@ class ProfileRepository {
   /// [_staticAddressChangeTestBody] (debug / QA only).
   /// Set to `true` to send [_staticAddressChangeTestBody] instead of form data.
   static const useStaticAddressChangeTestPayload = false;
+
+  /// Core service — `GET /State`; resolves `stateCode` from a state name.
+  /// Mirrors the signup flow (absolute URL overrides any Dio `baseUrl`).
+  static const String _statePath = 'https://dev-core.commutr.in/api/v1/State';
 
   final ApiClient _apiClient;
   final AuthLocalStorage _authStorage;
@@ -71,6 +76,7 @@ class ProfileRepository {
     required String genderCode,
     required String address,
     required String city,
+    required String state,
     required String pin,
     required String emailId,
     required String mobileNo,
@@ -86,6 +92,11 @@ class ProfileRepository {
       throw Exception('User ID not found in local storage');
     }
 
+    // Resolve stateCode from the selected state name (only when present),
+    // exactly like the signup flow; fall back to the existing profile value.
+    final resolvedStateCode =
+        await _resolveStateCode(state) ?? profile.stateCode ?? 1;
+
     final lat = empLat ?? profile.empLat ?? 0;
     final lng = empLng ?? profile.empLng ?? 0;
     final mobileDigits = mobileNo.replaceAll(RegExp(r'\D'), '');
@@ -100,7 +111,7 @@ class ProfileRepository {
       'gender': genderCode,
       'address': address.trim(),
       'city': city.trim(),
-      'stateCode': profile.stateCode ?? 1,
+      'stateCode': resolvedStateCode,
       'pin': pin.trim(),
       'mobileNo': resolvedMobileNo,
       'emercontactNo': profile.emerContactNo,
@@ -141,6 +152,128 @@ class ProfileRepository {
     debugPrint(
       '[PROFILE_REPO] updateUserProfile RESPONSE body: ${_formatLogJson(response.data)}',
     );
+  }
+
+  /// Fetches `GET /State` and matches [stateName] to its `stateCode`.
+  /// Mirrors signup's `_resolveStateCode` (header `x-tenant` = tenantId,
+  /// plus `Authorization: Bearer <token>`). Returns `null` on empty name /
+  /// no match / error so the caller can fall back to the existing value.
+  Future<int?> _resolveStateCode(String stateName) async {
+    final name = stateName.trim();
+    if (name.isEmpty) {
+      return null;
+    }
+
+    final query = <String, dynamic>{
+      'searchTerm': '',
+      'sortColumn': '',
+      'sortOrder': '',
+      'page': 1,
+      'pageSize': 50,
+    };
+
+    final authData = _authStorage.getAuthData()?.data;
+    final tenant = authData?.user?.tenantId?.trim() ?? '';
+    final token = authData?.accessToken?.trim() ?? '';
+    final headers = <String, dynamic>{
+      if (tenant.isNotEmpty) 'x-tenant': tenant,
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
+      headers: {'Content-Type': 'application/json'},
+    ));
+
+    debugPrint(
+      '[PROFILE_REPO] resolveStateCode → GET $_statePath '
+      'tenant=$tenant query=$query',
+    );
+
+    try {
+      final response = await dio.get<dynamic>(
+        _statePath,
+        queryParameters: query,
+        options: Options(headers: headers),
+      );
+      debugPrint(
+        '[PROFILE_REPO] resolveStateCode ← status=${response.statusCode}',
+      );
+
+      // Response may be a bare list or wrapped ({result|data|items|states}).
+      final list = _extractStateList(response.data);
+      if (list == null || list.isEmpty) {
+        debugPrint('[PROFILE_REPO] resolveStateCode no usable list in response');
+        return null;
+      }
+
+      final target = _normalizeStateName(name);
+      int? exactMatch;
+      int? fuzzyMatch;
+      for (final entry in list) {
+        if (entry is! Map) continue;
+        final rawName = entry['stateName']?.toString() ?? '';
+        if (rawName.trim().isEmpty) continue;
+        final entryName = _normalizeStateName(rawName);
+        final code = _parseStateCode(entry['stateCode']);
+        if (code == null) continue;
+        if (entryName == target) {
+          exactMatch = code;
+          break;
+        }
+        // Fuzzy: one name contains the other (handles abbreviation/suffix diffs).
+        if (fuzzyMatch == null &&
+            (entryName.contains(target) || target.contains(entryName))) {
+          fuzzyMatch = code;
+        }
+      }
+      final stateCode = exactMatch ?? fuzzyMatch;
+      debugPrint('[PROFILE_REPO] resolveStateCode matched "$name" '
+          '(normalized="$target") -> stateCode=$stateCode '
+          '(exact=$exactMatch fuzzy=$fuzzyMatch)');
+      return stateCode;
+    } on DioException catch (e) {
+      debugPrint('[PROFILE_REPO] resolveStateCode DioException: '
+          '${e.response?.statusCode} ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('[PROFILE_REPO] resolveStateCode unexpected: $e');
+      return null;
+    }
+  }
+
+  List<dynamic>? _extractStateList(dynamic data) {
+    if (data is String) {
+      try {
+        data = jsonDecode(data);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (data is List) return data;
+    if (data is Map) {
+      for (final key in ['result', 'data', 'items', 'states', 'value']) {
+        final v = data[key];
+        if (v is List) return v;
+        if (v is Map) {
+          final nested = _extractStateList(v);
+          if (nested != null) return nested;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Lowercase + strip non-alphanumerics for tolerant name comparison.
+  String _normalizeStateName(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  int? _parseStateCode(dynamic code) {
+    if (code is int) return code;
+    if (code is num) return code.toInt();
+    if (code is String) return int.tryParse(code.trim());
+    return null;
   }
 
   /// `POST /AddressChanges` via [http] package (not Dio).

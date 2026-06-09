@@ -1,8 +1,12 @@
 import 'dart:async';
 
+import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
 import 'package:commutr_main/features/trip_detail/data/model/trip_home_response.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/cab_tracking/user_cab_tracking_repo.dart';
 import 'package:commutr_main/trip_summary/trip_directions_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class TripSummaryWelcomeScreen extends StatelessWidget {
@@ -135,7 +139,7 @@ class _MapCard extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Map area
+          // Map area — tap to open the full route in a modal.
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             child: SizedBox(
@@ -144,6 +148,39 @@ class _MapCard extends StatelessWidget {
               child: Stack(
                 children: [
                   _TripRouteMap(item: item),
+                  // Transparent tap layer above the (non-interactive) preview
+                  // map so the whole area opens the full-screen route modal.
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _showRouteModal(context, item),
+                    ),
+                  ),
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: IgnorePointer(
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.12),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.open_in_full,
+                          color: Color(0xFF1B5E3B),
+                          size: 18,
+                        ),
+                      ),
+                    ),
+                  ),
                   if (item.isCompleted)
                     Positioned(
                       bottom: 14,
@@ -240,12 +277,190 @@ class _MapCard extends StatelessWidget {
   }
 }
 
+// ─── Trip Route Data ──────────────────────────────────────────────────────────
+
+/// The resolved markers + polyline for a trip route, shared by the inline
+/// preview map and the full-screen modal.
+class _TripRouteData {
+  const _TripRouteData({required this.markers, required this.polylinePoints});
+
+  final Set<Marker> markers;
+  final List<LatLng> polylinePoints;
+}
+
+/// Decodes an encoded Google polyline string into [LatLng] points.
+List<LatLng> _decodeRoutePolyline(String? encoded) {
+  if (encoded == null || encoded.trim().isEmpty) return const [];
+  try {
+    final points = PolylinePoints().decodePolyline(encoded.trim());
+    return points
+        .map((p) => LatLng(p.latitude, p.longitude))
+        .toList(growable: false);
+  } catch (e) {
+    debugPrint('[TRIP_SUMMARY] polyline decode failed: $e');
+    return const [];
+  }
+}
+
+/// Markers for the planned route stops — fallback when the tracking APIs
+/// return nothing usable.
+Set<Marker> _stopMarkers(List<MapRouteStop> stops) {
+  final markers = <Marker>{};
+  for (final stop in stops) {
+    final ll = parseLatLngString(stop.latLng);
+    if (ll == null) continue;
+    markers.add(Marker(
+      markerId: MarkerId(stop.id),
+      position: ll,
+      icon: locationMarker,
+      infoWindow: InfoWindow(title: stop.title, snippet: stop.snippet),
+    ));
+  }
+  return markers;
+}
+
+/// Builds the trip-summary route by combining backend calls:
+///
+/// 1. `POST /Tracking/gps-route` → the complete `actualRoutePolyline`
+///    (encoded), decoded into the route polyline. Falls back to
+///    `plannedRoutePolyline`, then to the planned stop points.
+/// 2. `GET /UserApp/GetUserCabTracking` → office + current cab markers, and
+///    `POST /Tracking/status` → per-passenger planned-pickup markers
+///    (`plannedLat`/`plannedLng`).
+Future<_TripRouteData> _fetchTripRoute(TripHomeItem item) async {
+  final tripId = item.tripId;
+  final empId = item.empId;
+
+  // Planned stop points — used for fallback polyline.
+  final routeStops = item.buildOrderedRouteStops();
+  final stopPoints = <LatLng>[];
+  for (final stop in routeStops) {
+    final ll = parseLatLngString(stop.latLng);
+    if (ll != null) stopPoints.add(ll);
+  }
+
+  if (tripId == null) {
+    return _TripRouteData(
+      markers: _stopMarkers(routeStops),
+      polylinePoints: stopPoints.length >= 2 ? stopPoints : const [],
+    );
+  }
+
+  final repo = sl<UserCabTrackingRepo>();
+
+  // Fetch route polyline, cab/office details and passenger pickups together.
+  final results = await Future.wait([
+    repo
+        .getGpsRoute(tripId: tripId)
+        .then<GpsRouteResponse?>((v) => v)
+        .catchError((e) {
+          debugPrint('[TRIP_SUMMARY] getGpsRoute failed: $e');
+          return null;
+        }),
+    repo
+        .getTrackingStatus(tripId: tripId)
+        .then<TrackingStatusResponse?>((v) => v)
+        .catchError((e) {
+          debugPrint('[TRIP_SUMMARY] getTrackingStatus failed: $e');
+          return null;
+        }),
+    if (empId != null)
+      repo
+          .getUserCabTracking(empId: empId, tripId: tripId)
+          .then<CabTrackingData?>((v) => v)
+          .catchError((e) {
+            debugPrint('[TRIP_SUMMARY] getUserCabTracking failed: $e');
+            return null;
+          }),
+  ]);
+
+  final gpsRoute = results[0] as GpsRouteResponse?;
+  final status = results[1] as TrackingStatusResponse?;
+  final cab = results.length > 2 ? results[2] as CabTrackingData? : null;
+
+  // ── Polyline: decode actualRoutePolyline (fallback planned → stops) ──
+  final decoded = _decodeRoutePolyline(
+    gpsRoute?.actualRoutePolyline ?? gpsRoute?.plannedRoutePolyline,
+  );
+  final polylinePoints = decoded.isNotEmpty
+      ? decoded
+      : (stopPoints.length >= 2 ? stopPoints : <LatLng>[]);
+
+  // ── Markers ──
+  final markers = <Marker>{};
+
+  // Passenger planned-pickup markers from /Tracking/status.
+  if (status != null) {
+    for (final pax in status.passengers) {
+      if (!pax.hasPickupLocation) continue;
+      markers.add(Marker(
+        markerId: MarkerId('pax_${pax.empId ?? pax.fullName}'),
+        position: LatLng(pax.pickupLat!, pax.pickupLng!),
+        icon: locationMarker,
+        infoWindow: InfoWindow(
+          title: pax.fullName.isEmpty ? 'Passenger' : pax.fullName,
+          snippet: pax.address,
+        ),
+      ));
+    }
+  }
+
+  // Office marker (from cab tracking, fallback to status).
+  final officeLat = cab?.officeLat ?? status?.officeLat;
+  final officeLng = cab?.officeLng ?? status?.officeLng;
+  if (officeLat != null && officeLng != null) {
+    markers.add(Marker(
+      markerId: const MarkerId('office'),
+      position: LatLng(officeLat, officeLng),
+      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+      infoWindow: InfoWindow(
+        title: status?.officeDisplayName ?? status?.officeLocName ?? 'Office',
+        snippet: status?.officeAddress,
+      ),
+    ));
+  }
+
+  // Current cab location marker.
+  if (cab != null && cab.hasDriverLocation) {
+    markers.add(Marker(
+      markerId: const MarkerId('cab'),
+      position: LatLng(cab.currentLat!, cab.currentLng!),
+      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+      infoWindow: InfoWindow(
+        title: cab.driverName ?? 'Cab',
+        snippet: cab.vehicleRegistrationNo,
+      ),
+    ));
+  }
+
+  // Fall back to planned route stops when no API markers were produced.
+  final finalMarkers =
+      markers.isNotEmpty ? markers : _stopMarkers(routeStops);
+
+  return _TripRouteData(
+    markers: finalMarkers,
+    polylinePoints: polylinePoints,
+  );
+}
+
+/// Opens the full-screen route map modal for [item].
+void _showRouteModal(BuildContext context, TripHomeItem item) {
+  showDialog<void>(
+    context: context,
+    barrierColor: Colors.black54,
+    builder: (_) => _TripRouteModal(item: item),
+  );
+}
+
 // ─── Trip Route Google Map ────────────────────────────────────────────────────
 
 class _TripRouteMap extends StatefulWidget {
-  const _TripRouteMap({required this.item});
+  const _TripRouteMap({required this.item, this.interactive = false});
 
   final TripHomeItem item;
+
+  /// When true, map gestures + zoom controls are enabled (used in the modal).
+  final bool interactive;
 
   @override
   State<_TripRouteMap> createState() => _TripRouteMapState();
@@ -269,41 +484,19 @@ class _TripRouteMapState extends State<_TripRouteMap> {
   }
 
   Future<void> _buildRoute() async {
-    final item = widget.item;
-    final routeStops = item.buildOrderedRouteStops();
-
-    final validStops = <MapRouteStop>[];
+    // Initial fit + dashed fallback line while the APIs load.
     final stopPoints = <LatLng>[];
-    for (final stop in routeStops) {
+    for (final stop in widget.item.buildOrderedRouteStops()) {
       final ll = parseLatLngString(stop.latLng);
-      if (ll == null) continue;
-      validStops.add(stop);
-      stopPoints.add(ll);
+      if (ll != null) stopPoints.add(ll);
     }
-
-    final Set<Marker> markers = {};
-    for (var i = 0; i < validStops.length; i++) {
-      final stop = validStops[i];
-      markers.add(Marker(
-        markerId: MarkerId(stop.id),
-        position: stopPoints[i],
-        icon: locationMarker,
-        infoWindow: InfoWindow(title: stop.title, snippet: stop.snippet),
-      ));
-    }
-
-    if (stopPoints.length < 2) {
-      final camera = stopPoints.isNotEmpty
-          ? CameraPosition(target: stopPoints.first, zoom: 14)
-          : _camera;
-      if (mounted) setState(() { _markers = markers; _camera = camera; });
-      return;
-    }
-
-    // Show markers + fallback dashed straight line while Directions API loads.
     final fallbackBounds = boundsFromPoints(stopPoints);
-    final fallbackCamera = fallbackBounds != null
-        ? CameraPosition(
+
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        if (fallbackBounds != null) {
+          _camera = CameraPosition(
             target: LatLng(
               (fallbackBounds.southwest.latitude +
                       fallbackBounds.northeast.latitude) /
@@ -313,43 +506,47 @@ class _TripRouteMapState extends State<_TripRouteMap> {
                   2,
             ),
             zoom: 12,
-          )
-        : _camera;
-
-    if (mounted) {
-      setState(() {
-        _markers = markers;
-        _camera = fallbackCamera;
-        _loading = true;
-        _polylines = {
-          Polyline(
-            polylineId: const PolylineId('trip_route'),
-            color: const Color(0xFF1A3A8F).withValues(alpha: 0.4),
-            width: 2,
-            points: stopPoints,
-            patterns: [PatternItem.dash(16), PatternItem.gap(8)],
-          ),
-        };
+          );
+        } else if (stopPoints.isNotEmpty) {
+          _camera = CameraPosition(target: stopPoints.first, zoom: 14);
+        }
+        if (stopPoints.length >= 2) {
+          _polylines = {
+            Polyline(
+              polylineId: const PolylineId('trip_route'),
+              color: const Color(0xFF1A3A8F).withValues(alpha: 0.4),
+              width: 2,
+              points: stopPoints,
+              patterns: [PatternItem.dash(16), PatternItem.gap(8)],
+            ),
+          };
+        }
       });
     }
 
-    final roadPoints = await fetchRoutePolylineThroughPoints(stopPoints);
+    final data = await _fetchTripRoute(widget.item);
 
     if (!mounted) return;
 
-    final polylinePoints = roadPoints.isNotEmpty ? roadPoints : stopPoints;
-    final bounds = boundsFromPoints(polylinePoints);
+    final cameraPoints = <LatLng>[
+      ...data.polylinePoints,
+      ...data.markers.map((m) => m.position),
+    ];
+    final bounds = boundsFromPoints(cameraPoints);
 
     setState(() {
       _loading = false;
-      _polylines = {
-        Polyline(
-          polylineId: const PolylineId('trip_route'),
-          color: const Color(0xFF1A3A8F),
-          width: 3,
-          points: polylinePoints,
-        ),
-      };
+      _markers = data.markers;
+      if (data.polylinePoints.isNotEmpty) {
+        _polylines = {
+          Polyline(
+            polylineId: const PolylineId('trip_route'),
+            color: const Color(0xFF1A3A8F),
+            width: 3,
+            points: data.polylinePoints,
+          ),
+        };
+      }
     });
 
     if (bounds != null && _ctrl.isCompleted) {
@@ -382,9 +579,13 @@ class _TripRouteMapState extends State<_TripRouteMap> {
           markers: _markers,
           polylines: _polylines,
           myLocationButtonEnabled: false,
-          zoomControlsEnabled: false,
+          zoomControlsEnabled: widget.interactive,
           mapToolbarEnabled: false,
-          compassEnabled: false,
+          compassEnabled: widget.interactive,
+          zoomGesturesEnabled: widget.interactive,
+          scrollGesturesEnabled: widget.interactive,
+          rotateGesturesEnabled: widget.interactive,
+          tiltGesturesEnabled: widget.interactive,
         ),
         if (_loading)
           const Positioned(
@@ -400,6 +601,90 @@ class _TripRouteMapState extends State<_TripRouteMap> {
             ),
           ),
       ],
+    );
+  }
+}
+
+// ─── Full-screen Route Modal ──────────────────────────────────────────────────
+
+class _TripRouteModal extends StatelessWidget {
+  const _TripRouteModal({required this.item});
+
+  final TripHomeItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    return Dialog(
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: media.padding.top + 24,
+      ),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: SizedBox(
+        width: double.infinity,
+        height: double.infinity,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: _TripRouteMap(item: item, interactive: true),
+            ),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Material(
+                color: Colors.white,
+                shape: const CircleBorder(),
+                elevation: 3,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => Navigator.of(context).maybePop(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.close,
+                      color: Color(0xFF004128),
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 12,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Text(
+                  'Trip Route',
+                  style: TextStyle(
+                    color: Color(0xFF004128),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

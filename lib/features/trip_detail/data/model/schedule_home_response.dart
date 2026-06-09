@@ -2,16 +2,22 @@ import 'dart:convert';
 
 /// Wraps the `GET /UserApp/GetScheduleHomePage` response.
 ///
-/// Observed shape (note the `result` value is a JSON-encoded string):
+/// Observed shape (note the `result` value is a JSON-encoded string). The
+/// server now returns a *flat* list of per-day schedule items rather than the
+/// older `[{DateIn, data:[...]}]` day-grouped shape:
 /// ```json
 /// [
 ///   {
 ///     "errorCode": 0,
 ///     "dB_Response": "Success",
-///     "result": "[{\"DateIn\":\"Today\",\"data\":[ ... ]},{\"DateIn\":\"Tomorrow\",\"data\":[ ... ]}]"
+///     "result": "[{\"Empid\":578,\"LoginScheduleDate\":\"09-Jun-2026\",\"LogoutScheduleDate\":\"09-Jun-2026\",\"LoginShiftTime\":\"21:00\",\"LogoutShiftTime\":\"\",\"TripStatusName\":\"Scheduled\",\"UserAddress\":\" ... \",\"OfficeAddress\":\" ... \",\"LocCode\":183,\"TripStatus\":\"TripFound\"}, ... ]"
 ///   }
 /// ]
 /// ```
+///
+/// The legacy day-grouped shape is still accepted for backwards compatibility.
+/// [_parseGroups] normalises either shape into a list of [ScheduleDateGroup]s
+/// (one group per schedule date) so the UI contract is unchanged.
 ///
 /// Every field is optional/null-safe; the server has been observed to omit
 /// most of the per-trip fields when no schedule exists for the day.
@@ -52,10 +58,91 @@ class ScheduleHomeResponse {
       }
     }
     if (decoded is! List) return const [];
-    return decoded
-        .whereType<Map>()
-        .map((m) => ScheduleDateGroup.fromJson(Map<String, dynamic>.from(m)))
+
+    final maps =
+        decoded.whereType<Map>().map((m) => Map<String, dynamic>.from(m));
+
+    // Legacy day-grouped shape: each element carries a `data` array (and
+    // usually a `DateIn`). Parse it directly into [ScheduleDateGroup]s.
+    final isLegacyGrouped = maps.any((m) => m['data'] is List);
+    if (isLegacyGrouped) {
+      return maps
+          .map((m) => ScheduleDateGroup.fromJson(m))
+          .toList(growable: false);
+    }
+
+    // New flat shape: a list of per-day [ScheduleItem]s. Group them by their
+    // schedule date so the UI keeps rendering one date header per day.
+    final items =
+        maps.map((m) => ScheduleItem.fromJson(m)).toList(growable: false);
+    return _groupByDate(items);
+  }
+
+  /// Groups a flat list of [ScheduleItem]s into one [ScheduleDateGroup] per
+  /// schedule date, preserving the order in which dates first appear.
+  static List<ScheduleDateGroup> _groupByDate(List<ScheduleItem> items) {
+    final order = <String>[];
+    final buckets = <String, List<ScheduleItem>>{};
+
+    for (final item in items) {
+      final key = item.loginScheduleDate?.trim().isNotEmpty == true
+          ? item.loginScheduleDate!.trim()
+          : (item.logoutScheduleDate?.trim() ?? '');
+      if (!buckets.containsKey(key)) {
+        order.add(key);
+        buckets[key] = <ScheduleItem>[];
+      }
+      buckets[key]!.add(item);
+    }
+
+    return order
+        .map((key) => ScheduleDateGroup(
+              dateIn: _relativeDayLabel(key),
+              data: buckets[key]!,
+            ))
         .toList(growable: false);
+  }
+
+  /// Returns `"Today"` / `"Tomorrow"` for the given `"dd-MMM-yyyy"` date when it
+  /// matches, otherwise `null` (the UI falls back to the formatted header date).
+  static String? _relativeDayLabel(String rawDate) {
+    final date = _parseDdMmmYyyy(rawDate);
+    if (date == null) return null;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final diff = DateTime(date.year, date.month, date.day)
+        .difference(today)
+        .inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Tomorrow';
+    return null;
+  }
+
+  static const Map<String, int> _monthIndex = {
+    'jan': 1,
+    'feb': 2,
+    'mar': 3,
+    'apr': 4,
+    'may': 5,
+    'jun': 6,
+    'jul': 7,
+    'aug': 8,
+    'sep': 9,
+    'oct': 10,
+    'nov': 11,
+    'dec': 12,
+  };
+
+  static DateTime? _parseDdMmmYyyy(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final parts = trimmed.split('-');
+    if (parts.length != 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = _monthIndex[parts[1].toLowerCase()];
+    final year = int.tryParse(parts[2]);
+    if (day == null || month == null || year == null) return null;
+    return DateTime(year, month, day);
   }
 }
 
@@ -110,6 +197,14 @@ class ScheduleItem {
   final String? userAddress;
   final String? officeAddress;
 
+  /// Office/location code for this schedule (`LocCode`). Used as the primary
+  /// source when cancelling/editing a roster entry.
+  final int? locCode;
+
+  /// Trip availability flag from the backend, e.g. `"TripFound"` /
+  /// `"TripNotFound"`. Indicates whether a vehicle/trip has been found for the
+  /// scheduled shift.
+
   const ScheduleItem({
     this.empId,
     this.employeeId,
@@ -121,6 +216,7 @@ class ScheduleItem {
     this.tripStatusName,
     this.userAddress,
     this.officeAddress,
+    this.locCode,
   });
 
   factory ScheduleItem.fromJson(Map<String, dynamic> json) {
@@ -142,8 +238,10 @@ class ScheduleItem {
       tripStatusName: readString('TripStatusName'),
       userAddress: readString('UserAddress'),
       officeAddress: readString('OfficeAddress'),
+      locCode: (json['LocCode'] as num?)?.toInt(),
     );
   }
+
 
   /// `true` when `LoginScheduleDate` is present and non-empty.
   bool get hasLoginSchedule {

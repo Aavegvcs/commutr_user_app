@@ -6,6 +6,7 @@ import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verifi
 import 'package:commutr_main/core/network/api_client.dart';
 import 'package:commutr_main/core/network/api_constants.dart';
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/bloc/profile_event.dart';
 import 'package:commutr_main/profile/bloc/profile_state.dart';
@@ -203,10 +204,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     if (!mounted) return;
     setState(() => _sendingOtp = true);
     try {
+      final token = sl<AuthLocalStorage>().getAccessToken();
       final response = await _otpDio.post<dynamic>(
         _otpSendUrl,
         data: {'mobileNo': mobile, 'requestType': 'S'},
-        options: Options(headers: {'X-CorporateCode': 'asnd'}),
+        options: Options(headers: {
+          if (token != null && token.isNotEmpty)
+            'Authorization': 'Bearer $token',
+        }),
       );
       if (!mounted) return;
       final ok = _otpApiTruthy(_otpResponseAsJson(response.data));
@@ -255,10 +260,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     if (!mounted) return;
     setState(() => _verifyingOtp = true);
     try {
+      final token = sl<AuthLocalStorage>().getAccessToken();
       final response = await _otpDio.post<dynamic>(
         _otpVerifyUrl,
         data: {'mobileNo': mobile, 'otp': otp, 'requestType': 'S'},
-        options: Options(headers: {'X-CorporateCode': 'asnd'}),
+        options: Options(headers: {
+          if (token != null && token.isNotEmpty)
+            'Authorization': 'Bearer $token',
+        }),
       );
       if (!mounted) return;
       final ok = _otpApiTruthy(_otpResponseAsJson(response.data));
@@ -1626,6 +1635,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         genderCode: _genderCode(_selectedGender),
         address: _addressController.text,
         city: _cityController.text,
+        state: _stateController.text,
         pin: _pincodeController.text,
         emailId: _emailController.text,
         mobileNo: _mobileController.text.trim(),

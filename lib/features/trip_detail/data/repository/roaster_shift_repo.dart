@@ -4,10 +4,75 @@ import 'package:commutr_main/features/trip_detail/data/model/roaster_shifts_resp
 import 'package:commutr_main/features/trip_detail/data/model/update_schedules_response.dart';
 import 'package:flutter/foundation.dart';
 
+class ReachedHomeResponse {
+  final bool isSuccess;
+  final String message;
+
+  const ReachedHomeResponse({required this.isSuccess, required this.message});
+
+  factory ReachedHomeResponse.fromJson(Map<String, dynamic> json) {
+    final errorCode = json['ErrorCode'] ?? json['errorCode'] ?? 0;
+    final dbResponse =
+        (json['DBResponse'] ?? json['dbResponse'] ?? '').toString().trim();
+    final msg =
+        (json['Message'] ?? json['message'] ?? '').toString().trim();
+    final success =
+        (errorCode == 0 || errorCode == '0') && dbResponse == '1';
+    return ReachedHomeResponse(
+      isSuccess: success,
+      message: msg.isNotEmpty ? msg : dbResponse,
+    );
+  }
+}
+
 class RoasterShiftRepo {
   final ApiClient _apiClient;
 
   RoasterShiftRepo(this._apiClient);
+
+  Future<ReachedHomeResponse> reachedHome({
+    required int empId,
+    required int tripId,
+    required double empLat,
+    required double empLng,
+  }) async {
+    final body = {
+      'EmpId': empId,
+      'TripID': tripId,
+      'EmpLat': empLat,
+      'EmpLng': empLng,
+    };
+    debugPrint('[REACHED_HOME] → POST /UserApp/ReachedHome body=$body');
+    try {
+      final response = await _apiClient.dio.post<dynamic>(
+        '/UserApp/ReachedHome',
+        data: body,
+      );
+      debugPrint(
+        '[REACHED_HOME] ← status=${response.statusCode} data=${response.data}',
+      );
+      final raw = response.data;
+      Map<String, dynamic>? payload;
+      if (raw is Map<String, dynamic>) {
+        payload = raw;
+      } else if (raw is Map) {
+        payload = Map<String, dynamic>.from(raw);
+      } else if (raw is List && raw.isNotEmpty && raw.first is Map) {
+        payload = Map<String, dynamic>.from(raw.first as Map);
+      }
+      if (payload == null) {
+        debugPrint('[REACHED_HOME] ✖ unexpected response format');
+        return const ReachedHomeResponse(
+          isSuccess: false,
+          message: 'Unexpected response format',
+        );
+      }
+      return ReachedHomeResponse.fromJson(payload);
+    } catch (e, st) {
+      debugPrint('[REACHED_HOME] ✖ exception=$e\n$st');
+      rethrow;
+    }
+  }
 
   Future<ShiftResult> getRoasterShiftDetail({
     required int locCode,
@@ -158,6 +223,7 @@ class RoasterShiftRepo {
       'Empid': empId,
       'ScheduleDate': scheduleDate,
       'TripType': tripType,
+      "ScheduleCancelVersion":"APP"
     };
 
     debugPrint('[CANCEL_SCHEDULES] → POST /TransRoster/CancelSchedules');

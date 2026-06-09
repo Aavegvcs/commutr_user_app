@@ -48,9 +48,12 @@ class ScheduleHomeRepo {
 
     final parsed = ScheduleHomeResponse.fromJson(envelope);
 
+    final itemCount =
+        parsed.groups.fold<int>(0, (sum, g) => sum + g.data.length);
     debugPrint(
       '[SCHEDULE_HOME_REPO] parsed → errorCode=${parsed.errorCode} '
-      'dbResponse="${parsed.dbResponse}" groups=${parsed.groups.length}',
+      'dbResponse="${parsed.dbResponse}" groups=${parsed.groups.length} '
+      'items=$itemCount',
     );
 
     if (!parsed.isSuccess) {

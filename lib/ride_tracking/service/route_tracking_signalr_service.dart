@@ -7,6 +7,12 @@ import 'package:commutr_main/core/network/api_constants.dart';
 import 'package:flutter/foundation.dart';
 import 'package:signalr_netcore/signalr_client.dart';
 
+double? _readDouble(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  return double.tryParse(v.toString());
+}
+
 /// Payload delivered by the backend `ReceiveRouteLocation` event.
 class RouteLocationPayload {
   final int? dsId;
@@ -18,6 +24,8 @@ class RouteLocationPayload {
   final String? tripStatusName;
   final String? source;
   final bool? panic;
+  final int? logId;
+  final List<RouteTripPassenger> passengers;
 
   const RouteLocationPayload({
     this.dsId,
@@ -29,32 +37,212 @@ class RouteLocationPayload {
     this.tripStatusName,
     this.source,
     this.panic,
+    this.logId,
+    this.passengers = const [],
   });
 
   factory RouteLocationPayload.fromJson(Map<String, dynamic> json) {
-    double? readDouble(Object? v) {
-      if (v == null) return null;
-      if (v is num) return v.toDouble();
-      return double.tryParse(v.toString());
-    }
-
     return RouteLocationPayload(
       dsId: (json['dsId'] as num?)?.toInt(),
-      latitude: readDouble(json['latitude']),
-      longitude: readDouble(json['longitude']),
-      speed: readDouble(json['speed']),
+      latitude: _readDouble(json['latitude']),
+      longitude: _readDouble(json['longitude']),
+      speed: _readDouble(json['speed']),
       gpsTime: json['gpsTime']?.toString(),
       tripStatusCode: (json['tripStatusCode'] as num?)?.toInt(),
       tripStatusName: json['tripStatusName']?.toString(),
       source: json['source']?.toString(),
       panic: json['panic'] as bool?,
+      logId: (json['logId'] as num?)?.toInt(),
+      passengers: (json['passengers'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((e) => RouteTripPassenger.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'dsId': dsId,
+        'latitude': latitude,
+        'longitude': longitude,
+        'speed': speed,
+        'gpsTime': gpsTime,
+        'tripStatusCode': tripStatusCode,
+        'tripStatusName': tripStatusName,
+        'source': source,
+        'panic': panic,
+        'logId': logId,
+        'passengers': passengers.map((e) => e.toJson()).toList(),
+      };
 
   @override
   String toString() =>
       'RouteLocationPayload(dsId=$dsId, lat=$latitude, lng=$longitude, '
-      'speed=$speed, gpsTime=$gpsTime, status=$tripStatusName, panic=$panic)';
+      'speed=$speed, gpsTime=$gpsTime, status=$tripStatusName, panic=$panic, '
+      'logId=$logId, passengers=${passengers.length})';
+}
+
+/// A single passenger attached to a route-tracking location update.
+class RouteTripPassenger {
+  final int? empId;
+  final String? employeeID;
+  final String? firstname;
+  final String? lastName;
+  final String? gender;
+  final String? mobileno;
+  final int? empLocCode;
+  final int? tripType;
+  final int? paxOrder;
+  final String? address;
+  final bool? noShow;
+  final int? noShowReasonId;
+  final bool? orsDeviation;
+  final bool? scheduled;
+  final bool? paxAdded;
+  final String? paxType;
+  final double? empDistance;
+  final double? empDirectDistance;
+  final double? empCost;
+  final String? plannedScheduleTime;
+  final int? etaDeviationMinutes;
+  final double? plannedLat;
+  final double? plannedLng;
+
+  final String? empSigninTime;
+  final double? empSigninLat;
+  final double? empSigninLng;
+
+  final String? empSignOutTime;
+  final double? empSignOutLat;
+  final double? empSignOutLng;
+
+  final String? cabReachedTime;
+  final double? cabReachedLat;
+  final double? cabReachedLng;
+
+  final String? reachedHomeTime;
+  final double? reachedHomeLat;
+  final double? reachedHomeLng;
+
+  final String? paxTrackingStatus;
+
+  const RouteTripPassenger({
+    this.empId,
+    this.employeeID,
+    this.firstname,
+    this.lastName,
+    this.gender,
+    this.mobileno,
+    this.empLocCode,
+    this.tripType,
+    this.paxOrder,
+    this.address,
+    this.noShow,
+    this.noShowReasonId,
+    this.orsDeviation,
+    this.scheduled,
+    this.paxAdded,
+    this.paxType,
+    this.empDistance,
+    this.empDirectDistance,
+    this.empCost,
+    this.plannedScheduleTime,
+    this.etaDeviationMinutes,
+    this.plannedLat,
+    this.plannedLng,
+    this.empSigninTime,
+    this.empSigninLat,
+    this.empSigninLng,
+    this.empSignOutTime,
+    this.empSignOutLat,
+    this.empSignOutLng,
+    this.cabReachedTime,
+    this.cabReachedLat,
+    this.cabReachedLng,
+    this.reachedHomeTime,
+    this.reachedHomeLat,
+    this.reachedHomeLng,
+    this.paxTrackingStatus,
+  });
+
+  factory RouteTripPassenger.fromJson(Map<String, dynamic> json) {
+    return RouteTripPassenger(
+      empId: (json['empId'] as num?)?.toInt(),
+      employeeID: json['employeeID']?.toString(),
+      firstname: json['firstname']?.toString(),
+      lastName: json['lastName']?.toString(),
+      gender: json['gender']?.toString(),
+      mobileno: json['mobileno']?.toString(),
+      empLocCode: (json['empLocCode'] as num?)?.toInt(),
+      tripType: (json['tripType'] as num?)?.toInt(),
+      paxOrder: (json['paxOrder'] as num?)?.toInt(),
+      address: json['address']?.toString(),
+      noShow: json['noShow'] as bool?,
+      noShowReasonId: (json['noShowReasonId'] as num?)?.toInt(),
+      orsDeviation: json['orsDeviation'] as bool?,
+      scheduled: json['scheduled'] as bool?,
+      paxAdded: json['paxAdded'] as bool?,
+      paxType: json['paxType']?.toString(),
+      empDistance: _readDouble(json['empDistance']),
+      empDirectDistance: _readDouble(json['empDirectDistance']),
+      empCost: _readDouble(json['empCost']),
+      plannedScheduleTime: json['plannedScheduleTime']?.toString(),
+      etaDeviationMinutes: (json['EtaDeviationMinutes'] as num?)?.toInt(),
+      plannedLat: _readDouble(json['plannedLat']),
+      plannedLng: _readDouble(json['plannedLng']),
+      empSigninTime: json['empSigninTime']?.toString(),
+      empSigninLat: _readDouble(json['empSigninLat']),
+      empSigninLng: _readDouble(json['empSigninLng']),
+      empSignOutTime: json['empSignOutTime']?.toString(),
+      empSignOutLat: _readDouble(json['empSignOutLat']),
+      empSignOutLng: _readDouble(json['empSignOutLng']),
+      cabReachedTime: json['cabReachedTime']?.toString(),
+      cabReachedLat: _readDouble(json['cabReachedLat']),
+      cabReachedLng: _readDouble(json['cabReachedLng']),
+      reachedHomeTime: json['reachedHomeTime']?.toString(),
+      reachedHomeLat: _readDouble(json['reachedHomeLat']),
+      reachedHomeLng: _readDouble(json['reachedHomeLng']),
+      paxTrackingStatus: json['paxTrackingStatus']?.toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'empId': empId,
+        'employeeID': employeeID,
+        'firstname': firstname,
+        'lastName': lastName,
+        'gender': gender,
+        'mobileno': mobileno,
+        'empLocCode': empLocCode,
+        'tripType': tripType,
+        'paxOrder': paxOrder,
+        'address': address,
+        'noShow': noShow,
+        'noShowReasonId': noShowReasonId,
+        'orsDeviation': orsDeviation,
+        'scheduled': scheduled,
+        'paxAdded': paxAdded,
+        'paxType': paxType,
+        'empDistance': empDistance,
+        'empDirectDistance': empDirectDistance,
+        'empCost': empCost,
+        'plannedScheduleTime': plannedScheduleTime,
+        'EtaDeviationMinutes' : etaDeviationMinutes,
+        'plannedLat': plannedLat,
+        'plannedLng': plannedLng,
+        'empSigninTime': empSigninTime,
+        'empSigninLat': empSigninLat,
+        'empSigninLng': empSigninLng,
+        'empSignOutTime': empSignOutTime,
+        'empSignOutLat': empSignOutLat,
+        'empSignOutLng': empSignOutLng,
+        'cabReachedTime': cabReachedTime,
+        'cabReachedLat': cabReachedLat,
+        'cabReachedLng': cabReachedLng,
+        'reachedHomeTime': reachedHomeTime,
+        'reachedHomeLat': reachedHomeLat,
+        'reachedHomeLng': reachedHomeLng,
+        'paxTrackingStatus': paxTrackingStatus,
+      };
 }
 
 /// Reusable SignalR service for real-time vehicle route tracking.
@@ -97,8 +285,7 @@ class RouteTrackingSignalRService {
     return '$h:$m:$s.$ms';
   }
 
-  void _log(String message) =>
-      debugPrint('[SignalR ${_ts()}] $message');
+  void _log(String message) => debugPrint('[SignalR ${_ts()}] $message');
 
   static String _prettyJson(dynamic value) {
     try {
@@ -231,8 +418,9 @@ class RouteTrackingSignalRService {
         status: ApiLogStatus.pending,
         source: ApiLogSource.signalR,
         errorMessage: error != null ? 'RECONNECTING: $error' : 'RECONNECTING…',
-        responseBody:
-            error != null ? {'event': 'RECONNECTING', 'error': error.toString()} : {'event': 'RECONNECTING'},
+        responseBody: error != null
+            ? {'event': 'RECONNECTING', 'error': error.toString()}
+            : {'event': 'RECONNECTING'},
       ));
     });
 
@@ -326,7 +514,11 @@ class RouteTrackingSignalRService {
       final msg =
           'joinTrackingGroup($dsId) skipped — not connected (state=${_connection?.state})';
       _log('⚠️  $msg');
-      _logError(operation: _joinMethod, url: url, errorMessage: msg, requestBody: requestBody);
+      _logError(
+          operation: _joinMethod,
+          url: url,
+          errorMessage: msg,
+          requestBody: requestBody);
       return;
     }
     try {
@@ -344,7 +536,11 @@ class RouteTrackingSignalRService {
         url: url,
         errorMessage: e.toString(),
         requestBody: requestBody,
-        responseBody: {'event': _joinMethod, 'dsId': dsId, 'error': e.toString()},
+        responseBody: {
+          'event': _joinMethod,
+          'dsId': dsId,
+          'error': e.toString()
+        },
       );
       rethrow;
     }
@@ -356,7 +552,11 @@ class RouteTrackingSignalRService {
     if (_connection?.state != HubConnectionState.Connected) {
       final msg = 'leaveTrackingGroup($dsId) skipped — not connected';
       _log('⚠️  $msg');
-      _logError(operation: _leaveMethod, url: url, errorMessage: msg, requestBody: requestBody);
+      _logError(
+          operation: _leaveMethod,
+          url: url,
+          errorMessage: msg,
+          requestBody: requestBody);
       return;
     }
     try {
@@ -374,7 +574,11 @@ class RouteTrackingSignalRService {
         url: url,
         errorMessage: e.toString(),
         requestBody: requestBody,
-        responseBody: {'event': _leaveMethod, 'dsId': dsId, 'error': e.toString()},
+        responseBody: {
+          'event': _leaveMethod,
+          'dsId': dsId,
+          'error': e.toString()
+        },
       );
       rethrow;
     }
@@ -403,7 +607,8 @@ class RouteTrackingSignalRService {
       return;
     }
     // Connection is no longer live — stop the timer and trigger reconnect.
-    _log('💔 PING detected dead connection (state=$state) — triggering reconnect');
+    _log(
+        '💔 PING detected dead connection (state=$state) — triggering reconnect');
     _stopPingTimer();
     _startReconnectLoop();
   }
@@ -421,7 +626,8 @@ class RouteTrackingSignalRService {
     int attempt = 0;
     try {
       while (!_intentionalDisconnect) {
-        final delay = _manualBackoff[attempt.clamp(0, _manualBackoff.length - 1)];
+        final delay =
+            _manualBackoff[attempt.clamp(0, _manualBackoff.length - 1)];
         _log('⏳ Manual reconnect #${attempt + 1} in ${delay.inSeconds}s…');
         await Future<void>.delayed(delay);
 
@@ -436,7 +642,8 @@ class RouteTrackingSignalRService {
           _connection = null;
           _listenerRegistered = false;
           await connect(accessToken: token);
-          if (_lastJoinedDsId != null) await joinTrackingGroup(_lastJoinedDsId!);
+          if (_lastJoinedDsId != null)
+            await joinTrackingGroup(_lastJoinedDsId!);
           _logSuccess(
             operation: 'Manual reconnect #${attempt + 1} SUCCESS',
             url: _hubUrl,
@@ -457,7 +664,8 @@ class RouteTrackingSignalRService {
           attempt++;
         }
       }
-      _log('🛑 Manual reconnect loop ended (intentional=$_intentionalDisconnect)');
+      _log(
+          '🛑 Manual reconnect loop ended (intentional=$_intentionalDisconnect)');
     } finally {
       _reconnectLoopRunning = false;
     }
@@ -498,8 +706,7 @@ class RouteTrackingSignalRService {
         final payload = RouteLocationPayload.fromJson(jsonMap);
 
         _logSuccess(
-          operation:
-              '📍 LOCATION UPDATE'
+          operation: '📍 LOCATION UPDATE'
               '  dsId=${payload.dsId}'
               '  lat=${payload.latitude?.toStringAsFixed(6)}'
               '  lng=${payload.longitude?.toStringAsFixed(6)}'
@@ -507,7 +714,8 @@ class RouteTrackingSignalRService {
               '  status=${payload.tripStatusName ?? payload.tripStatusCode}'
               '  gpsTime=${payload.gpsTime}'
               '  panic=${payload.panic}'
-              '  src=${payload.source}',
+              '  src=${payload.source}'
+              '  pax=${payload.passengers.length}',
           url: '$_hubUrl → $_receiveEvent',
           responseBody: jsonMap,
         );

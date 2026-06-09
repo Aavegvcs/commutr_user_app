@@ -113,6 +113,11 @@ class TrackingStatusResponse {
   final bool isPassengerPickedUp;
   final String? trackingMessage;
   final String? trackingMode;
+  final String? officeLocName;
+  final double? officeLat;
+  final double? officeLng;
+  final String? officeAddress;
+  final String? officeDisplayName;
   final List<TripPassenger> passengers;
 
   const TrackingStatusResponse({
@@ -166,6 +171,11 @@ class TrackingStatusResponse {
     this.isPassengerPickedUp = false,
     this.trackingMessage,
     this.trackingMode,
+    this.officeLocName,
+    this.officeLat,
+    this.officeLng,
+    this.officeAddress,
+    this.officeDisplayName,
     this.passengers = const [],
   });
 
@@ -229,7 +239,75 @@ class TrackingStatusResponse {
       isPassengerPickedUp: isPassengerPickedUp,
       trackingMessage: trackingMessage,
       trackingMode: trackingMode,
+      officeLocName: officeLocName,
+      officeLat: officeLat,
+      officeLng: officeLng,
+      officeAddress: officeAddress,
+      officeDisplayName: officeDisplayName,
       passengers: passengers,
+    );
+  }
+
+  /// Returns a copy with the passenger list replaced — used to fold live
+  /// boarding updates (from SignalR payloads) back into the cached status.
+  TrackingStatusResponse withPassengers(List<TripPassenger> updated) {
+    return TrackingStatusResponse(
+      dsId: dsId,
+      isTripFound: isTripFound,
+      locCode: locCode,
+      dsDate: dsDate,
+      tripTypeCode: tripTypeCode,
+      tripType: tripType,
+      tripTypeName: tripTypeName,
+      totalPax: totalPax,
+      scheduledStartTime: scheduledStartTime,
+      scheduledEndTime: scheduledEndTime,
+      actualStartTime: actualStartTime,
+      actualEndTime: actualEndTime,
+      startKm: startKm,
+      endKm: endKm,
+      plannedRouteDistance: plannedRouteDistance,
+      plannedTotalDuration: plannedTotalDuration,
+      hasPlannedRoutePolyline: hasPlannedRoutePolyline,
+      transTripStatusCode: transTripStatusCode,
+      transTripStatusName: transTripStatusName,
+      latestGpsStatusCode: latestGpsStatusCode,
+      latestGpsStatusName: latestGpsStatusName,
+      effectiveTripStatusCode: effectiveTripStatusCode,
+      effectiveTripStatusName: effectiveTripStatusName,
+      latestLat: latestLat,
+      latestLng: latestLng,
+      latestSpeed: latestSpeed,
+      latestGpsTime: latestGpsTime,
+      latestGpsSource: latestGpsSource,
+      panic: panic,
+      driverId: driverId,
+      driverGuid: driverGuid,
+      driverName: driverName,
+      driverMobileNo: driverMobileNo,
+      driverAlternateMobileNo: driverAlternateMobileNo,
+      driverProfileImage: driverProfileImage,
+      transporterId: transporterId,
+      vendorName: vendorName,
+      vendorMobileNo: vendorMobileNo,
+      vendorEmailId: vendorEmailId,
+      vehicleId: vehicleId,
+      vehicleNo: vehicleNo,
+      vehicleType: vehicleType,
+      fuelType: fuelType,
+      isActive: isActive,
+      isCompleted: isCompleted,
+      shouldUseSignalR: shouldUseSignalR,
+      shouldUsePolyline: shouldUsePolyline,
+      isPassengerPickedUp: isPassengerPickedUp,
+      trackingMessage: trackingMessage,
+      trackingMode: trackingMode,
+      officeLocName: officeLocName,
+      officeLat: officeLat,
+      officeLng: officeLng,
+      officeAddress: officeAddress,
+      officeDisplayName: officeDisplayName,
+      passengers: updated,
     );
   }
 
@@ -294,6 +372,11 @@ class TrackingStatusResponse {
       isPassengerPickedUp: isPassengerPickedUp,
       trackingMessage: trackingMessage,
       trackingMode: trackingMode,
+      officeLocName: officeLocName,
+      officeLat: officeLat,
+      officeLng: officeLng,
+      officeAddress: officeAddress,
+      officeDisplayName: officeDisplayName,
       passengers: passengers,
     );
   }
@@ -345,7 +428,8 @@ class TrackingStatusResponse {
       transTripStatusName: json['transTripStatusName']?.toString(),
       latestGpsStatusCode: (json['latestGpsStatusCode'] as num?)?.toInt(),
       latestGpsStatusName: json['latestGpsStatusName']?.toString(),
-      effectiveTripStatusCode: (json['effectiveTripStatusCode'] as num?)?.toInt(),
+      effectiveTripStatusCode:
+          (json['effectiveTripStatusCode'] as num?)?.toInt(),
       effectiveTripStatusName: json['effectiveTripStatusName']?.toString(),
       latestLat: readDouble(json['latestLat']),
       latestLng: readDouble(json['latestLng']),
@@ -374,6 +458,11 @@ class TrackingStatusResponse {
       isPassengerPickedUp: readBool(json['isPassengerPickedUp']),
       trackingMessage: json['trackingMessage']?.toString(),
       trackingMode: json['trackingMode']?.toString(),
+      officeLocName: json['officeLocName']?.toString(),
+      officeLat: readDouble(json['officeLat']),
+      officeLng: readDouble(json['officeLng']),
+      officeAddress: json['officeAddress']?.toString(),
+      officeDisplayName: json['officeDisplayName']?.toString(),
       passengers: passengers,
     );
   }
@@ -402,6 +491,7 @@ class TripPassenger {
   final double? empDirectDistance;
   final double? empCost;
   final String? plannedScheduleTime;
+  final int? etaDeviationMinutes;
   final String? empSigninTime;
   final double? empSigninLat;
   final double? empSigninLng;
@@ -416,7 +506,37 @@ class TripPassenger {
   final double? reachedHomeLng;
   final String? paxTrackingStatus;
 
-  String get fullName => [firstname, lastName].where((s) => s != null && s.isNotEmpty).join(' ');
+  String get fullName =>
+      [firstname, lastName].where((s) => s != null && s.isNotEmpty).join(' ');
+
+  /// Boarding status, derived purely from [empSigninTime].
+  ///
+  /// `empSigninTime == null` (or empty) → the employee has NOT boarded yet
+  /// (still waiting for the cab). A non-null/non-empty value means the cab
+  /// driver has signed the employee in, so they are considered BOARDED.
+  /// This is the single source of truth for "boarded vs not boarded".
+  bool get isBoarded =>
+      empSigninTime != null && empSigninTime!.trim().isNotEmpty;
+
+  /// Convenience inverse of [isBoarded] — still waiting for pickup.
+  bool get isNotBoarded => !isBoarded;
+
+  /// True (logout/drop trips) once the passenger has been dropped home — i.e.
+  /// the cab reached their drop point (`reachedHomeTime`/`cabReachedTime` set).
+  bool get isDropped =>
+      (reachedHomeTime != null && reachedHomeTime!.trim().isNotEmpty) ||
+      (cabReachedTime != null && cabReachedTime!.trim().isNotEmpty);
+
+  /// True when the driver marked this passenger as a no-show (skipped pickup).
+  bool get isNoShow => noShow;
+
+  /// Latitude/longitude of this passenger's planned pickup, or null if absent.
+  double? get pickupLat =>
+      (plannedLat != null && plannedLat != 0) ? plannedLat : null;
+  double? get pickupLng =>
+      (plannedLng != null && plannedLng != 0) ? plannedLng : null;
+
+  bool get hasPickupLocation => pickupLat != null && pickupLng != null;
 
   const TripPassenger({
     this.empId,
@@ -441,6 +561,7 @@ class TripPassenger {
     this.empDirectDistance,
     this.empCost,
     this.plannedScheduleTime,
+    this.etaDeviationMinutes,
     this.empSigninTime,
     this.empSigninLat,
     this.empSigninLng,
@@ -505,7 +626,9 @@ class TripPassenger {
       empDistance: readDouble(json['empDistance']),
       empDirectDistance: readDouble(json['empDirectDistance']),
       empCost: readDouble(json['empCost']),
-      plannedScheduleTime: (json['plannedScheduleTime'] ?? json['pSchTime'])?.toString(),
+      plannedScheduleTime:
+          (json['plannedScheduleTime'] ?? json['pSchTime'])?.toString(),
+      etaDeviationMinutes: (json['EtaDeviationMinutes'] as num?)?.toInt(),
       empSigninTime: json['empSigninTime']?.toString(),
       empSigninLat: readDouble(json['empSigninLat']),
       empSigninLng: readDouble(json['empSigninLng']),
@@ -584,8 +707,7 @@ class CabTrackingData {
       currentLng != null &&
       (currentLat != 0 || currentLng != 0);
 
-  bool get hasOfficeLocation =>
-      officeLat != null && officeLng != null;
+  bool get hasOfficeLocation => officeLat != null && officeLng != null;
 
   String get otpDisplay => otp?.toString() ?? '—';
 

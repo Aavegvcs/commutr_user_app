@@ -22,6 +22,7 @@ import 'package:commutr_main/features/trip_detail/data/repository/trip_history_r
 import 'package:commutr_main/features/trip_detail/data/repository/trip_start/board_trip_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/trip_start/cancel_trip_home_repo.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
+import 'package:commutr_main/ride_tracking/service/ivr_call_repo.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:commutr_main/core/network/api_client.dart';
@@ -213,6 +214,10 @@ void setupDependencies() {
 
   sl.registerLazySingleton<CallDriverIvrRepository>(
     () => CallDriverIvrRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerLazySingleton<IvrCallRepo>(
+    () => IvrCallRepo(sl(instanceName: authApiClientKey)),
   );
 
   syncBearerTokenToApiClients();

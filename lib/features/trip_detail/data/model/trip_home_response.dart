@@ -120,6 +120,7 @@ class TripHomeItem {
   final String? tripType;
   final String? otp;
   final String? pickShift;
+  final String? dropShift;
   final int? empId;
   final String? employeeId;
   final String? userName;
@@ -149,6 +150,7 @@ class TripHomeItem {
     this.tripType,
     this.otp,
     this.pickShift,
+    this.dropShift,
     this.empId,
     this.employeeId,
     this.userName,
@@ -206,6 +208,7 @@ class TripHomeItem {
       tripType: readString('Triptype'),
       otp: readString('OTP'),
       pickShift: readString('PickShift'),
+      dropShift: readString('DropShift'),
       empId: (json['EMPID'] as num?)?.toInt(),
       employeeId: readString('EmployeeID'),
       userName: readString('UserName'),

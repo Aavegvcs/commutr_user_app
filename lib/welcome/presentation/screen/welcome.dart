@@ -42,6 +42,8 @@ import 'package:commutr_main/profile/bloc/profile_state.dart';
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
+import 'package:commutr_main/ride_tracking/config/tracking_config.dart';
+import 'package:commutr_main/ride_tracking/service/dummy_tracking_service.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
 import 'package:flutter/material.dart';
@@ -61,9 +63,11 @@ import '../../../features/sos/bloc/sos_state.dart';
 import '../../../features/team_cab/presentation/screen/team_cab_screen.dart';
 import '../../../weekly_off/presentation/screen/weekly_off.dart';
 import '../../../features/trip_detail/data/repository/user_feedback_repo.dart';
+import '../../../features/trip_detail/data/repository/roaster_shift_repo.dart';
 import '../../../features/share_cab/data/repository/share_cab_repo.dart';
 import '../../../features/share_cab/data/repository/call_driver_ivr_repo.dart';
 import '../../../profile/presentation/screen/edit_profile.dart';
+import 'package:geolocator/geolocator.dart';
 
 enum _TripHistoryStatus {
   completed,
@@ -890,6 +894,7 @@ class _WelcomeState extends State<_WelcomeView> {
     required int? empId,
     required int? tripId,
     String? userName,
+    String? boardingOtp,
   }) {
     if (empId == null || tripId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -906,7 +911,12 @@ class _WelcomeState extends State<_WelcomeView> {
         builder: (_) => BlocProvider(
           create: (_) => sl<CabTrackingBloc>()
             ..add(FetchCabTracking(empId: empId, tripId: tripId)),
-          child: RideTrackingScreen(userName: userName, tripId: tripId, empId: empId),
+          child: RideTrackingScreen(
+            userName: userName,
+            tripId: tripId,
+            empId: empId,
+            boardingOtp: boardingOtp,
+          ),
         ),
       ),
     );
@@ -959,16 +969,97 @@ class _WelcomeState extends State<_WelcomeView> {
       if (result is String && result.isNotEmpty && context.mounted) {
         showBar(result);
         context.read<TripHomeBloc>().add(const FetchTripHome());
-        if (boardingType == 'D') {
-          showDialog<void>(
-            context: context,
-            barrierDismissible: true,
-            barrierColor: Colors.black.withValues(alpha: 0.5),
-            builder: (_) => _RateAppDialog(empId: empId, tripId: tripId),
+        // Safe Home Reach flow applies only to Logout (DROP) trips.
+        if (boardingType == 'D' && !item.isLogin) {
+          _callReachedHomeAndShowRateDialog(
+            context,
+            empId: empId,
+            tripId: tripId,
+            showBar: showBar,
           );
         }
       }
     });
+  }
+
+  Future<void> _callReachedHomeAndShowRateDialog(
+    BuildContext context, {
+    required int empId,
+    required int tripId,
+    required void Function(String) showBar,
+  }) async {
+    if (!context.mounted) return;
+
+    // Step 1: Show "Reached Home Safely?" confirmation dialog
+    final sosBloc = context.read<SosBloc>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (_) => _ReachedHomeSafelyDialog(
+        onNeedHelp: () => sosBloc.add(TriggerSos(empId: empId)),
+      ),
+    );
+
+    // "Need Help" or dismissed — don't proceed
+    if (confirmed != true || !context.mounted) return;
+
+    // Step 2: Get current location
+    double lat = 0;
+    double lng = 0;
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission != LocationPermission.deniedForever &&
+          permission != LocationPermission.denied) {
+        Position? lastKnown;
+        try {
+          lastKnown = await Geolocator.getLastKnownPosition();
+        } catch (_) {}
+        final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled && lastKnown != null) {
+          lat = lastKnown.latitude;
+          lng = lastKnown.longitude;
+        } else {
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings:
+                const LocationSettings(accuracy: LocationAccuracy.high),
+          );
+          lat = pos.latitude;
+          lng = pos.longitude;
+        }
+      }
+    } catch (e) {
+      debugPrint('[REACHED_HOME] location error: $e');
+    }
+
+    // Step 3: Call ReachedHome API
+    try {
+      final repo = sl<RoasterShiftRepo>();
+      final response = await repo.reachedHome(
+        empId: empId,
+        tripId: tripId,
+        empLat: lat,
+        empLng: lng,
+      );
+      if (!response.isSuccess) {
+        debugPrint('[REACHED_HOME] API not success: ${response.message}');
+      }
+    } catch (e) {
+      debugPrint('[REACHED_HOME] API error: $e');
+    }
+
+    // Step 4: Show Rate App dialog (best-effort — open regardless of API result)
+    if (context.mounted) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierColor: Colors.black.withValues(alpha: 0.5),
+        builder: (_) => _RateAppDialog(empId: empId, tripId: tripId),
+      );
+    }
   }
 
   Widget _buildTripCircleAction({
@@ -1002,6 +1093,11 @@ class _WelcomeState extends State<_WelcomeView> {
     required Color trackFg,
     required VoidCallback? trackVehicleAction,
   }) {
+    // On a Logout (DROP) trip the user boards at the office, so the primary CTA
+    // is always Deboard. tripStatusCode == 2 likewise means the user is onboard.
+    final bool showDeboard = item.isBoardedNotDeboarded ||
+        item.tripStatusCode == 2 ||
+        (!item.isPickTrip && !item.isDeBoarded);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1058,23 +1154,23 @@ class _WelcomeState extends State<_WelcomeView> {
             ),
           ],
         ),
-        if (item.canShowBoardButton || item.isBoardedNotDeboarded) ...[
+        if (item.canShowBoardButton || showDeboard) ...[
           const SizedBox(height: 10),
           GestureDetector(
-            onTap: item.isBoardedNotDeboarded
+            onTap: showDeboard
                 ? () => _onDeboardTrip(item)
                 : () => _onBoardTrip(item),
             child: Container(
               height: 48,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: item.isBoardedNotDeboarded
+                color: showDeboard
                     ? const Color(0xFFB40D1A)
                     : const Color(0xFF1A5C38),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
-                item.isBoardedNotDeboarded ? 'Deboard' : 'Board',
+                showDeboard ? 'Deboard' : 'Board',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
@@ -3317,7 +3413,7 @@ class _WelcomeState extends State<_WelcomeView> {
   }) {
     final bool isLogin = item.isLogin;
     final String label = item.tripType ?? (isLogin ? 'Login' : 'Logout');
-    final String time = _formatShiftTime(item.pickShift) ?? '--:--';
+    final String time = isLogin ? _formatShiftTime(item.pickShift) ?? '--:--': _formatShiftTime(item.dropShift)??'--:--';
     final bool isScheduled = item.isScheduledStatus;
     final bool isCompleted = item.isCompleted;
     final bool showBoardDeboardActions =
@@ -3360,6 +3456,7 @@ class _WelcomeState extends State<_WelcomeView> {
               empId: item.empId,
               tripId: item.tripId,
               userName: item.userName,
+              boardingOtp: item.otp,
             );
 
     return Container(
@@ -5551,6 +5648,43 @@ class AppDrawer extends StatelessWidget {
                     );
                   },
                 ),
+                _DrawerItem(
+                  icon: Icons.navigation_outlined,
+                  label: TrackingConfig.useDummyTracking
+                      ? 'Dummy Tracking (ON)'
+                      : 'Dummy Tracking',
+                  iconColor: const Color(0xFFF59E0B),
+                  iconBgColor: const Color(0xFFFFF4E0),
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (!TrackingConfig.useDummyTracking) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Dummy mode is OFF. Re-run with '
+                            '--dart-define=DUMMY_TRACKING=true to simulate.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => BlocProvider(
+                          // No fetch dispatched — the dummy simulator seeds the
+                          // screen locally and the bloc stays idle.
+                          create: (_) => sl<CabTrackingBloc>(),
+                          child: const RideTrackingScreen(
+                            userName: 'Diya',
+                            tripId: 999001,
+                            empId: dummyMeEmpId,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ],
 
               const SizedBox(height: 16),
@@ -5817,13 +5951,103 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
+// ─── Reached Home Safely Dialog ──────────────────────────────────────────────
+
+class _ReachedHomeSafelyDialog extends StatelessWidget {
+  const _ReachedHomeSafelyDialog({required this.onNeedHelp});
+
+  final VoidCallback onNeedHelp;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Reached Home Safely?',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Please confirm you have reached home safely',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Color(0xFF888888)),
+            ),
+            const SizedBox(height: 28),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop(false);
+                      onNeedHelp();
+                    },
+                    icon: const Icon(Icons.warning_amber_rounded,
+                        size: 18, color: Color(0xFFBA1A1A)),
+                    label: const Text(
+                      'Need Help',
+                      style: TextStyle(
+                        color: Color(0xFFBA1A1A),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      side: const BorderSide(color: Color(0xFFBA1A1A), width: 1.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1A5C38),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Yes',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ─── Rate App Dialog ─────────────────────────────────────────────────────────
 
 class _RateAppDialog extends StatefulWidget {
-  const _RateAppDialog({this.empId, this.tripId});
+  const _RateAppDialog({required this.empId, required this.tripId});
 
-  final int? empId;
-  final int? tripId;
+  final int empId;
+  final int tripId;
 
   @override
   State<_RateAppDialog> createState() => _RateAppDialogState();
@@ -5851,18 +6075,11 @@ class _RateAppDialogState extends State<_RateAppDialog> {
   }
 
   Future<void> _submitFeedback() async {
-    final empId = widget.empId;
-    final tripId = widget.tripId;
-    if (empId == null || tripId == null) {
-      Navigator.of(context).pop();
-      return;
-    }
-
     setState(() => _isSubmitting = true);
     try {
       await sl<UserFeedbackRepo>().createUserFeedback(
-        empId: empId,
-        tripId: tripId,
+        empId: widget.empId,
+        tripId: widget.tripId,
         rating: _rating,
         remarks: _remarksController.text.trim(),
       );
