@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:commutr_main/core/network/api_constants.dart';
+import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/location_data.dart';
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/pin_map_screen.dart';
 import 'package:commutr_main/features/auth/presentation/screens/signup_success.dart';
@@ -92,17 +93,15 @@ class _SignupScreenState extends State<SignupScreen> {
 
   /// Auth service (:5000) — [GET /Users/check-exists].
   static const String _checkExistsUrl =
-      'https://dev-auth.commutr.in/api/v1/Users/check-exists';
+      '${ApiConstants.authBaseUrl}/Users/check-exists';
 
   /// Absolute URLs — passing absolute URLs to Dio overrides `baseUrl`,
   /// guaranteeing signup OTP always hits :5001 regardless of any other config.
-  static const String _otpSendPath =
-      'https://dev-core.commutr.in/api/v1/Otp/send';
-  static const String _otpVerifyPath =
-      'https://dev-core.commutr.in/api/v1/Otp/verify';
+  static const String _otpSendPath = '${ApiConstants.appBaseUrl}/Otp/send';
+  static const String _otpVerifyPath = '${ApiConstants.appBaseUrl}/Otp/verify';
 
   /// Core service — [GET /State]; resolves `stateCode` from the selected state name.
-  static const String _statePath = 'https://dev-core.commutr.in/api/v1/State';
+  static const String _statePath = '${ApiConstants.appBaseUrl}/State';
 
   void _logApiRequest({
     required String tag,
@@ -230,14 +229,16 @@ class _SignupScreenState extends State<SignupScreen> {
         _logApiDioError('CheckExists mobile :5000', e);
         if (mounted) {
           setState(() => _mobileExistsDuplicate = false);
-          _showSnackBar(e.message ?? 'Could not verify mobile number');
+          _showSnackBar(ErrorMessage.from(e,
+              fallback: 'Could not verify mobile number'));
           _formKey.currentState?.validate();
         }
       } catch (e) {
         _logApiUnexpected('CheckExists mobile :5000', e);
         if (mounted) {
           setState(() => _mobileExistsDuplicate = false);
-          _showSnackBar('Could not verify mobile number');
+          _showSnackBar(ErrorMessage.from(e,
+              fallback: 'Could not verify mobile number'));
           _formKey.currentState?.validate();
         }
       } finally {
@@ -299,14 +300,16 @@ class _SignupScreenState extends State<SignupScreen> {
         _logApiDioError('CheckExists email :5000', e);
         if (mounted) {
           setState(() => _emailExistsDuplicate = false);
-          _showSnackBar(e.message ?? 'Could not verify email');
+          _showSnackBar(
+              ErrorMessage.from(e, fallback: 'Could not verify email'));
           _formKey.currentState?.validate();
         }
       } catch (e) {
         _logApiUnexpected('CheckExists email :5000', e);
         if (mounted) {
           setState(() => _emailExistsDuplicate = false);
-          _showSnackBar('Could not verify email');
+          _showSnackBar(
+              ErrorMessage.from(e, fallback: 'Could not verify email'));
           _formKey.currentState?.validate();
         }
       } finally {
@@ -432,7 +435,7 @@ class _SignupScreenState extends State<SignupScreen> {
       if (fallback != null && fallback.isNotEmpty) return fallback;
     }
     if (data is String && data.trim().isNotEmpty) return data.trim();
-    return e.message ?? 'Could not send OTP';
+    return ErrorMessage.from(e, fallback: 'Could not send OTP. Please try again.');
   }
 
   String? _otpProblemDetailsUserMessage(Map<dynamic, dynamic> data) {
@@ -570,7 +573,7 @@ class _SignupScreenState extends State<SignupScreen> {
         });
       }
       _logApiUnexpected('Signup OTP send :5001', e);
-      _showSnackBar('Could not send OTP');
+      _showSnackBar(ErrorMessage.from(e, fallback: 'Could not send OTP'));
     } finally {
       if (mounted) {
         setState(() => _sendingSignupOtp = false);
@@ -639,7 +642,9 @@ class _SignupScreenState extends State<SignupScreen> {
       if (mounted) _showSnackBar(_otpSendErrorMessage(e));
     } catch (e) {
       _logApiUnexpected('Signup OTP verify :5001', e);
-      if (mounted) _showSnackBar('Could not verify OTP');
+      if (mounted) {
+        _showSnackBar(ErrorMessage.from(e, fallback: 'Could not verify OTP'));
+      }
     } finally {
       if (mounted) {
         setState(() => _verifyingSignupOtp = false);
@@ -973,17 +978,15 @@ class _SignupScreenState extends State<SignupScreen> {
 
       _logApiDioError('UserStages :5001', e);
 
-      String errorMessage = 'Network error';
+      String errorMessage;
       if (e.type == DioExceptionType.connectionTimeout) {
         errorMessage = 'Connection timeout. Please try again.';
       } else if (e.type == DioExceptionType.receiveTimeout) {
         errorMessage = 'Server response timeout.';
       } else if (e.type == DioExceptionType.connectionError) {
         errorMessage = 'No internet connection.';
-      } else if (e.response != null) {
-        errorMessage = 'Server error: ${e.response?.statusCode}';
       } else {
-        errorMessage = e.message ?? 'Unknown error occurred';
+        errorMessage = ErrorMessage.from(e, fallback: 'Something went wrong. Please try again.');
       }
 
       _showSnackBar(errorMessage);
@@ -992,7 +995,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
       _logApiUnexpected('UserStages :5001', e);
 
-      _showSnackBar('Unexpected error: ${e.toString()}');
+      _showSnackBar(ErrorMessage.from(e, fallback: 'Something went wrong. Please try again.'));
     } finally {
       if (mounted) {
         setState(() {

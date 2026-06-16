@@ -142,6 +142,7 @@ class TripHomeItem {
   final int? tripTypeCode;
   final String? officeLatLng;
   final String? empLatLng;
+  final String? cancelorNoshow;
   final List<TripHomePax>? passengers;
 
   const TripHomeItem({
@@ -172,6 +173,7 @@ class TripHomeItem {
     this.tripTypeCode,
     this.officeLatLng,
     this.empLatLng,
+    this.cancelorNoshow,
     this.passengers,
   });
 
@@ -230,6 +232,7 @@ class TripHomeItem {
       tripTypeCode: (json['TripTypeCode'] as num?)?.toInt(),
       officeLatLng: readString('OfficeLatLng'),
       empLatLng: readString('EmpLatLng'),
+      cancelorNoshow: readString('CancelorNoshow'),
       passengers: passengers,
     );
   }
@@ -286,11 +289,13 @@ class TripHomeItem {
 
   bool get hasVehicleInfo => (vehicleInfo ?? '').trim().isNotEmpty;
 
-  /// Trip has started (code 3) and the user has not boarded yet.
-  bool get isStartedNotBoarded =>
-      !isBoarded &&
+  /// Trip is in the "Started" state (TripStatusName = "Started", code 3).
+  bool get isStarted =>
       tripStatusCode == 3 &&
       (tripStatusName ?? '').trim().toLowerCase() == 'started';
+
+  /// Trip has started (code 3) and the user has not boarded yet.
+  bool get isStartedNotBoarded => !isBoarded && isStarted;
 
   /// Green Board CTA — not boarded and not deboarded.
   bool get canShowBoardButton => !isBoarded && !isDeBoarded;

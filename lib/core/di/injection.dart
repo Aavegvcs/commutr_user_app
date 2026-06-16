@@ -9,6 +9,7 @@ import 'package:commutr_main/features/trip_chat/service/chat_signalr_service.dar
 import 'package:commutr_main/features/adhoc/data/repository/adhoc_repo.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/data/repository/profile_repository.dart';
+import 'package:commutr_main/features/version_check/data/repository/version_check_repository.dart';
 import 'package:commutr_main/features/sos/bloc/sos_bloc.dart';
 import 'package:commutr_main/features/sos/data/repository/sos_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/user_feedback_repo.dart';
@@ -218,6 +219,10 @@ void setupDependencies() {
 
   sl.registerLazySingleton<IvrCallRepo>(
     () => IvrCallRepo(sl(instanceName: authApiClientKey)),
+  );
+
+  sl.registerLazySingleton<VersionCheckRepository>(
+    () => VersionCheckRepository(apiClient: sl(instanceName: authApiClientKey)),
   );
 
   syncBearerTokenToApiClients();

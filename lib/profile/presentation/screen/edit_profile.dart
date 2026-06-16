@@ -5,6 +5,7 @@ import 'package:commutr_main/features/auth/presentation/screens/pin_map/pin_map_
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:commutr_main/core/network/api_client.dart';
 import 'package:commutr_main/core/network/api_constants.dart';
+import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
@@ -192,7 +193,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       }
     }
     if (data is String && data.trim().isNotEmpty) return data.trim();
-    return e.message ?? 'Could not send OTP';
+    return ErrorMessage.from(e, fallback: 'Could not send OTP. Please try again.');
   }
 
   Future<void> _sendMobileOtp({required bool fromResend}) async {
@@ -242,9 +243,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           _otpController.clear();
         });
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      _showOtpSnackBar('Could not send OTP');
+      _showOtpSnackBar(ErrorMessage.from(e, fallback: 'Could not send OTP'));
     } finally {
       if (mounted) setState(() => _sendingOtp = false);
     }
@@ -284,9 +285,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     } on DioException catch (e) {
       if (!mounted) return;
       _showOtpSnackBar(_otpErrorMessage(e));
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      _showOtpSnackBar('Could not verify OTP');
+      _showOtpSnackBar(ErrorMessage.from(e, fallback: 'Could not verify OTP'));
     } finally {
       if (mounted) setState(() => _verifyingOtp = false);
     }
@@ -1667,7 +1668,8 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          content: Text(ErrorMessage.from(e,
+              fallback: 'Could not save profile. Please try again.')),
           backgroundColor: Colors.redAccent,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2044,6 +2046,12 @@ void showAddressChangeDialog(BuildContext context) {
       );
 
       if (result is ProfileAddressChangeSuccess) {
+        // Capture a stable navigator from the still-mounted dialog context
+        // BEFORE popping it, so the success popup can be shown even if the
+        // original caller context is no longer mounted.
+        final rootNavigator = dialogContext.mounted
+            ? Navigator.of(dialogContext, rootNavigator: true)
+            : null;
         if (dialogContext.mounted) Navigator.of(dialogContext).pop();
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2053,6 +2061,71 @@ void showAddressChangeDialog(BuildContext context) {
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+        if (rootNavigator != null) {
+          await showDialog<void>(
+            context: rootNavigator.context,
+            useRootNavigator: true,
+            barrierDismissible: false,
+            builder: (ctx) => Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F4),
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: const BoxDecoration(
+                        color: primaryGreen,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check_rounded,
+                          color: Colors.white, size: 48),
+                    ),
+                    const SizedBox(height: 26),
+                    const Text(
+                      'Address updated successfully!',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1B1F22),
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryGreen,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          minimumSize: const Size.fromHeight(44),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(26),
+                          ),
+                        ),
+                        child: const Text(
+                          'OK',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           );
         }

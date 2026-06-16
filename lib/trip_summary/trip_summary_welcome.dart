@@ -16,6 +16,9 @@ class TripSummaryWelcomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cancelOrNoShow = item.cancelorNoshow?.trim();
+    final showMapPreview =
+        cancelOrNoShow != 'Cancelled' && cancelOrNoShow != 'Noshow';
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2F1),
       body: SafeArea(
@@ -50,8 +53,10 @@ class TripSummaryWelcomeScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   children: [
-                    _MapCard(item: item),
-                    const SizedBox(height: 16),
+                    if (showMapPreview) ...[
+                      _MapCard(item: item),
+                      const SizedBox(height: 16),
+                    ],
                     _TripDetailCard(item: item),
                     const SizedBox(height: 16),
                     _VehicleDetailCard(item: item),

@@ -543,13 +543,11 @@ class _LoggingInterceptor extends Interceptor {
 class _ErrorInterceptor extends Interceptor {
   @override
   void onError(
-      DioException err,
-      ErrorInterceptorHandler handler,
-      ) {
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) {
     /// Skip refresh API error conversion
-    final isRefreshCall =
-        err.requestOptions.extra['_refreshCall'] ==
-            true;
+    final isRefreshCall = err.requestOptions.extra['_refreshCall'] == true;
 
     if (isRefreshCall) {
       return handler.next(err);
@@ -577,25 +575,18 @@ class _ErrorInterceptor extends Interceptor {
         );
 
       case DioExceptionType.badResponse:
-        final status =
-            err.response?.statusCode ?? 0;
+        final status = err.response?.statusCode ?? 0;
 
-        final msg =
-            _extractMessage(err.response?.data) ??
-                'Unknown error';
+        final msg = _extractMessage(err.response?.data) ?? 'Unknown error';
 
         final appEx = switch (status) {
           400 => BadRequestException(msg),
-
           401 => UnauthorizedException(msg),
-
           404 => NotFoundException(msg),
-
           409 => ConflictException(msg),
-
           _ => ServerException(
-            'Server error ($status): $msg',
-          ),
+              'Server error ($status): $msg',
+            ),
         };
 
         return handler.reject(
@@ -611,8 +602,11 @@ class _ErrorInterceptor extends Interceptor {
     if (data is Map) {
       // Check backend envelope field first (dB_Response / dbResponse),
       // then fall back to standard REST error fields.
-      final dbResponse = (data['dB_Response'] ?? data['dbResponse'])?.toString();
-      if (dbResponse != null && dbResponse.isNotEmpty && dbResponse.toLowerCase() != 'success') {
+      final dbResponse =
+          (data['dB_Response'] ?? data['dbResponse'])?.toString();
+      if (dbResponse != null &&
+          dbResponse.isNotEmpty &&
+          dbResponse.toLowerCase() != 'success') {
         return dbResponse;
       }
       return (data['message'] ?? data['title'])?.toString();

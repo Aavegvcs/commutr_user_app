@@ -71,11 +71,40 @@ class AuthRepository {
     }
   }
 
+  /// Returns the FCM token, or an empty string if it can't be obtained.
+  ///
+  /// On iOS, `getToken()` throws `apns-token-not-set` if the APNS token hasn't
+  /// arrived yet (always the case on the simulator, and possible early in app
+  /// launch on a device). We wait for the APNS token first and swallow any
+  /// failure so OTP verification is never blocked by push setup.
+  Future<String> _getFcmToken() async {
+    try {
+      if (Platform.isIOS) {
+        // On a real device the APNS token can be null for a moment right after
+        // launch while iOS registers with APNS; retry briefly. On the simulator
+        // it stays null (no push support), so we give up and skip the FCM token.
+        var apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+        for (var i = 0; apnsToken == null && i < 3; i++) {
+          await Future.delayed(const Duration(seconds: 1));
+          apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+        }
+        if (apnsToken == null) {
+          // No APNS token (e.g. simulator) — skip FCM token rather than throw.
+          return '';
+        }
+      }
+      return await FirebaseMessaging.instance.getToken() ?? '';
+    } catch (e) {
+      debugPrint('[AuthRepository] FCM token unavailable: $e');
+      return '';
+    }
+  }
+
   Future<({OtpVerifyResponse? data, Failure? failure})> verifyOtp(
       String contact, String otp) async {
     const url = '/Auth/otp/verify';
 
-    final fcmToken = await FirebaseMessaging.instance.getToken() ?? '';
+    final fcmToken = await _getFcmToken();
     final packageInfo = await PackageInfo.fromPlatform();
     final deviceInfo = DeviceInfoPlugin();
 

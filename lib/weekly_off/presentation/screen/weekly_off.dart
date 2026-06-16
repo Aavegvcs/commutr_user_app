@@ -35,6 +35,10 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
   /// Filled after [LoadWeeklyOffEvent]; until then UI shows loading.
   final Set<String> _selectedDays = {};
 
+  /// True once the initial load (success or failure) has settled, so the UI
+  /// can be interacted with even when no days are selected.
+  bool _loaded = false;
+
   @override
   void initState() {
     super.initState();
@@ -42,10 +46,11 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
   }
 
   /// Maps API `weekOff` (e.g. `MON,FRI`) to grid tokens in calendar order.
+  /// Returns an empty set when the API provides no value (no defaults).
   Set<String> _selectionFromWeekOff(String? weekOff) {
     final raw = weekOff?.trim();
     if (raw == null || raw.isEmpty) {
-      return {'MON', 'FRI'};
+      return {};
     }
     final tokens = raw
         .split(',')
@@ -183,6 +188,7 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
               : null;
           if (!mounted) return;
           setState(() {
+            _loaded = true;
             _selectedDays
               ..clear()
               ..addAll(_selectionFromWeekOff(row?.weekOff));
@@ -193,19 +199,19 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
             message: state.response.message ?? 'Preferences saved!',
           );
         } else if (state is WeeklyOffFailure) {
-          if (_selectedDays.isEmpty) {
-            if (!mounted) return;
-            setState(() {
-              _selectedDays.addAll({''});
-            });
-          }
+          if (!mounted) return;
+          setState(() {
+            _loaded = true;
+          });
           _showResultDialog(success: false, message: state.message);
         }
       },
       child: BlocBuilder<WeeklyOffBloc, WeeklyOffState>(
         builder: (context, state) {
           final isLoading = state is WeeklyOffLoading;
-          final hasSelection = _selectedDays.isNotEmpty;
+          // Interaction is gated on load completion, not on having a
+          // selection, so a user with no weekly-off can still pick days.
+          final canInteract = _loaded && !isLoading;
           return Scaffold(
             backgroundColor: Colors.white,
             appBar: AppBar(
@@ -245,9 +251,7 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
                         _DayGrid(
                           days: _days,
                           selectedDays: _selectedDays,
-                          onToggle: (isLoading || !hasSelection)
-                              ? (_) {}
-                              : _toggleDay,
+                          onToggle: canInteract ? _toggleDay : (_) {},
                           primaryGreen: primaryGreen,
                         ),
                       ],
@@ -255,8 +259,7 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
                   ),
                 ),
                 _SaveButton(
-                  onPressed:
-                      (isLoading || !hasSelection) ? null : _savePreferences,
+                  onPressed: canInteract ? _savePreferences : null,
                   isLoading: isLoading,
                   primaryGreen: primaryGreen,
                 ),

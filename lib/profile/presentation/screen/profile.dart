@@ -57,6 +57,20 @@ class _ProfileViewState extends State<_ProfileView> {
   static const Color _iconGreen = Color(0xFF2E7D52);
   static const Color _bgColor = Color(0xFFF2F4F3);
 
+  String _initialsFromName(String name) {
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return '';
+    if (parts.length == 1) {
+      return parts.first.substring(0, 1).toUpperCase();
+    }
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -197,15 +211,28 @@ class _ProfileViewState extends State<_ProfileView> {
                                   Container(
                                     width: 64,
                                     height: 64,
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey.shade300,
+                                    alignment: Alignment.center,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.white,
                                       shape: BoxShape.circle,
                                     ),
-                                    child: const Icon(
-                                      Icons.person,
-                                      size: 40,
-                                      color: Colors.grey,
-                                    ),
+                                    child: _initialsFromName(
+                                                userData.fullName)
+                                            .isEmpty
+                                        ? const Icon(
+                                            Icons.person,
+                                            size: 40,
+                                            color: Colors.grey,
+                                          )
+                                        : Text(
+                                            _initialsFromName(
+                                                userData.fullName),
+                                            style: const TextStyle(
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.w700,
+                                              color: _primaryGreen,
+                                            ),
+                                          ),
                                   ),
                                   Positioned(
                                     bottom: 2,
@@ -315,6 +342,9 @@ class _ProfileViewState extends State<_ProfileView> {
                           label: 'PICKUP/ DROP POINT',
                           value: 'Saved Addresses',
                           isExpanded: _savedAddressesExpanded,
+                          expandedContent: userData.address.trim().isEmpty
+                              ? 'No saved address available.'
+                              : userData.address.trim(),
                           onTap: () {
                             setState(() {
                               _savedAddressesExpanded =
@@ -337,14 +367,14 @@ class _ProfileViewState extends State<_ProfileView> {
                           const SizedBox(height: 10),
                         ],
 
-                        // Your Settings
-                        _buildNavCard(
-                          icon: Icons.settings_outlined,
-                          label: 'Your settings',
-                          onTap: () {},
-                        ),
-
-                        const SizedBox(height: 10),
+                        // // Your Settings
+                        // _buildNavCard(
+                        //   icon: Icons.settings_outlined,
+                        //   label: 'Your settings',
+                        //   onTap: () {},
+                        // ),
+                        //
+                        // const SizedBox(height: 10),
 
                         // Privacy Policy
                         _buildNavCard(
@@ -356,111 +386,111 @@ class _ProfileViewState extends State<_ProfileView> {
                         const SizedBox(height: 20),
 
                         // PREFERENCES heading
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            'PREFERENCES',
-                            style: TextStyle(
-                              color: Colors.grey.shade500,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                        ),
-
-                        const SizedBox(height: 10),
-
-                        // Trip Reminder
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: _lightGreen,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(
-                                  Icons.notifications_outlined,
-                                  color: _iconGreen,
-                                  size: 22,
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              const Expanded(
-                                child: Text(
-                                  'Trip Reminder',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF1A1A1A),
-                                  ),
-                                ),
-                              ),
-                              // "5 minutes" pill
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF0F0F0),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: const Text(
-                                  '5 minutes',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    color: Color(0xFF333333),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              // Toggle
-                              GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _tripReminderEnabled =
-                                        !_tripReminderEnabled;
-                                  });
-                                },
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 200),
-                                  width: 52,
-                                  height: 30,
-                                  decoration: BoxDecoration(
-                                    color: _tripReminderEnabled
-                                        ? _primaryGreen
-                                        : Colors.grey.shade300,
-                                    borderRadius: BorderRadius.circular(15),
-                                  ),
-                                  child: AnimatedAlign(
-                                    duration: const Duration(milliseconds: 200),
-                                    alignment: _tripReminderEnabled
-                                        ? Alignment.centerRight
-                                        : Alignment.centerLeft,
-                                    child: Container(
-                                      margin: const EdgeInsets.all(3),
-                                      width: 24,
-                                      height: 24,
-                                      decoration: const BoxDecoration(
-                                        color: Colors.white,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                        // Align(
+                        //   alignment: Alignment.centerLeft,
+                        //   child: Text(
+                        //     'PREFERENCES',
+                        //     style: TextStyle(
+                        //       color: Colors.grey.shade500,
+                        //       fontSize: 12,
+                        //       fontWeight: FontWeight.w600,
+                        //       letterSpacing: 1.0,
+                        //     ),
+                        //   ),
+                        // ),
+                        //
+                        // const SizedBox(height: 10),
+                        //
+                        // // Trip Reminder
+                        // Container(
+                        //   padding: const EdgeInsets.symmetric(
+                        //       horizontal: 16, vertical: 14),
+                        //   decoration: BoxDecoration(
+                        //     color: Colors.white,
+                        //     borderRadius: BorderRadius.circular(12),
+                        //   ),
+                        //   child: Row(
+                        //     children: [
+                        //       Container(
+                        //         width: 40,
+                        //         height: 40,
+                        //         decoration: BoxDecoration(
+                        //           color: _lightGreen,
+                        //           borderRadius: BorderRadius.circular(10),
+                        //         ),
+                        //         child: const Icon(
+                        //           Icons.notifications_outlined,
+                        //           color: _iconGreen,
+                        //           size: 22,
+                        //         ),
+                        //       ),
+                        //       const SizedBox(width: 14),
+                        //       const Expanded(
+                        //         child: Text(
+                        //           'Trip Reminder',
+                        //           style: TextStyle(
+                        //             fontSize: 16,
+                        //             fontWeight: FontWeight.w600,
+                        //             color: Color(0xFF1A1A1A),
+                        //           ),
+                        //         ),
+                        //       ),
+                        //       // "5 minutes" pill
+                        //       Container(
+                        //         padding: const EdgeInsets.symmetric(
+                        //             horizontal: 12, vertical: 6),
+                        //         decoration: BoxDecoration(
+                        //           color: const Color(0xFFF0F0F0),
+                        //           borderRadius: BorderRadius.circular(20),
+                        //         ),
+                        //         child: const Text(
+                        //           '5 minutes',
+                        //           style: TextStyle(
+                        //             fontSize: 12,
+                        //             fontWeight: FontWeight.w500,
+                        //             color: Color(0xFF333333),
+                        //           ),
+                        //         ),
+                        //       ),
+                        //       const SizedBox(width: 12),
+                        //       // Toggle
+                        //       GestureDetector(
+                        //         onTap: () {
+                        //           setState(() {
+                        //             _tripReminderEnabled =
+                        //                 !_tripReminderEnabled;
+                        //           });
+                        //         },
+                        //         child: AnimatedContainer(
+                        //           duration: const Duration(milliseconds: 200),
+                        //           width: 52,
+                        //           height: 30,
+                        //           decoration: BoxDecoration(
+                        //             color: _tripReminderEnabled
+                        //                 ? _primaryGreen
+                        //                 : Colors.grey.shade300,
+                        //             borderRadius: BorderRadius.circular(15),
+                        //           ),
+                        //           child: AnimatedAlign(
+                        //             duration: const Duration(milliseconds: 200),
+                        //             alignment: _tripReminderEnabled
+                        //                 ? Alignment.centerRight
+                        //                 : Alignment.centerLeft,
+                        //             child: Container(
+                        //               margin: const EdgeInsets.all(3),
+                        //               width: 24,
+                        //               height: 24,
+                        //               decoration: const BoxDecoration(
+                        //                 color: Colors.white,
+                        //                 shape: BoxShape.circle,
+                        //               ),
+                        //             ),
+                        //           ),
+                        //         ),
+                        //       ),
+                        //     ],
+                        //   ),
+                        // ),
 
                         const SizedBox(height: 24),
                       ],
@@ -966,62 +996,105 @@ class _ProfileViewState extends State<_ProfileView> {
     required String value,
     required bool isExpanded,
     required VoidCallback onTap,
+    String? expandedContent,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F5EE),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, color: const Color(0xFF2E7D52), size: 22),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
                 children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey.shade500,
-                      letterSpacing: 0.8,
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F5EE),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child:
+                        Icon(icon, color: const Color(0xFF2E7D52), size: 22),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade500,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          value,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF1A1A1A),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    value,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF1A1A1A),
-                    ),
+                  Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    color: Colors.grey.shade600,
+                    size: 24,
                   ),
                 ],
               ),
             ),
-            Icon(
-              isExpanded
-                  ? Icons.keyboard_arrow_up
-                  : Icons.keyboard_arrow_down,
-              color: Colors.grey.shade600,
-              size: 24,
+          ),
+          if (isExpanded && expandedContent != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Divider(color: Colors.grey.shade200, height: 1),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.place_outlined,
+                        color: Colors.grey.shade500,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          expandedContent,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            height: 1.4,
+                            color: Color(0xFF444444),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
+        ],
       ),
     );
   }

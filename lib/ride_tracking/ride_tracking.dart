@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/cab_tracking/user_cab_tracking_repo.dart';
@@ -22,6 +23,169 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+/// Per-passenger lifecycle status for a LOGIN (pickup) trip, following the
+/// Uber/Ola-shuttle spec. Resolution order is strict:
+///   1. noShow == true          → [LoginPaxStatus.noShow]
+///   2. empSignOutTime != null  → [LoginPaxStatus.completed]   (reached office)
+///   3. empSigninTime  != null  → [LoginPaxStatus.boarded]     (onboard)
+///   4. otherwise               → [LoginPaxStatus.notPickedUp] (still waiting)
+///
+/// Only meaningful for `tripType == 1`. Drives marker colour and status label
+/// for login trips; logout/other trips keep the existing [StopState] scheme.
+enum LoginPaxStatus { notPickedUp, boarded, completed, noShow }
+
+/// Resolves a [TripPassenger]'s LOGIN status per the spec's `getPassengerStatus`.
+LoginPaxStatus loginPaxStatusOf(TripPassenger p) {
+  if (p.noShow) return LoginPaxStatus.noShow;
+  if (p.empSignOutTime != null && p.empSignOutTime!.trim().isNotEmpty) {
+    return LoginPaxStatus.completed;
+  }
+  if (p.empSigninTime != null && p.empSigninTime!.trim().isNotEmpty) {
+    return LoginPaxStatus.boarded;
+  }
+  return LoginPaxStatus.notPickedUp;
+}
+
+/// Marker hue for a LOGIN pickup stop, keyed on the passenger's live status:
+///   Not Picked Up → Blue · Boarded → Orange · Completed → Green · No Show → Red
+double loginMarkerHue(LoginPaxStatus status) {
+  switch (status) {
+    case LoginPaxStatus.notPickedUp:
+      return BitmapDescriptor.hueAzure; // blue
+    case LoginPaxStatus.boarded:
+      return BitmapDescriptor.hueOrange; // orange
+    case LoginPaxStatus.completed:
+      return BitmapDescriptor.hueGreen; // green
+    case LoginPaxStatus.noShow:
+      return BitmapDescriptor.hueRed; // red
+  }
+}
+
+/// Short status label for a LOGIN pickup stop, per the spec.
+String loginStatusLabel(LoginPaxStatus status) {
+  switch (status) {
+    case LoginPaxStatus.notPickedUp:
+      return 'Upcoming Pickup';
+    case LoginPaxStatus.boarded:
+      return 'Onboard';
+    case LoginPaxStatus.completed:
+      return 'Completed';
+    case LoginPaxStatus.noShow:
+      return 'No Show';
+  }
+}
+
+/// Per-passenger lifecycle status for a LOGOUT (drop) trip, following the
+/// Uber/Ola employee-transport spec. For logout trips every passenger is
+/// considered already boarded at the office, so there is no "not boarded"
+/// phase. Resolution order is strict:
+///   1. noShow == true            → [LogoutPaxStatus.noShow]
+///   2. reachedHomeTime != null   → [LogoutPaxStatus.completed]  (dropped home)
+///   3. otherwise                 → [LogoutPaxStatus.boarded]    (awaiting drop)
+///
+/// Only meaningful for `tripType == 2`. Drives marker colour and status label
+/// for logout trips; login/other trips keep the existing scheme.
+enum LogoutPaxStatus { boarded, completed, noShow }
+
+/// Resolves a [TripPassenger]'s LOGOUT status per the spec's `getPassengerStatus`.
+LogoutPaxStatus logoutPaxStatusOf(TripPassenger p) {
+  if (p.noShow) return LogoutPaxStatus.noShow;
+  if (p.reachedHomeTime != null && p.reachedHomeTime!.trim().isNotEmpty) {
+    return LogoutPaxStatus.completed;
+  }
+  return LogoutPaxStatus.boarded;
+}
+
+/// Whether a LOGOUT passenger should stay on the remaining-drop route, decided
+/// purely from their live [TripPassenger.paxTrackingStatus] per the drop spec.
+///
+/// ACTIVE → keep on route:
+///   * `Not-Boarded`  (cab has not reached this home yet)
+///   * `En-Route`     (cab is currently driving to / past this home)
+/// COMPLETED → drop from route:
+///   * `Reached-Home`, `De-Boarded`, `Trip-Completed`, `No-Show`
+///
+/// The match is tolerant of separator/casing variants (`Not-Boarded`,
+/// `not boarded`, `NOT_BOARDED` all normalise the same) so it works regardless
+/// of how the backend formats the status string. When the status is absent it
+/// falls back to the timestamp/no-show derivation in [logoutPaxStatusOf].
+bool shouldIncludeInRoute(TripPassenger p) {
+  final raw = p.paxTrackingStatus;
+  if (raw != null && raw.trim().isNotEmpty) {
+    // Normalise hyphens/underscores/spaces to a single space, lower-cased.
+    final s = raw
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[-_]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    switch (s) {
+      case 'not boarded':
+      case 'en route':
+      case 'enroute':
+      case 'in cab': // legacy backend spelling for En-Route
+        return true;
+      case 'reached home':
+      case 'de boarded':
+      case 'deboarded':
+      case 'dropped': // legacy backend spelling for Reached-Home
+      case 'trip completed':
+      case 'completed': // legacy backend spelling for Trip-Completed
+      case 'no show':
+        return false;
+    }
+    // Unknown status string → fall through to the timestamp-based derivation.
+  }
+  // No (or unrecognised) status → derive from no-show / reachedHomeTime.
+  return logoutPaxStatusOf(p) == LogoutPaxStatus.boarded;
+}
+
+/// True when a LOGOUT passenger's home should remain on the active drop route —
+/// i.e. they are still awaiting drop (Not-Boarded / En-Route). Completed homes
+/// (Reached-Home, De-Boarded, Trip-Completed) and No-Show are excluded.
+///
+/// Thin alias over [shouldIncludeInRoute], kept for the existing call sites
+/// (markers, route signature, active-target resolution).
+bool logoutPaxIsRemaining(TripPassenger p) => shouldIncludeInRoute(p);
+
+/// Returns the LOGOUT passengers still on the remaining-drop route, sorted by
+/// `paxOrder` ascending. Completed and no-show passengers are excluded via
+/// [shouldIncludeInRoute]; passengers without a `paxOrder` are dropped (they
+/// can't be sequenced into the route).
+List<TripPassenger> getRemainingDropPassengers(List<TripPassenger> passengers) {
+  return passengers
+      .where((p) => p.paxOrder != null && shouldIncludeInRoute(p))
+      .toList()
+    ..sort((a, b) => a.paxOrder!.compareTo(b.paxOrder!));
+}
+
+/// Marker hue for a LOGOUT drop stop, keyed on the passenger's live status and
+/// whether it is the cab's current drop target:
+///   Current Drop → Orange · Upcoming Drop → Blue · Completed → Green · No Show → Red
+double logoutMarkerHue(LogoutPaxStatus status, {required bool isCurrentTarget}) {
+  switch (status) {
+    case LogoutPaxStatus.completed:
+      return BitmapDescriptor.hueGreen; // green
+    case LogoutPaxStatus.noShow:
+      return BitmapDescriptor.hueRed; // red
+    case LogoutPaxStatus.boarded:
+      return isCurrentTarget
+          ? BitmapDescriptor.hueOrange // current drop
+          : BitmapDescriptor.hueAzure; // upcoming drop (blue)
+  }
+}
+
+/// Short status label for a LOGOUT drop stop, per the spec.
+String logoutStatusLabel(LogoutPaxStatus status, {required bool isCurrentTarget}) {
+  switch (status) {
+    case LogoutPaxStatus.completed:
+      return 'Completed';
+    case LogoutPaxStatus.noShow:
+      return 'No Show';
+    case LogoutPaxStatus.boarded:
+      return isCurrentTarget ? 'Current Drop' : 'Upcoming Drop';
+  }
+}
 
 class RideTrackingScreen extends StatefulWidget {
   final String? userName;
@@ -103,6 +267,14 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   // deviation, planned time) and repaints so the live arrival clock stays
   // current. See [_refreshPaxTrackingStatus].
   Timer? _statusRefreshTimer;
+  // Last time the 200 ms tick dispatched a silent REST refresh. Throttled so we
+  // never hammer the API at the tick's cadence — see [_silentRefreshThrottle].
+  DateTime? _lastSilentRefreshAt;
+  // Minimum gap between silent API refreshes fired by the 200 ms tick. The tick
+  // repaints + re-merges the cached SignalR payload every 200 ms (so the UI
+  // feels real-time), but a fresh server fetch only goes out this often to keep
+  // passenger data current between SignalR pings without flooding the backend.
+  static const Duration _silentRefreshThrottle = Duration(seconds: 2);
 
   final RouteTrackingSignalRService _signalR = RouteTrackingSignalRService();
   bool _signalREnabled = false;
@@ -118,6 +290,13 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   // seed instead (driver/vehicle/OTP). Null in live mode.
   RideTrackingDataState? _dummyData;
 
+  // Freshest data state applied to the screen, cached here so the bottom sheet
+  // (OTP / driver card / vehicle / expanded header) reads from it on EVERY
+  // repaint — including the silent 0.2 s tick — not just on bloc emits. This is
+  // what makes the whole sheet refresh in real time (Uber/Rapido style) without
+  // a loader, since SignalR/tick updates fold into _latestStatus continuously.
+  RideTrackingDataState? _latestData;
+
   // Live ETA computed from each SignalR location update (driver position +
   // speed → remaining distance to the office). Null until first computed.
   int? _etaMinutes;
@@ -125,8 +304,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   // can compute the ETA without reaching back into bloc state.
   TrackingStatusResponse? _latestStatus;
   List<LatLng> _plannedPoints = const [];
-  // True when [_plannedPoints] was built via Google Directions (no encoded polyline).
-  bool _plannedRouteFromDirections = false;
   // Road-following cab → next-stop leg from Google Directions (Option B).
   List<LatLng> _activeLegPoints = const [];
   DateTime? _lastActiveLegFetchAt;
@@ -185,8 +362,14 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     _rebuildTimelineFromPayload(payload);
     if (_useSignalRWaypoints && payload.passengers.isNotEmpty) {
       _rebuildStopMarkers();
-      // Refresh the directions-based planned route when live waypoints move.
-      if (_plannedRouteFromDirections || _plannedPoints.length < 2) {
+      // Only (re)fetch the directions route when we don't yet have one. Do NOT
+      // refetch on every GPS tick: the planned route's SHAPE only changes when
+      // the drop/pickup sequence changes (handled in _rebuildTimelineFromPayload
+      // via the route signature). Refetching each tick rebuilt the polyline from
+      // the cab's latest position, so its geometry jumped every push — that was
+      // the visible "fluctuation". The cab's forward motion is already reflected
+      // by the gray/blue split below (cabOverride) and the active-leg refresh.
+      if (_plannedPoints.length < 2) {
         unawaited(_refreshDirectionsRoute(cabOverride: newLatLng));
       }
     }
@@ -203,6 +386,50 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   /// never reach the UI between REST refreshes. Each payload passenger is
   /// matched to the cached one by [empId] and its boarding fields override the
   /// cached values; passengers absent from the payload keep their cached state.
+  /// Builds a [TripPassenger] from a live SignalR [RouteTripPassenger]. Used to
+  /// surface passengers the REST status didn't carry, so their drop markers
+  /// still appear (the payload is authoritative for `plannedLat`/`plannedLng`).
+  TripPassenger _tripPassengerFromPayload(RouteTripPassenger p) {
+    return TripPassenger(
+      empId: p.empId,
+      employeeID: p.employeeID,
+      firstname: p.firstname,
+      lastName: p.lastName,
+      gender: p.gender,
+      mobileno: p.mobileno,
+      empLocCode: p.empLocCode,
+      tripType: p.tripType,
+      paxOrder: p.paxOrder,
+      address: p.address,
+      plannedLat: p.plannedLat,
+      plannedLng: p.plannedLng,
+      noShow: p.noShow ?? false,
+      noShowReasonId: p.noShowReasonId,
+      orsDeviation: p.orsDeviation ?? false,
+      scheduled: p.scheduled ?? false,
+      paxAdded: p.paxAdded ?? false,
+      paxType: p.paxType,
+      empDistance: p.empDistance,
+      empDirectDistance: p.empDirectDistance,
+      empCost: p.empCost,
+      plannedScheduleTime: p.plannedScheduleTime,
+      etaDeviationMinutes: p.etaDeviationMinutes,
+      empSigninTime: p.empSigninTime,
+      empSigninLat: p.empSigninLat,
+      empSigninLng: p.empSigninLng,
+      empSignOutTime: p.empSignOutTime,
+      empSignOutLat: p.empSignOutLat,
+      empSignOutLng: p.empSignOutLng,
+      cabReachedTime: p.cabReachedTime,
+      cabReachedLat: p.cabReachedLat,
+      cabReachedLng: p.cabReachedLng,
+      reachedHomeTime: p.reachedHomeTime,
+      reachedHomeLat: p.reachedHomeLat,
+      reachedHomeLng: p.reachedHomeLng,
+      paxTrackingStatus: p.paxTrackingStatus,
+    );
+  }
+
   void _rebuildTimelineFromPayload(RouteLocationPayload payload) {
     final status = _latestStatus;
     if (status == null || payload.passengers.isEmpty) return;
@@ -226,11 +453,20 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         tripType: cached.tripType,
         paxOrder: live.paxOrder ?? cached.paxOrder,
         address: cached.address,
-        plannedLat: status.shouldUseSignalR && status.shouldUsePolyline
-            ? (live.plannedLat ?? cached.plannedLat)
+        // Use the live SignalR planned coords whenever SignalR is active — this
+        // drives BOTH the passenger markers and (when shouldUsePolyline is on)
+        // the route. Gating on shouldUsePolyline too meant a SignalR trip with
+        // polyline off never placed passenger markers even though the payload
+        // carried valid plannedLat/Lng. Only adopt non-zero live coords.
+        plannedLat: status.shouldUseSignalR &&
+                live.plannedLat != null &&
+                live.plannedLat != 0
+            ? live.plannedLat
             : cached.plannedLat,
-        plannedLng: status.shouldUseSignalR && status.shouldUsePolyline
-            ? (live.plannedLng ?? cached.plannedLng)
+        plannedLng: status.shouldUseSignalR &&
+                live.plannedLng != null &&
+                live.plannedLng != 0
+            ? live.plannedLng
             : cached.plannedLng,
         noShow: live.noShow ?? cached.noShow,
         noShowReasonId: live.noShowReasonId ?? cached.noShowReasonId,
@@ -258,9 +494,37 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       );
     }).toList();
 
+    // Some REST status responses carry no passenger rows (or omit ones the
+    // SignalR payload knows about), so a pure empId merge would drop those
+    // passengers and their drop markers would never render. Append any payload
+    // passenger that has no cached match, synthesised straight from the live
+    // SignalR fields — this is the authoritative source for plannedLat/Lng.
+    final cachedEmpIds = {
+      for (final c in status.passengers)
+        if (c.empId != null) c.empId,
+    };
+    for (final live in payload.passengers) {
+      if (live.empId == null || cachedEmpIds.contains(live.empId)) continue;
+      merged.add(_tripPassengerFromPayload(live));
+    }
+    merged.sort((a, b) => (a.paxOrder ?? 0).compareTo(b.paxOrder ?? 0));
+
     final wasBoarded = _timeline.meBoarded;
+    // LOGIN: signature of the remaining-pickup route while not yet boarded
+    // (current pickup target + count of unboarded pickups up to my own). When a
+    // pickup ahead boards/no-shows, the not-boarded blue route shortens, so it
+    // must be rebuilt even though the viewer's own boarding state hasn't flipped.
+    final prevLoginSig = _isLoginTripType() ? _loginRouteSignature() : null;
+    // LOGOUT: signature of the remaining drop sequence (current target order +
+    // count of homes still to visit). When a passenger is dropped or marked
+    // no-show this changes, so the planned route must be rebuilt.
+    final prevLogoutSig = _isLogoutTripType() ? _logoutRouteSignature() : null;
+
     final mergedStatus = status.withPassengers(merged);
     _latestStatus = mergedStatus;
+    // Keep the cached state in sync so the bottom sheet reflects the merged
+    // live passenger data on the next repaint (no loader, real-time).
+    _latestData = _latestData?.copyWith(status: mergedStatus);
     _timeline = RideTimeline.fromStatus(mergedStatus, meEmpId: widget.empId);
     _fullTimeline = RideTimeline.fromStatus(mergedStatus,
         meEmpId: widget.empId, includeAllStops: true);
@@ -272,14 +536,58 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     final cab = (payload.latitude != null && payload.longitude != null)
         ? LatLng(payload.latitude!, payload.longitude!)
         : null;
-    // LOGIN: when the viewer's boarding state flips, the planned route changes
-    // shape (not boarded → only the active leg; boarded → next pickups +
-    // office). Rebuild it so the blue tail appears/disappears live, regardless
-    // of whether waypoints come from SignalR or REST.
-    if (_isLoginTripType() && _timeline.meBoarded != wasBoarded) {
+    // LOGIN: rebuild the planned route when either
+    //   * the viewer's own boarding state flips (not boarded → cab → … → my
+    //     pickup; boarded → next pickups + office), or
+    //   * the remaining-pickup sequence ahead changes while not boarded (a
+    //     pickup ahead boards/no-shows), shortening the blue tail.
+    // so the blue route stays correct live, regardless of whether waypoints
+    // come from SignalR or REST.
+    if (_isLoginTripType() &&
+        (_timeline.meBoarded != wasBoarded ||
+            _loginRouteSignature() != prevLoginSig)) {
+      unawaited(_refreshDirectionsRoute(cabOverride: cab));
+    }
+    // LOGOUT: rebuild the planned route whenever the remaining drop sequence
+    // changes (a passenger dropped home or marked no-show), so completed homes
+    // disappear and the current/upcoming colouring stays correct live.
+    if (_isLogoutTripType() && _logoutRouteSignature() != prevLogoutSig) {
       unawaited(_refreshDirectionsRoute(cabOverride: cab));
     }
     unawaited(_refreshActiveLegPolyline(cab: cab));
+  }
+
+  /// A compact signature of the LOGOUT remaining-drop route — the current drop
+  /// target's paxOrder plus the count of passengers still awaiting drop. Used
+  /// to detect when a drop/no-show has reshaped the route so it can be rebuilt.
+  String _logoutRouteSignature() {
+    final status = _latestStatus;
+    if (status == null) return '';
+    var remaining = 0;
+    for (final p in status.passengers) {
+      if (logoutPaxIsRemaining(p)) remaining++;
+    }
+    return '${_fleetFirstPendingDrop?.order ?? -1}:$remaining';
+  }
+
+  /// A compact signature of the LOGIN remaining-pickup route while the viewer is
+  /// NOT yet boarded — the current pickup target's order plus the count of
+  /// unboarded pickups up to and including the viewer's own pickup. When a
+  /// pickup ahead boards/no-shows (or the viewer's own order resolves), this
+  /// changes so the not-boarded blue route (cab → … → my pickup) is rebuilt.
+  String _loginRouteSignature() {
+    final status = _latestStatus;
+    if (status == null) return '';
+    final cap = _myPaxOrder;
+    var remaining = 0;
+    for (final p in status.passengers) {
+      final order = p.paxOrder;
+      if (order == null) continue;
+      if (cap != null && order > cap) continue;
+      if (isPaxRouteResolved(p, isPickupTrip: true)) continue;
+      remaining++;
+    }
+    return '${_fleetFirstPendingPickup?.order ?? -1}:$remaining';
   }
 
   /// True when waypoint markers should use live SignalR passenger coordinates.
@@ -351,11 +659,17 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       return pts;
     }
 
-    // LOGIN: the planned route is personalised by boarding state — not boarded
-    // shows only the active leg (no planned route), boarded shows the remaining
-    // pickups after me + office. LOGOUT keeps its existing full-route behaviour.
+    // LOGIN: the planned route is gated by boarding state — not boarded shows
+    // only the active leg (no planned route); boarded shows every remaining
+    // unboarded pickup + office.
     if (_isLoginTripType()) {
       return _loginPlannedWaypoints();
+    }
+
+    // LOGOUT: cab → remaining drops (excluding completed/no-show) up to the
+    // viewer's own drop. No office node — the cab has already left the office.
+    if (_isLogoutTripType()) {
+      return buildLogoutTripWaypoints();
     }
 
     final pax = List<TripPassenger>.from(status.passengers)
@@ -436,7 +750,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     final planned = await _fetchDirectionsPlannedRoute();
     if (!mounted || planned.isEmpty) return;
     _plannedPoints = planned;
-    _plannedRouteFromDirections = true;
     _rebuildRoutePolylines(_plannedPoints);
     setState(() {});
     unawaited(_refreshActiveLegPolyline(cab: cabOverride));
@@ -480,12 +793,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
       if (planned.isNotEmpty) {
         _plannedPoints = planned;
-        _plannedRouteFromDirections = false;
       } else {
         planned = await _fetchDirectionsPlannedRoute();
         if (planned.isNotEmpty) {
           _plannedPoints = planned;
-          _plannedRouteFromDirections = true;
         }
       }
 
@@ -503,6 +814,30 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   void _rebuildStopMarkers() {
     _markers.removeWhere((m) =>
         m.markerId.value.startsWith('pax_') || m.markerId.value == 'office');
+    final isLogin = _isLoginTripType();
+    final isLogout = _isLogoutTripType();
+    final activeTargetOrder = _activeTarget?.order;
+
+    // ── TEMP MARKER DEBUG ──────────────────────────────────────────────────
+    // Remove once the missing-passenger-marker issue is diagnosed.
+    final status = _latestStatus;
+    debugPrint('[MARKER-DEBUG] ── _rebuildStopMarkers ──');
+    debugPrint('[MARKER-DEBUG] flags: shouldUseSignalR=${status?.shouldUseSignalR} '
+        'shouldUsePolyline=${status?.shouldUsePolyline} '
+        '_useSignalRWaypoints=$_useSignalRWaypoints');
+    debugPrint('[MARKER-DEBUG] isLogout=$isLogout myPaxOrder=$_myPaxOrder '
+        'statusPax=${status?.passengers.length} '
+        'payloadPax=${_lastPayload?.passengers.length} '
+        'timelineStops=${_timeline.stops.length}');
+    for (final s in _timeline.stops) {
+      final resolved = _waypointLocationForStop(s);
+      debugPrint('[MARKER-DEBUG]   stop order=${s.order} isOffice=${s.isOffice} '
+          'isMe=${s.isMe} stop.location=${s.location} '
+          'resolved=$resolved paxStatus=${s.paxTrackingStatus}'
+          '${resolved == null ? "  <<< SKIPPED (null loc)" : ""}');
+    }
+    // ───────────────────────────────────────────────────────────────────────
+
     for (final stop in _timeline.stops) {
       final loc = _waypointLocationForStop(stop);
       if (loc == null) continue;
@@ -510,15 +845,39 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       final titlePrefix = stop.isOffice ? '' : '${stop.sequenceLabel} · ';
       final meSuffix = stop.isMe ? ' (You)' : '';
       final isEtaDest = _isEtaDestinationStop(stop);
+
+      // Per-passenger colour/label by live status per the spec. The office and
+      // any unknown trip type keep the existing [StopState] scheme.
+      //   LOGIN  pickup → Not Picked Up=Blue, Boarded=Orange, Completed=Green, No Show=Red
+      //   LOGOUT drop   → Current Drop=Orange, Upcoming Drop=Blue, Completed=Green, No Show=Red
+      final TripPassenger? pax =
+          (isLogin || isLogout) && !stop.isOffice ? _passengerForStop(stop) : null;
+
+      double hue;
+      String stopLabel;
+      if (pax != null && isLogin) {
+        final st = loginPaxStatusOf(pax);
+        hue = loginMarkerHue(st);
+        stopLabel = loginStatusLabel(st);
+      } else if (pax != null && isLogout) {
+        final st = logoutPaxStatusOf(pax);
+        final isCurrent =
+            activeTargetOrder != null && stop.order == activeTargetOrder;
+        hue = logoutMarkerHue(st, isCurrentTarget: isCurrent);
+        stopLabel = logoutStatusLabel(st, isCurrentTarget: isCurrent);
+      } else {
+        hue = markerHueForStop(stop);
+        stopLabel =
+            stop.isOffice ? (stop.subtitle ?? '') : statusLabelForStop(stop);
+      }
+
       _markers.add(Marker(
         markerId: MarkerId(id),
         position: loc,
-        icon: BitmapDescriptor.defaultMarkerWithHue(markerHueForStop(stop)),
+        icon: BitmapDescriptor.defaultMarkerWithHue(hue),
         infoWindow: InfoWindow(
           title: '$titlePrefix${stop.title}$meSuffix',
-          snippet: isEtaDest
-              ? _etaMarkerSnippet(stop)
-              : (stop.isOffice ? stop.subtitle : statusLabelForStop(stop)),
+          snippet: isEtaDest ? _etaMarkerSnippet(stop) : stopLabel,
         ),
       ));
     }
@@ -637,15 +996,75 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     return null;
   }
 
-  /// Effective active-leg target stop.
+  /// The cab's current drop target on a LOGOUT trip — the first passenger (by
+  /// paxOrder) where `reachedHomeTime == null && noShow != true`. This is the
+  /// home the cab is actively heading to. Null on non-LOGOUT trips or once every
+  /// passenger has been dropped / marked no-show.
+  RideStop? get _fleetFirstPendingDrop {
+    if (!_isLogoutTripType()) return null;
+    final status = _latestStatus;
+    if (status == null) return null;
+
+    final pax = List<TripPassenger>.from(status.passengers)
+      ..sort((a, b) => (a.paxOrder ?? 0).compareTo(b.paxOrder ?? 0));
+    for (final p in pax) {
+      if (logoutPaxIsRemaining(p)) {
+        for (final s in _timeline.stops) {
+          if (!s.isOffice && s.order == p.paxOrder) return s;
+        }
+        break;
+      }
+    }
+    return null;
+  }
+
+  /// The office stop from the current timeline, if present.
+  RideStop? get _officeStop {
+    for (final s in _timeline.stops) {
+      if (s.isOffice) return s;
+    }
+    return null;
+  }
+
+  /// The cached [TripPassenger] backing a pickup [stop] (matched by paxOrder),
+  /// or null for the office stop / when no match exists.
+  TripPassenger? _passengerForStop(RideStop stop) {
+    if (stop.isOffice) return null;
+    final order = stop.order;
+    final status = _latestStatus;
+    if (order == null || status == null) return null;
+    for (final p in status.passengers) {
+      if (p.paxOrder == order) return p;
+    }
+    return null;
+  }
+
+  /// Effective active-leg target stop — the next place the cab is driving to.
   ///
-  /// LOGIN before the viewer has boarded: always the cab's next pending pickup
-  /// ("pickup1"), so the orange leg traces cab → pickup1 only. In every other
-  /// case it is the personalised [_timeline.target] (which, once boarded, is the
-  /// next pickup or the office).
+  /// LOGIN (passenger-wise shuttle logic): the active leg always follows the
+  /// cab's real next move, regardless of the viewer's own paxOrder:
+  ///   * pickups still pending → cab → next unboarded pickup ("pickup1").
+  ///   * all pickups boarded/no-show → cab → office (final destination).
+  /// This holds both before and after the viewer boards, so a boarded P1 and a
+  /// still-waiting P3 both see the leg pointed at the cab's actual next stop.
+  ///
+  /// LOGOUT (passenger-wise drop logic): the active leg follows the cab's real
+  /// next drop — the first passenger still awaiting drop (`reachedHomeTime ==
+  /// null && !noShow`) by paxOrder — for every viewer alike. Once all drops are
+  /// done it is null (trip complete). The office is never a target on a drop
+  /// trip: the cab has already left it.
+  ///
+  /// Other trip types keep the personalised [_timeline.target].
   RideStop? get _activeTarget {
-    if (_isLoginTripType() && !_timeline.meBoarded) {
-      return _fleetFirstPendingPickup ?? _timeline.target;
+    if (_isLoginTripType()) {
+      final nextPickup = _fleetFirstPendingPickup;
+      if (nextPickup != null) return nextPickup;
+      // No pickups left → head to office.
+      return _officeStop ?? _timeline.target;
+    }
+    if (_isLogoutTripType()) {
+      // Cab → first remaining drop; null when every passenger is dropped.
+      return _fleetFirstPendingDrop;
     }
     return _timeline.target;
   }
@@ -659,24 +1078,30 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     if (target == null) return false;
 
     final me = _myStop;
-    if (me != null) {
-      final status = _latestStatus;
-      final meEmpId = widget.empId;
-      if (status != null && meEmpId != null) {
-        for (final p in status.passengers) {
-          if (p.empId == meEmpId) {
-            return !shouldHideActiveLegForPassenger(
-              p,
-              isPickupTrip: !_timeline.isLogout,
-            );
-          }
+    final status = _latestStatus;
+    final meEmpId = widget.empId;
+
+    if (me != null && status != null && meEmpId != null) {
+      for (final p in status.passengers) {
+        if (p.empId != meEmpId) continue;
+        // LOGOUT (spec): the viewer's trip ends the moment they reach home
+        // (Completed) or are a no-show — stop their active navigation then.
+        if (_isLogoutTripType()) {
+          final st = logoutPaxStatusOf(p);
+          return st == LogoutPaxStatus.boarded;
         }
+        return !shouldHideActiveLegForPassenger(
+          p,
+          isPickupTrip: !_timeline.isLogout,
+        );
       }
     }
     return true;
   }
 
-  /// Resolves the orange active-leg endpoint from [paxTrackingStatus] + trip type.
+  /// Resolves the orange active-leg endpoint — the cab's current drop/pickup
+  /// target home. On LOGOUT trips this is always the first remaining drop home
+  /// (no office routing: the cab has already left the office).
   LatLng? _activeLegDestinationLatLng() {
     if (!_shouldShowActiveLeg()) return null;
 
@@ -685,18 +1110,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
     if (target.isOffice) return _waypointLocationForStop(target);
 
-    final loc = _waypointLocationForStop(target);
-    if (loc == null) return null;
-
-    // Drop + Not Boarded → cab heads to office to board.
-    if (_timeline.isLogout && target.isMe) {
-      final s = (target.paxTrackingStatus ?? '').trim().toLowerCase();
-      if (s == 'not boarded' || s == 'pending') {
-        return _officeLatLng ?? loc;
-      }
-    }
-
-    return loc;
+    return _waypointLocationForStop(target);
   }
 
   /// Distance (m) from [driver] to [dest] along the planned polyline if one
@@ -741,7 +1155,17 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         points,
         cabOverride ?? _animatedDriverLatLng,
       );
-      if (cabIdx > 0) {
+      // Grey "completed" segment = the planned route already behind the cab.
+      // This only makes sense once the cab has actually started consuming the
+      // route — i.e. the viewer has boarded (LOGIN) or the drop sequence is
+      // underway (LOGOUT). For a NOT-boarded LOGIN viewer the whole route is
+      // still upcoming: cab → pickup1 is the orange active leg and pickup1 → my
+      // pickup is the blue tail, with nothing completed. The planned route there
+      // starts at pickup1 (not at the cab), so the cab's nearest vertex lands
+      // mid-route and `cabIdx > 0` would otherwise paint the pickup1 → my-pickup
+      // chunk grey. Suppress grey entirely until the viewer has boarded.
+      final showCompleted = !(_isLoginTripType() && !_timeline.meBoarded);
+      if (showCompleted && cabIdx > 0) {
         _polylines.add(Polyline(
           polylineId: const PolylineId('route_completed'),
           color: const Color(0xFFB0B6BE),
@@ -754,19 +1178,56 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         ));
       }
 
-      // LOGIN + boarded: draw the upcoming tail (next pickups → office) ahead
-      // of the cab so the viewer sees the rest of the route once on board.
-      if (_isLoginTripType() && _timeline.meBoarded && cabIdx < points.length - 1) {
-        _polylines.add(Polyline(
-          polylineId: const PolylineId('route_upcoming'),
-          color: const Color(0xFF2563EB),
-          width: 4,
-          zIndex: 1,
-          points: points.sublist(cabIdx),
-          startCap: Cap.roundCap,
-          endCap: Cap.roundCap,
-          jointType: JointType.round,
-        ));
+      // Blue upcoming route — the remaining stop sequence BEYOND the current
+      // target (the orange active leg already covers cab → current target):
+      //   * LOGIN not boarded → next pickups → MY pickup (capped at my order).
+      //   * LOGIN boarded     → next pickups → office.
+      //   * LOGOUT always     → remaining drops up to the viewer's own drop.
+      //
+      // The blue must start where the orange leg ends — at the current target's
+      // vertex — NOT at the cab. Anchoring it to the cab (`cabIdx`) drew the
+      // whole cab → target span in blue underneath the wider, higher-zIndex
+      // orange leg, so the blue was fully shadowed (and entirely invisible when
+      // the target was the last stop). We therefore start the blue at the
+      // target's nearest vertex, falling back to the cab vertex when no active
+      // target resolves (so a route still draws). The blue's start point is
+      // snapped to the cab's heading edge of that vertex via max(cabIdx, …) so
+      // it never doubles back behind the cab.
+      //
+      // LOGIN is gated by `_loginPlannedWaypoints` (it returns empty when there
+      // is nothing to draw — incl. before pickup data arrives, or once boarded
+      // with no pickups left), so any non-empty login `points` should render —
+      // including a not-yet-boarded pickup2 seeing cab → pickup1 → pickup2.
+      final showUpcoming = _isLoginTripType() || _isLogoutTripType();
+      if (showUpcoming) {
+        final targetLoc = _activeLegDestinationLatLng();
+        // Anchor the blue at the current target's vertex (where the orange leg
+        // ends). Normally we clamp to `max(cabIdx, …)` so it never doubles back
+        // behind the cab. But for a NOT-boarded LOGIN viewer the route starts at
+        // the target (pickup1) and the cab sits before it, so `cabIdx` lands
+        // mid-route — clamping would leave the pickup1 → cabIdx chunk undrawn
+        // (grey is suppressed there too). In that case anchor purely to the
+        // target vertex so the blue covers the whole pickup1 → my-pickup tail.
+        final notBoardedLogin = _isLoginTripType() && !_timeline.meBoarded;
+        final int startIdx;
+        if (targetLoc != null) {
+          final targetIdx = _nearestVertexIndex(points, targetLoc);
+          startIdx = notBoardedLogin ? targetIdx : math.max(cabIdx, targetIdx);
+        } else {
+          startIdx = cabIdx;
+        }
+        if (startIdx < points.length - 1) {
+          _polylines.add(Polyline(
+            polylineId: const PolylineId('route_upcoming'),
+            color: const Color(0xFF2563EB),
+            width: 4,
+            zIndex: 1,
+            points: points.sublist(startIdx),
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+          ));
+        }
       }
     }
 
@@ -787,9 +1248,12 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   /// Fetches a road-following polyline from the cab to the active-leg destination
   /// via Google Directions. Throttled to avoid hammering the API on every GPS tick.
   ///
-  /// For tripTypeCode 2 (LOGOUT/drop trips) the route passes through every
-  /// intermediate stop in order: cab → office → pax1 → pax2 → … → targetPax.
-  /// For all other trip types the route goes directly: cab → target.
+  /// The orange active leg is always the DIRECT cab → current target home:
+  ///   * LOGIN  → cab → next pickup ("pickup1") or office once all are aboard.
+  ///   * LOGOUT → cab → first remaining drop home (the cab has already left the
+  ///     office, so it never routes back through it).
+  /// The remaining drop/pickup sequence beyond the current target is drawn as
+  /// the blue "upcoming" planned route, not folded into this leg.
   Future<void> _refreshActiveLegPolyline({LatLng? cab}) async {
     final cabPos = cab ?? _animatedDriverLatLng;
     final targetStop = _activeTarget;
@@ -839,20 +1303,12 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     _lastActiveLegFetchAt = now;
     final gen = ++_activeLegFetchGen;
 
-    final List<LatLng> leg;
-    if (_isLogoutTripType()) {
-      // LOGOUT (tripType 2): route through office then every paxOrder stop up
-      // to and including the target — cab → office → pax1 → … → targetPax.
-      final throughPoints = _buildLogoutActiveLegWaypoints(cabPos, targetStop);
-      leg = throughPoints.length >= 2
-          ? await fetchRoutePolylineThroughPoints(throughPoints)
-          : await fetchDirectionsPolyline(origin: cabPos, destination: targetLoc);
-    } else {
-      leg = await fetchDirectionsPolyline(
-        origin: cabPos,
-        destination: targetLoc,
-      );
-    }
+    // Direct cab → current target home for every trip type (the remaining
+    // sequence is the blue upcoming planned route).
+    final leg = await fetchDirectionsPolyline(
+      origin: cabPos,
+      destination: targetLoc,
+    );
 
     if (!mounted || gen != _activeLegFetchGen) return;
 
@@ -879,13 +1335,19 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     return !_timeline.isLogout;
   }
 
-  /// LOGIN-only planned-route gating.
+  /// LOGIN-only planned-route gating (Uber/Ola-shuttle passenger-wise logic).
   ///
-  /// Until the logged-in passenger boards (their paxTrackingStatus is still
-  /// "not picked up"/"pending"), the only route the viewer should see is the
-  /// orange active leg cab → first/next pickup. So the gray planned route is
-  /// suppressed (empty). Once boarded, the planned route should trace the
-  /// remaining pickups after the viewer plus the office (the tail of the trip).
+  /// Until the logged-in passenger boards (status still "Not Picked Up"), the
+  /// only route the viewer should see is the orange active leg cab → pickup1
+  /// (the cab's first unboarded pickup). So the planned route is suppressed
+  /// (empty) and only the active leg renders.
+  ///
+  /// Once the viewer has boarded (status "Boarded"), every boarded passenger
+  /// sees the SAME remaining journey — cab → every still-unboarded pickup (in
+  /// paxOrder) → office — independent of their own paxOrder. So the moment a
+  /// passenger boards, their own home drops off the route and the route shows
+  /// only the pickups still ahead plus the office destination. No-show pickups
+  /// are skipped; once all pickups are done it collapses to cab → office.
   ///
   /// Returns the personalised planned-route waypoints for a LOGIN trip, or an
   /// empty list when nothing beyond the active leg should be drawn.
@@ -893,11 +1355,21 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     final status = _latestStatus;
     if (status == null) return const [];
 
-    // Not boarded yet → show only cab → pickup1 (handled by the active leg).
-    if (!_timeline.meBoarded) return const [];
+    final boarded = _timeline.meBoarded;
 
-    // Boarded → remaining pickups after me (still pending) + office tail.
-    final myOrder = _myPaxOrder;
+    // NOT boarded yet → the viewer (e.g. pickup2) still sees the cab's path to
+    // their own pickup: cab → next unboarded pickups (in route order) → MY
+    // pickup, capped at the viewer's own paxOrder. The orange active leg covers
+    // cab → pickup1; this planned route continues pickup1 → … → my pickup as
+    // the blue "upcoming" line. No office tail before boarding (the office only
+    // matters once the viewer is onboard). Previously this returned an empty
+    // list, so a not-yet-boarded pickup2 never got a blue route at all.
+    //
+    // BOARDED → every remaining unboarded pickup (in route order) + office. The
+    // viewer's own paxOrder is irrelevant here: all onboard passengers share the
+    // same forward route, so we never cap by `myOrder`.
+    final int? cap = boarded ? null : _myPaxOrder;
+
     final pax = List<TripPassenger>.from(status.passengers)
       ..sort((a, b) => (a.paxOrder ?? 0).compareTo(b.paxOrder ?? 0));
 
@@ -905,8 +1377,11 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     for (final p in pax) {
       final order = p.paxOrder;
       if (order == null) continue;
-      // Only stops AFTER my own pickup, and skip ones already resolved.
-      if (myOrder != null && order <= myOrder) continue;
+      // Before boarding, never route beyond the viewer's own pickup.
+      if (cap != null && order > cap) break;
+      // Skip pickups already boarded/completed and no-shows — only stops the
+      // cab still has to reach remain on the route. The viewer's own (still
+      // unboarded) pickup is NOT resolved, so it stays as the route's tail.
       if (isPaxRouteResolved(p, isPickupTrip: true)) continue;
 
       LatLng? loc;
@@ -932,49 +1407,58 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       if (loc != null) pts.add(loc);
     }
 
-    // Office tail (destination).
-    final office = _officeLatLng;
-    if (office != null) pts.add(office);
+    // Office tail (destination) — only once boarded; before boarding the route
+    // ends at the viewer's own pickup.
+    if (boarded) {
+      final office = _officeLatLng;
+      if (office != null) pts.add(office);
+    }
 
     // Fewer than 2 points can't draw a polyline.
     return pts.length >= 2 ? pts : const [];
   }
 
-  /// Builds the ordered waypoint list for the orange active-leg on LOGOUT trips:
-  ///   [cabPos, office, pax1, pax2, …, targetPax]
+  /// LOGOUT-only planned-route builder — cumulative remaining-drop routing
+  /// (Uber/Ola employee-transport spec).
   ///
-  /// All paxOrders from 1 up to and including [target.order] are included so
-  /// the polyline faithfully traces the full drop sequence the cab must follow.
-  List<LatLng> _buildLogoutActiveLegWaypoints(LatLng cabPos, RideStop target) {
-    final pts = <LatLng>[cabPos];
-
-    // Office is always the first stop after the cab on a drop trip.
-    final officeLoc = _officeLatLng;
-    if (officeLoc != null) pts.add(officeLoc);
-
-    // Collect all passengers sorted by paxOrder ascending.
+  /// Destinations are the remaining passenger home drops in `paxOrder` order:
+  /// [getRemainingDropPassengers] keeps only the ACTIVE ones (Not-Boarded /
+  /// En-Route) and drops every COMPLETED / No-Show home, so completed drops are
+  /// excluded outright and a dropped passenger's home disappears from the route
+  /// the instant their status flips. Mid-sequence completions/no-shows are
+  /// skipped while later pending drops stay (e.g. Drop1=Reached-Home,
+  /// Drop2=No-Show, Drop3/Drop4=Not-Boarded → Drop3 → Drop4).
+  ///
+  /// Since this is the passenger app, the chain is capped at the viewer's OWN
+  /// drop (their `paxOrder`) — they never see drops beyond their home, per the
+  /// Passenger App Rules. The cab live location is the source and is prepended
+  /// here as the first waypoint, so the drawn chain reads cab → … → myDrop.
+  /// Prepending the cab also guarantees ≥2 points when the viewer is the only
+  /// remaining drop (paxOrder 1) — otherwise the route would never render.
+  ///
+  /// The office is NOT a node here: the cab has already left it. Returns the
+  /// cab origin followed by the ordered remaining drop coordinates, or an empty
+  /// list when no remaining drop exists (nothing left to draw).
+  List<LatLng> buildLogoutTripWaypoints() {
     final status = _latestStatus;
-    if (status == null) {
-      // Fallback: only add the target stop itself.
-      final loc = _waypointLocationForStop(target);
-      if (loc != null && (pts.isEmpty || loc != pts.last)) pts.add(loc);
-      return pts;
-    }
+    if (status == null) return const [];
 
-    final pax = List<TripPassenger>.from(status.passengers)
-      ..sort((a, b) => (a.paxOrder ?? 0).compareTo(b.paxOrder ?? 0));
+    final myOrder = _myPaxOrder;
+    // Active (Not-Boarded / En-Route) passengers only, sorted by paxOrder ASC.
+    final remaining = getRemainingDropPassengers(status.passengers);
 
-    // The polyline must end at the viewer's OWN drop, never beyond it. When the
-    // target is the office (viewer "Not boarded" → cab heads to office first),
-    // there is no pax order on the target, so fall back to the viewer's own
-    // paxOrder as the cap. Otherwise cap at the target stop's order.
-    final targetOrder = target.isOffice ? _myPaxOrder : (target.order ?? _myPaxOrder);
+    final pts = <LatLng>[];
 
-    for (final p in pax) {
-      final order = p.paxOrder;
-      if (order == null) continue;
-      // Include all stops from paxOrder 1 up to and including the cap order.
-      if (targetOrder != null && order > targetOrder) break;
+    // The cab live location is the route's origin (the cab has already left the
+    // office). Prepend it so the chain reads cab → drop1 → … → myDrop, which
+    // also guarantees ≥2 points when the viewer is the cab's only remaining
+    // drop (paxOrder 1) — otherwise a single drop would yield no polyline.
+    pts.add(_animatedDriverLatLng);
+
+    for (final p in remaining) {
+      final order = p.paxOrder!; // non-null guaranteed by getRemainingDropPassengers
+      // Cap at the viewer's own drop — passengers never see drops beyond theirs.
+      if (myOrder != null && order > myOrder) break;
 
       LatLng? loc;
       if (_useSignalRWaypoints) {
@@ -999,8 +1483,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       if (loc != null) pts.add(loc);
     }
 
-    // If target is the office itself (all pax done), the office was already added.
-    return pts;
+    return pts.length >= 2 ? pts : const [];
   }
 
   /// Index of the polyline vertex closest to [p].
@@ -1311,11 +1794,40 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     });
   }
 
+  /// Dispatches a silent [RefreshCabTracking] (no loader — the bloc emits a
+  /// fresh [RideTrackingDataState], never a loading state) at most once every
+  /// [_silentRefreshThrottle], so passenger data keeps refreshing from the API
+  /// between SignalR pings. The driver position stays SignalR-authoritative
+  /// (REST never overwrites it once [_signalRHasLocation] is true), so this only
+  /// freshens passenger/status fields — exactly the real-time update we want.
+  ///
+  /// Skipped in dummy mode (no bloc feed) and while a fresh refresh is still
+  /// inside the throttle window.
+  void _maybeSilentRefresh() {
+    if (TrackingConfig.useDummyTracking) return;
+    final now = DateTime.now();
+    final last = _lastSilentRefreshAt;
+    if (last != null && now.difference(last) < _silentRefreshThrottle) return;
+    _lastSilentRefreshAt = now;
+    context.read<CabTrackingBloc>().add(const RefreshCabTracking());
+  }
+
   /// Silently re-applies [paxTrackingStatus] from the latest SignalR payload
   /// into the timeline stops and flushes the UI — no loading state touched.
+  ///
+  /// Fires on the 200 ms tick. Two things happen every tick:
+  ///   1. A throttled silent REST refresh ([_maybeSilentRefresh]) so passenger
+  ///      data keeps flowing from the API even between SignalR pings — this is
+  ///      what makes the screen feel real-time without a loader.
+  ///   2. The latest cached SignalR payload is re-merged + the UI repainted so
+  ///      the live arrival clock stays current at the tick cadence.
   void _refreshPaxTrackingStatus() {
+    if (!mounted) return;
+    // Pull fresh passenger data from the API on a throttled cadence (no loader).
+    _maybeSilentRefresh();
+
     final payload = _lastPayload;
-    if (!mounted || payload == null || payload.passengers.isEmpty) return;
+    if (payload == null || payload.passengers.isEmpty) return;
 
     final byEmpId = <int, RouteTripPassenger>{
       for (final p in payload.passengers)
@@ -1387,6 +1899,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     // the underlying data actually changed (avoids needless work every 200 ms).
     if (changed) {
       _latestStatus = status.withPassengers(updated);
+      // Keep the cached state in sync so the bottom sheet repaints from the
+      // freshest passenger data on this silent tick (no loader, real-time).
+      _latestData = _latestData?.copyWith(status: _latestStatus);
       _timeline = RideTimeline.fromStatus(_latestStatus!, meEmpId: widget.empId);
       _fullTimeline = RideTimeline.fromStatus(_latestStatus!,
           meEmpId: widget.empId, includeAllStops: true);
@@ -1436,6 +1951,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
     // Cache for the SignalR ETA computation, which runs outside the bloc.
     _latestStatus = status;
+    // Cache the whole state so the bottom sheet reads driver/OTP/vehicle from
+    // the freshest data on every repaint (incl. the silent 0.2 s tick).
+    _latestData = data;
 
     // Rebuild the personalised timeline (boarding states, current target, my
     // position in the pickup sequence) from the freshest status.
@@ -1533,8 +2051,12 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         }
       },
       builder: (context, state) {
-        // In dummy mode the bloc stays idle, so fall back to the seeded data.
-        final data = state is RideTrackingDataState ? state : _dummyData;
+        // Prefer the cached _latestData: it carries the freshest SignalR/tick
+        // merges (driver/OTP/vehicle + live passenger status), so the sheet
+        // refreshes in real time on every repaint — not just on bloc emits.
+        // Fall back to the bloc state, then the dummy seed (dummy mode).
+        final data = _latestData ??
+            (state is RideTrackingDataState ? state : _dummyData);
         final isLoading = data == null &&
             (state is CabTrackingLoading || state is CabTrackingInitial);
 
@@ -1819,7 +2341,7 @@ class _DebugInfoOverlayState extends State<_DebugInfoOverlay> {
               constraints: const BoxConstraints(maxWidth: 240),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.78),
+                color: Colors.black.withValues(alpha: 0.78),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Column(
@@ -1952,7 +2474,7 @@ class _CircleButton extends StatelessWidget {
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.14),
+              color: Colors.black.withValues(alpha: 0.14),
               blurRadius: 6,
               offset: const Offset(0, 2),
             ),
@@ -2058,11 +2580,14 @@ class _DriverCard extends StatelessWidget {
         callerType: 'E',
       );
       virtualNumber = response.ivrVirtualNumber?.trim();
-    } catch (_) {
+    } catch (e) {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Unable to start call')),
+          SnackBar(
+            content:
+                Text(ErrorMessage.from(e, fallback: 'Unable to start call')),
+          ),
         );
       }
       return;
@@ -2238,10 +2763,6 @@ class _ExpandedSection extends StatelessWidget {
     final detail = data?.detail;
     final status = data?.status;
 
-    final mode = status?.trackingMode?.trim().isNotEmpty == true
-        ? status!.trackingMode!
-        : (isLoading ? '—' : '—');
-
     final vehicle = (status?.vehicleNo?.trim().isNotEmpty == true
             ? status!.vehicleNo!.trim()
             : detail?.vehicleRegistrationNo?.trim()) ??
@@ -2256,7 +2777,6 @@ class _ExpandedSection extends StatelessWidget {
     final boardedCount =
         pickupStops.where((s) => s.state == StopState.completed).length;
     final progressWord = logout ? 'Dropped' : 'Boarded';
-    final etaHeader = logout ? 'ETA to your drop' : 'ETA to office';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2456,7 +2976,7 @@ class _TrackingStatusBanner extends StatelessWidget {
       icon = logout ? Icons.home_rounded : Icons.event_seat_rounded;
       color = const Color(0xFF1A6B4A);
       if (logout) {
-        title = "You've been dropped";
+        title = "Logout Trip";
         subtitle = 'Hope you had a good ride home';
       } else {
         title = "You're on board";
@@ -2506,9 +3026,9 @@ class _TrackingStatusBanner extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.25)),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -2777,7 +3297,7 @@ class _StatusPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
@@ -2789,40 +3309,6 @@ class _StatusPill extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: color,
         ),
-      ),
-    );
-  }
-}
-
-/// Small pill that renders a live ETA in minutes (or a placeholder until the
-/// first SignalR location update arrives).
-class _EtaChip extends StatelessWidget {
-  final int? etaMinutes;
-  const _EtaChip({this.etaMinutes});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0F7F3),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.access_time_rounded,
-              size: 14, color: Color(0xFF1A6B4A)),
-          const SizedBox(width: 6),
-          Text(
-            formatEta(etaMinutes),
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF1A6B4A),
-            ),
-          ),
-        ],
       ),
     );
   }

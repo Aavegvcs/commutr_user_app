@@ -57,7 +57,13 @@ PaxRoutePhase? paxRoutePhaseFromStatus(
   String? status, {
   required bool isPickupTrip,
 }) {
-  final s = (status ?? '').trim().toLowerCase();
+  // Normalise hyphens/underscores/extra spaces so 'En-Route', 'en_route' and
+  // 'en route' all match the same — the backend is inconsistent about these.
+  final s = (status ?? '')
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[-_]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ');
   if (s.isEmpty) return null;
 
   if (s == 'no show') return PaxRoutePhase.noShow;
@@ -67,8 +73,22 @@ PaxRoutePhase? paxRoutePhaseFromStatus(
     if (s == 'picked up' || s == 'completed') return PaxRoutePhase.done;
     if (s == 'not picked up') return PaxRoutePhase.pending;
   } else {
-    if (s == 'dropped' || s == 'completed') return PaxRoutePhase.done;
-    if (s == 'in cab') return PaxRoutePhase.inProgress;
+    // LOGOUT: only 'Reached-Home'/'De-Boarded'/'Trip-Completed' mean dropped.
+    // 'En-Route'/'In-Cab' = currently being driven (still on route). Note
+    // 'cabReachedTime' alone does NOT mean dropped — the cab merely arrived.
+    if (s == 'reached home' ||
+        s == 'de boarded' ||
+        s == 'deboarded' ||
+        s == 'dropped' ||
+        s == 'trip completed' ||
+        s == 'completed') {
+      return PaxRoutePhase.done;
+    }
+    if (s == 'en route' ||
+        s == 'enroute' ||
+        s == 'in cab') {
+      return PaxRoutePhase.inProgress;
+    }
     if (s == 'not boarded') return PaxRoutePhase.pending;
   }
 

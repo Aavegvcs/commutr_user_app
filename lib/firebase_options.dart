@@ -51,7 +51,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCaA9VRh8L_SfLZR6aOwUBgPlZXTXz4wGM',
-    appId: '1:337332431930:android:a44c1450389354a43c9903',
+    appId: '1:337332431930:android:cca7a9c4cbc20e173c9903',
     messagingSenderId: '337332431930',
     projectId: 'commutrdriverapp-a0ff3',
     storageBucket: 'commutrdriverapp-a0ff3.firebasestorage.app',

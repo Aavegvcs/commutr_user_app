@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' show pi;
 
 import 'package:flutter_contacts/flutter_contacts.dart';
@@ -15,6 +16,7 @@ import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_e
 import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_state.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
@@ -45,6 +47,7 @@ import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
 import 'package:commutr_main/ride_tracking/config/tracking_config.dart';
 import 'package:commutr_main/ride_tracking/service/dummy_tracking_service.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
+import 'package:commutr_main/ride_tracking/service/ivr_call_repo.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -65,7 +68,6 @@ import '../../../weekly_off/presentation/screen/weekly_off.dart';
 import '../../../features/trip_detail/data/repository/user_feedback_repo.dart';
 import '../../../features/trip_detail/data/repository/roaster_shift_repo.dart';
 import '../../../features/share_cab/data/repository/share_cab_repo.dart';
-import '../../../features/share_cab/data/repository/call_driver_ivr_repo.dart';
 import '../../../profile/presentation/screen/edit_profile.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -506,89 +508,175 @@ class _WelcomeState extends State<_WelcomeView> {
   Future<void> _shareActiveTrip(TripHomeItem item) async {
     final empId = item.empId;
     final tripId = item.tripId;
+
     if (empId == null || empId == 0 || tripId == null || tripId == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Trip details are not available.')),
-      );
-      return;
-    }
-
-    // Pick a contact from the phone's contact list
-    final hasPermission =
-        await FlutterContacts.requestPermission(readonly: true);
-    if (!hasPermission) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Contacts permission denied.')),
-        );
-      }
-      return;
-    }
-
-    final Contact? contact = await FlutterContacts.openExternalPick();
-    if (contact == null || !mounted) return;
-
-    // Reload with phone numbers
-    final full = await FlutterContacts.getContact(contact.id);
-    final phone = full?.phones.isNotEmpty == true
-        ? full!.phones.first.number.replaceAll(RegExp(r'\s+|-'), '')
-        : null;
-
-    if (phone == null || phone.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Selected contact has no phone number.')),
+            content: Text('Trip details are not available.'),
+          ),
         );
       }
       return;
     }
 
-    if (!mounted) return;
-
-    // Get logged-in user info from local storage
-    final authStorage = sl<AuthLocalStorage>();
-    final userMobileNo = authStorage.getContactNumber() ?? '';
-    final userName = authStorage.getAuthData()?.data?.user?.name ??
-        item.userName?.trim() ??
-        '';
-
-    // Show loading and call the API
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
     try {
-      final repo = sl<ShareCabRepository>();
-      final response = await repo.shareCabToFamily(
-        empId: empId,
-        tripId: tripId,
-        name: userName,
-        userMobileNo: userMobileNo,
-        recepientMobileNo: phone,
-      );
+      /// Request contacts permission
+      final hasPermission =
+          await FlutterContacts.requestPermission(readonly: true);
+
+      if (!hasPermission) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Contacts permission denied.'),
+            ),
+          );
+        }
+        return;
+      }
+
+      /// Open native contact picker safely
+      Contact? pickedContact;
+
+      try {
+        pickedContact = await FlutterContacts.openExternalPick();
+      } catch (e) {
+        debugPrint('openExternalPick error: $e');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(ErrorMessage.from(e,
+                  fallback: 'Failed to open contacts.')),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (pickedContact == null || !mounted) return;
+
+      /// Reload full contact safely
+      Contact? fullContact;
+
+      try {
+        fullContact = await FlutterContacts.getContact(
+          pickedContact.id,
+          withProperties: true,
+          withPhoto: false,
+          withThumbnail: false,
+        );
+      } catch (e) {
+        debugPrint('getContact error: $e');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(ErrorMessage.from(e,
+                  fallback: 'Failed to read contact details.')),
+            ),
+          );
+        }
+        return;
+      }
+
+      /// Extract phone number safely
+      String? phone;
+
+      if (fullContact != null && fullContact.phones.isNotEmpty) {
+        final rawPhone = fullContact.phones.first.number;
+
+        phone = rawPhone.replaceAll(RegExp(r'\s+|-|\(|\)'), '').trim();
+
+        if (phone.isEmpty) {
+          phone = null;
+        }
+      }
+
+      if (phone == null || phone.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Selected contact has no valid phone number.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
 
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
 
-      if (response.isSuccess == true) {
-        final url = response.result?.firstOrNull?.urlWithPara;
-        _showShareCabSuccessDialog(
-          message: response.message ?? 'Cab location shared successfully.',
-          url: url,
+      /// Get logged-in user info
+      final authStorage = sl<AuthLocalStorage>();
+
+      final userMobileNo = authStorage.getContactNumber() ?? '';
+
+      final userName = authStorage.getAuthData()?.data?.user?.name?.trim() ??
+          item.userName?.trim() ??
+          '';
+
+      /// Show loader
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      try {
+        final repo = sl<ShareCabRepository>();
+
+        final response = await repo.shareCabToFamily(
+          empId: empId,
+          tripId: tripId,
+          name: userName,
+          userMobileNo: userMobileNo,
+          recepientMobileNo: phone,
         );
-      } else {
+
+        if (!mounted) return;
+
+        Navigator.of(context, rootNavigator: true).pop();
+
+        if (response.isSuccess == true) {
+          final url = response.result?.firstOrNull?.urlWithPara;
+
+          _showShareCabSuccessDialog(
+            message: response.message ?? 'Cab location shared successfully.',
+            url: url,
+          );
+        } else {
+          _showShareCabErrorDialog(
+            message: response.message ?? 'Failed to share cab location.',
+          );
+        }
+      } catch (e) {
+        debugPrint('shareCabToFamily error: $e');
+
+        if (!mounted) return;
+
+        Navigator.of(context, rootNavigator: true).pop();
+
         _showShareCabErrorDialog(
-          message: response.message ?? 'Failed to share cab location.',
+          message: 'Something went wrong. Please try again.',
         );
       }
     } catch (e) {
-      if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
-      _showShareCabErrorDialog(
-          message: 'Something went wrong. Please try again.');
+      debugPrint('_shareActiveTrip error: $e');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Unable to access contacts right now.',
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -602,8 +690,13 @@ class _WelcomeState extends State<_WelcomeView> {
       return;
     }
 
-    final authStorage = sl<AuthLocalStorage>();
-    final userMobileNo = authStorage.getContactNumber() ?? '';
+    final phoneNo = item.userAppIvrNumber?.trim();
+    if (phoneNo == null || phoneNo.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Driver phone number not available')),
+      );
+      return;
+    }
 
     // Confirmation dialog before calling
     final confirmed = await showDialog<bool>(
@@ -687,48 +780,45 @@ class _WelcomeState extends State<_WelcomeView> {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
+    String? virtualNumber;
     try {
-      final repo = sl<CallDriverIvrRepository>();
-      final response = await repo.callToDriverIvr(
+      final response = await sl<IvrCallRepo>().initiate(
+        dsId: tripId,
         empId: empId,
-        userMobileNo: userMobileNo,
-        tripId: tripId,
+        phoneNo: phoneNo,
+        callerType: 'E',
       );
-
-      if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
-
-      if (response.isSuccess == true) {
-        final driverPhone =
-            response.result?.firstOrNull?.driverMobileNo?.trim() ?? '';
-        if (driverPhone.isNotEmpty) {
-          final uri = Uri(scheme: 'tel', path: driverPhone);
-          if (await canLaunchUrl(uri)) {
-            launchUrl(uri);
-          }
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(response.message ?? 'IVR call initiated.'),
-            ),
-          );
-        }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content:
-                Text(response.message ?? 'Failed to connect. Please retry.'),
-          ),
-        );
-      }
+      virtualNumber = response.ivrVirtualNumber?.trim();
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Something went wrong. Please try again.')),
+        SnackBar(
+          content: Text(ErrorMessage.from(e, fallback: 'Unable to start call')),
+        ),
       );
+      return;
     }
+
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop(); // dismiss loader
+
+    if (virtualNumber == null || virtualNumber.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to start call')),
+      );
+      return;
+    }
+
+    final uri = Uri(scheme: 'tel', path: virtualNumber);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Unable to start call')),
+    );
   }
 
   void _showShareCabSuccessDialog({required String message, String? url}) {
@@ -969,8 +1059,9 @@ class _WelcomeState extends State<_WelcomeView> {
       if (result is String && result.isNotEmpty && context.mounted) {
         showBar(result);
         context.read<TripHomeBloc>().add(const FetchTripHome());
-        // Safe Home Reach flow applies only to Logout (DROP) trips.
-        if (boardingType == 'D' && !item.isLogin) {
+        // Safe Home Reach flow applies only to Logout (DROP) trips, and only
+        // when the backend requests it (ReachedHomeReq == 1).
+        if (boardingType == 'D' && !item.isLogin && item.reachedHomeReq == 1) {
           _callReachedHomeAndShowRateDialog(
             context,
             empId: empId,
@@ -1046,9 +1137,25 @@ class _WelcomeState extends State<_WelcomeView> {
       );
       if (!response.isSuccess) {
         debugPrint('[REACHED_HOME] API not success: ${response.message}');
+        if (context.mounted) {
+          final msg = response.message.trim().isNotEmpty
+              ? response.message
+              : 'Could not mark reached home. Please try again.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(msg)),
+          );
+        }
       }
     } catch (e) {
       debugPrint('[REACHED_HOME] API error: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(ErrorMessage.from(e,
+                fallback: 'Could not mark reached home. Please try again.')),
+          ),
+        );
+      }
     }
 
     // Step 4: Show Rate App dialog (best-effort — open regardless of API result)
@@ -1093,11 +1200,11 @@ class _WelcomeState extends State<_WelcomeView> {
     required Color trackFg,
     required VoidCallback? trackVehicleAction,
   }) {
-    // On a Logout (DROP) trip the user boards at the office, so the primary CTA
-    // is always Deboard. tripStatusCode == 2 likewise means the user is onboard.
-    final bool showDeboard = item.isBoardedNotDeboarded ||
-        item.tripStatusCode == 2 ||
-        (!item.isPickTrip && !item.isDeBoarded);
+    // Board/Deboard CTA depends only on the user's boarding state, for both
+    // Login (PICK) and Logout (DROP) trips:
+    //   isBoarded == false                  -> show Board
+    //   isBoarded == true && !isDeBoarded    -> show Deboard
+    final bool showDeboard = item.isBoardedNotDeboarded;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1334,6 +1441,11 @@ class _WelcomeState extends State<_WelcomeView> {
 
   List<_TripHistoryItem> _filteredItems(List<_TripHistoryItem> all) {
     return all.where((item) {
+      // Upcoming and In Progress trips are never shown in trip history.
+      if (item.status == _TripHistoryStatus.upcoming ||
+          item.status == _TripHistoryStatus.inProgress) {
+        return false;
+      }
       if (!_tripHistoryStatusAll &&
           !_tripHistoryStatusFilters.contains(item.status)) {
         return false;
@@ -1488,7 +1600,7 @@ class _WelcomeState extends State<_WelcomeView> {
         } else if (historyState is TripHistoryUnauthorized) {
           body = _buildSchedulesEmptyState(
             title: 'Session expired',
-            subtitle: historyState.message,
+            subtitle: _friendlyErrorMessage(historyState.message),
             onRetry: () =>
                 Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
               MaterialPageRoute(builder: (_) => const MobileNoVerification()),
@@ -1500,7 +1612,7 @@ class _WelcomeState extends State<_WelcomeView> {
           final rosterState = context.read<RosterBloc>().state;
           body = _buildSchedulesEmptyState(
             title: 'Could not load trip history',
-            subtitle: historyState.message,
+            subtitle: _friendlyErrorMessage(historyState.message),
             onRetry: rosterState is RosterLoaded
                 ? () {
                     _tripHistoryFetchDispatched = false;
@@ -2147,7 +2259,7 @@ class _WelcomeState extends State<_WelcomeView> {
       return _buildTripHistoryAppBar();
     }
     return Container(
-      height: 150,
+      height: 110 + MediaQuery.of(context).padding.top,
       child: Stack(
         children: [
           Image.asset(
@@ -2157,6 +2269,7 @@ class _WelcomeState extends State<_WelcomeView> {
             fit: BoxFit.cover,
           ),
           SafeArea(
+            bottom: false,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
@@ -2195,9 +2308,11 @@ class _WelcomeState extends State<_WelcomeView> {
                                 : '';
                             return Text(
                               firstName.isNotEmpty ? 'Mr. $firstName' : '',
-                              style: const TextStyle(
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
                                 color: Colors.white,
-                                fontSize: 24,
+                                fontSize: Platform.isAndroid ? 24 : 22,
                                 fontWeight: FontWeight.bold,
                               ),
                             );
@@ -2209,27 +2324,27 @@ class _WelcomeState extends State<_WelcomeView> {
                   Row(
                     spacing: 16,
                     children: [
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _openTransportAssistantChat,
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withOpacity(0.2),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.5),
-                              width: 1,
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.assistant_outlined,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                      ),
+                      // GestureDetector(
+                      //   behavior: HitTestBehavior.opaque,
+                      //   onTap: _openTransportAssistantChat,
+                      //   child: Container(
+                      //     width: 40,
+                      //     height: 40,
+                      //     decoration: BoxDecoration(
+                      //       shape: BoxShape.circle,
+                      //       color: Colors.white.withOpacity(0.2),
+                      //       border: Border.all(
+                      //         color: Colors.white.withOpacity(0.5),
+                      //         width: 1,
+                      //       ),
+                      //     ),
+                      //     child: const Icon(
+                      //       Icons.assistant_outlined,
+                      //       color: Colors.white,
+                      //       size: 20,
+                      //     ),
+                      //   ),
+                      // ),
                       GestureDetector(
                         onTap: () {
                           Navigator.push(
@@ -2359,7 +2474,7 @@ class _WelcomeState extends State<_WelcomeView> {
       children.add(
         _buildSchedulesEmptyState(
           title: 'Could not load active trips',
-          subtitle: tripState.message,
+          subtitle: _friendlyErrorMessage(tripState.message),
           onRetry: () =>
               context.read<TripHomeBloc>().add(const FetchTripHome()),
           retryLabel: 'Retry',
@@ -2394,7 +2509,7 @@ class _WelcomeState extends State<_WelcomeView> {
       children.add(
         _buildSchedulesEmptyState(
           title: 'Could not load schedules',
-          subtitle: scheduleState.message,
+          subtitle: _friendlyErrorMessage(scheduleState.message),
           onRetry: () =>
               context.read<ScheduleHomeBloc>().add(const FetchScheduleHome()),
           retryLabel: 'Retry',
@@ -2416,6 +2531,7 @@ class _WelcomeState extends State<_WelcomeView> {
         title: 'No schedules yet',
         subtitle:
             'You have no active trips or scheduled rides. Pull down to refresh.',
+        isError: false,
       );
     }
 
@@ -2516,47 +2632,126 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
+  /// Converts raw error objects / exception strings into a friendly,
+  /// user-facing message. Prevents leaking internals like
+  /// "Instance of 'ServerException'" to the UI.
+  String _friendlyErrorMessage(String? raw) {
+    final message = raw?.trim() ?? '';
+
+    final looksTechnical = message.isEmpty ||
+        message.startsWith("Instance of") ||
+        message.contains('Exception') ||
+        message.contains('Error:') ||
+        message.contains('SocketException') ||
+        message.contains('TimeoutException') ||
+        message.contains('FormatException') ||
+        message.length > 120;
+
+    if (looksTechnical) {
+      return 'Something went wrong while connecting to the server. '
+          'Please check your connection and try again.';
+    }
+    return message;
+  }
+
   Widget _buildSchedulesEmptyState({
     required String title,
     required String subtitle,
     VoidCallback? onRetry,
     String retryLabel = 'Retry',
+    bool isError = true,
   }) {
+    final accent = const Color(0xFF1A6B3C);
+    final IconData icon =
+        isError ? Icons.cloud_off_rounded : Icons.event_busy_rounded;
+    final Color iconBg = isError
+        ? const Color(0xFFFDECEC)
+        : const Color(0xFFEAF4EE);
+    final Color iconColor =
+        isError ? const Color(0xFFD64545) : accent;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF333333),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF666666)),
-          ),
-          if (onRetry != null) ...[
-            const SizedBox(height: 16),
-            OutlinedButton(
-              onPressed: onRetry,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF1A6B3C),
-                side: const BorderSide(color: Color(0xFFB8DEC9)),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-              ),
-              child: Text(retryLabel),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFEDEDED)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
             ),
           ],
-        ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: iconBg,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: iconColor, size: 28),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF222222),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: Color(0xFF777777),
+              ),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: Icon(
+                    retryLabel == 'Retry'
+                        ? Icons.refresh_rounded
+                        : Icons.login_rounded,
+                    size: 18,
+                  ),
+                  label: Text(
+                    retryLabel,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: accent,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    side: const BorderSide(color: Color(0xFFB8DEC9)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -3413,15 +3608,24 @@ class _WelcomeState extends State<_WelcomeView> {
   }) {
     final bool isLogin = item.isLogin;
     final String label = item.tripType ?? (isLogin ? 'Login' : 'Logout');
-    final String time = isLogin ? _formatShiftTime(item.pickShift) ?? '--:--': _formatShiftTime(item.dropShift)??'--:--';
+    final String time = isLogin
+        ? _formatShiftTime(item.pickShift) ?? '--:--'
+        : _formatShiftTime(item.dropShift) ?? '--:--';
     final bool isScheduled = item.isScheduledStatus;
     final bool isCompleted = item.isCompleted;
     final bool showBoardDeboardActions =
         item.showBoardDeboardActions && !isCompleted;
     final bool isFullyDeboarded = item.isBoarded && item.isDeBoarded;
-    final statusStyle = isCompleted
-        ? (icon: Icons.check_circle_outline, color: const Color(0xFF2563EB))
-        : _tripStatusStyle(item.tripStatusName, isLogin);
+    final String? cancelOrNoShow = item.cancelorNoshow?.trim();
+    // Trip is cancelled or a no-show: only TRIP DETAIL + Trip Summary should be
+    // shown — no planned pickup, OTP, vehicle info, board/deboard, or actions.
+    final bool isCancelledOrNoShow =
+        cancelOrNoShow == 'Cancelled' || cancelOrNoShow == 'Noshow';
+    final statusStyle = isCancelledOrNoShow
+        ? (icon: Icons.cancel_outlined, color: const Color(0xFFB40D1A))
+        : isCompleted
+            ? (icon: Icons.check_circle_outline, color: const Color(0xFF2563EB))
+            : _tripStatusStyle(item.tripStatusName, isLogin);
     final Color accentColor =
         isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final Color statusColor = statusStyle.color;
@@ -3431,8 +3635,11 @@ class _WelcomeState extends State<_WelcomeView> {
         isLogin ? const Color(0xFF3E9B73) : const Color(0xFFB40D1A);
     final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
     final IconData statusIcon = statusStyle.icon;
-    final String statusLabel =
-        isCompleted ? 'Trip Completed' : (item.tripStatusName ?? '—');
+    final String statusLabel = cancelOrNoShow == 'Cancelled'
+        ? 'Cancelled'
+        : cancelOrNoShow == 'Noshow'
+            ? 'No Show'
+            : (isCompleted ? 'Trip Completed' : (item.tripStatusName ?? '—'));
     final List<String> otpDigits = _otpDigits(item.otp);
     final plannedPickup = _plannedPickupLabel(item) ?? '--:--';
     final vehicleLabel = (item.vehicleInfo?.trim().isNotEmpty ?? false)
@@ -3541,25 +3748,46 @@ class _WelcomeState extends State<_WelcomeView> {
                       fontWeight: FontWeight.w500,
                     ),
                   ),
-                  if (item.tripStatusCode == 3 && item.isBoarded) ...[
+                  // Status badge (only while TripStatusCode == 3 / Started):
+                  //   isBoarded && isDeBoarded -> "DeBoarded"
+                  //   isStarted && isBoarded   -> "Boarded"
+                  // Shown on both Login (PICK) and Logout (DROP) trips.
+                  if (isCancelledOrNoShow || item.tripStatusCode != 3) ...[
+                    // No board/deboard badge for cancelled / no-show trips or
+                    // when the trip is not in the Started (code 3) state.
+                  ] else if (item.isBoarded && item.isDeBoarded) ...[
                     const SizedBox(width: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
-                        color: isFullyDeboarded
-                            ? const Color(0xFFEEF2FF)
-                            : const Color(0xFFE8F5EE),
+                        color: const Color(0xFFE8F5EE),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text(
-                        isFullyDeboarded ? 'Deboarded' : 'Boarded',
+                      child: const Text(
+                        'DeBoarded',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: isFullyDeboarded
-                              ? const Color(0xFF4F46E5)
-                              : const Color(0xFF1A6B3C),
+                          color: Color(0xFF1A6B3C),
+                        ),
+                      ),
+                    ),
+                  ] else if (item.isStarted && item.isBoarded) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8F5EE),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'Boarded',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1A6B3C),
                         ),
                       ),
                     ),
@@ -3721,6 +3949,34 @@ class _WelcomeState extends State<_WelcomeView> {
                 ),
                 const SizedBox(height: 14),
                 // ─── Trip Summary button ──────────────────────────────────
+                GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => TripSummaryWelcomeScreen(item: item),
+                    ),
+                  ),
+                  child: Container(
+                    width: double.infinity,
+                    height: 42,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F5EE),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      'Trip Summary',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1A6B3C),
+                      ),
+                    ),
+                  ),
+                ),
+              ] else if (isCancelledOrNoShow) ...[
+                // ─── Cancelled / No-show: only Trip Summary button ────────
+                const SizedBox(height: 14),
                 GestureDetector(
                   onTap: () => Navigator.push(
                     context,
@@ -3936,8 +4192,10 @@ class _WelcomeState extends State<_WelcomeView> {
                   ),
                 ],
               ],
-              const SizedBox(height: 14),
-              if (isCompleted)
+              if (!isCancelledOrNoShow) const SizedBox(height: 14),
+              if (isCancelledOrNoShow)
+                const SizedBox.shrink()
+              else if (isCompleted)
                 const SizedBox.shrink()
               else if (isPrinted)
                 Row(
@@ -4034,7 +4292,10 @@ class _WelcomeState extends State<_WelcomeView> {
             ] else if (isCompleted) ...[
               // ─── Collapsed: inline "Trip Completed" (no extra chip border) ─
               const SizedBox(height: 8),
-            ] else if (!isScheduled && !isFullyDeboarded && !isPrinted) ...[
+            ] else if (!isScheduled &&
+                !isFullyDeboarded &&
+                !isPrinted &&
+                !isCancelledOrNoShow) ...[
               // ─── Collapsed: Boarding OTP + Track Vehicle ─
               const SizedBox(height: 12),
               Container(height: 1, color: const Color(0xFFE8E8E8)),
@@ -4634,7 +4895,7 @@ class _BoardTripDialogViewState extends State<_BoardTripDialogView> {
   }
 
   String _friendlyMessage(String raw) {
-    return raw.replaceFirst('Exception: ', '').trim();
+    return ErrorMessage.from(raw, fallback: 'Something went wrong. Please try again.');
   }
 
   @override
@@ -4884,7 +5145,7 @@ class _CancelActiveTripDialogView extends StatelessWidget {
   }
 
   String _friendlyMessage(String raw) {
-    return raw.replaceFirst('Exception: ', '').trim();
+    return ErrorMessage.from(raw, fallback: 'Something went wrong. Please try again.');
   }
 
   @override
@@ -5477,7 +5738,7 @@ class AppDrawer extends StatelessWidget {
               const Divider(height: 1, color: Color(0xFFE0E0E0)),
 
               // ── Environmental Impact Card ────────────────────────────
-              _EnvironmentalCard(),
+              // _EnvironmentalCard(),
 
               const SizedBox(height: 8),
 
@@ -5510,19 +5771,19 @@ class AppDrawer extends StatelessWidget {
                 label: 'Trip History',
                 onTap: () => onTripHistoryTap?.call(),
               ),
-              _DrawerItem(
-                icon: Icons.people_outline,
-                label: 'Team Cab',
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const TeamCabScreen(),
-                    ),
-                  );
-                },
-              ),
+              // _DrawerItem(
+              //   icon: Icons.people_outline,
+              //   label: 'Team Cab',
+              //   onTap: () {
+              //     Navigator.pop(context);
+              //     Navigator.push(
+              //       context,
+              //       MaterialPageRoute(
+              //         builder: (_) => const TeamCabScreen(),
+              //       ),
+              //     );
+              //   },
+              // ),
               _DrawerItem(
                 icon: Icons.people_outline,
                 label: 'ADHOC Request',
@@ -5557,14 +5818,14 @@ class AppDrawer extends StatelessWidget {
               const SizedBox(height: 4),
 
               // ── SAFETY section ───────────────────────────────────────
-              _SectionLabel('SAFETY'),
-              _DrawerItem(
-                icon: Icons.shield_outlined,
-                label: 'Women Safety',
-                onTap: () => Navigator.pop(context),
-                iconColor: const Color(0xFFE53935),
-                iconBgColor: const Color(0xFFFCECEC),
-              ),
+              // _SectionLabel('SAFETY'),
+              // _DrawerItem(
+              //   icon: Icons.shield_outlined,
+              //   label: 'Women Safety',
+              //   onTap: () => Navigator.pop(context),
+              //   iconColor: const Color(0xFFE53935),
+              //   iconBgColor: const Color(0xFFFCECEC),
+              // ),
 
               const SizedBox(height: 4),
 
@@ -5699,6 +5960,17 @@ class AppDrawer extends StatelessWidget {
 // ── Header Widget ────────────────────────────────────────────────────────────
 
 class _DrawerHeader extends StatelessWidget {
+  String _initialsFromName(String name) {
+    final parts =
+        name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return '';
+    if (parts.length == 1) {
+      return parts.first.substring(0, 1).toUpperCase();
+    }
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -5719,15 +5991,33 @@ class _DrawerHeader extends StatelessWidget {
             child: Container(
               width: 56,
               height: 56,
+              alignment: Alignment.center,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: const Color(0xFFE8F5F0),
                 border: Border.all(color: const Color(0xFF8DCFB8), width: 2),
               ),
-              child: const Icon(
-                Icons.person_outline,
-                color: Color(0xFF8DCFB8),
-                size: 30,
+              child: BlocBuilder<ProfileBloc, ProfileState>(
+                builder: (context, state) {
+                  final fullName =
+                      state is ProfileLoaded ? state.profile.fullName : '';
+                  final initials = _initialsFromName(fullName);
+                  if (initials.isEmpty) {
+                    return const Icon(
+                      Icons.person_outline,
+                      color: Color(0xFF8DCFB8),
+                      size: 30,
+                    );
+                  }
+                  return Text(
+                    initials,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A7A5E),
+                    ),
+                  );
+                },
               ),
             ),
           ),
@@ -5785,10 +6075,10 @@ class _DrawerHeader extends StatelessWidget {
             ),
           ),
           // Close / back icon
-          IconButton(
-            icon: const Icon(Icons.chevron_left, color: Color(0xFF555555)),
-            onPressed: () => Navigator.pop(context),
-          ),
+          // IconButton(
+          //   icon: const Icon(Icons.chevron_left, color: Color(0xFF555555)),
+          //   onPressed: () => Navigator.pop(context),
+          // ),
         ],
       ),
     );
@@ -6003,7 +6293,8 @@ class _ReachedHomeSafelyDialog extends StatelessWidget {
                     ),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      side: const BorderSide(color: Color(0xFFBA1A1A), width: 1.5),
+                      side: const BorderSide(
+                          color: Color(0xFFBA1A1A), width: 1.5),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(999),
                       ),
@@ -6096,9 +6387,8 @@ class _RateAppDialogState extends State<_RateAppDialog> {
       setState(() => _isSubmitting = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            e.toString().replaceFirst('Exception: ', ''),
-          ),
+          content: Text(ErrorMessage.from(e,
+              fallback: 'Could not submit feedback. Please try again.')),
         ),
       );
     }
@@ -6431,15 +6721,23 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
     return _ratings.contains(item.rating);
   }
 
+  /// Upcoming and In Progress trips are excluded everywhere in trip history,
+  /// so filter counts must ignore them too.
+  bool _isShownInHistory(_TripHistoryItem i) =>
+      i.status != _TripHistoryStatus.upcoming &&
+      i.status != _TripHistoryStatus.inProgress;
+
   List<_TripHistoryItem> _itemsForStatusCounts() {
     return widget.items
-        .where((i) => _matchesRating(i) && _matchesDateRange(i))
+        .where((i) =>
+            _isShownInHistory(i) && _matchesRating(i) && _matchesDateRange(i))
         .toList();
   }
 
   List<_TripHistoryItem> _itemsForRatingCounts() {
     return widget.items
-        .where((i) => _matchesStatus(i) && _matchesDateRange(i))
+        .where((i) =>
+            _isShownInHistory(i) && _matchesStatus(i) && _matchesDateRange(i))
         .toList();
   }
 
@@ -6617,38 +6915,9 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
               }
             }),
           ),
-          _checkRow(
-            label: 'In Progress',
-            count: _statusCount(_TripHistoryStatus.inProgress),
-            checked: !_statusAll &&
-                _statuses.contains(_TripHistoryStatus.inProgress),
-            enabled: _statusCount(_TripHistoryStatus.inProgress) > 0,
-            onTap: () => setState(() {
-              _statusAll = false;
-              if (_statuses.contains(_TripHistoryStatus.inProgress)) {
-                _statuses.remove(_TripHistoryStatus.inProgress);
-                if (_statuses.isEmpty) _statusAll = true;
-              } else {
-                _statuses.add(_TripHistoryStatus.inProgress);
-              }
-            }),
-          ),
-          _checkRow(
-            label: 'Upcoming',
-            count: _statusCount(_TripHistoryStatus.upcoming),
-            checked:
-                !_statusAll && _statuses.contains(_TripHistoryStatus.upcoming),
-            enabled: _statusCount(_TripHistoryStatus.upcoming) > 0,
-            onTap: () => setState(() {
-              _statusAll = false;
-              if (_statuses.contains(_TripHistoryStatus.upcoming)) {
-                _statuses.remove(_TripHistoryStatus.upcoming);
-                if (_statuses.isEmpty) _statusAll = true;
-              } else {
-                _statuses.add(_TripHistoryStatus.upcoming);
-              }
-            }),
-          ),
+          // 'In Progress' and 'Upcoming' filters are intentionally hidden —
+          // those trips are excluded from the trip history list (see
+          // _filteredItems).
           _checkRow(
             label: 'No Show',
             count: _statusCount(_TripHistoryStatus.noShow),
@@ -6802,14 +7071,17 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
               ),
               child: Padding(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
                 child: Row(
                   children: [
                     Expanded(
                       child: Text(
                         _formatMonthYear(date),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
                         style: TextStyle(
-                          fontSize: 15,
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
                           color: hasDate
                               ? const Color(0xFF1A1A1A)
@@ -6817,9 +7089,10 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 6),
                     Icon(
                       Icons.calendar_today_outlined,
-                      size: 20,
+                      size: 18,
                       color: hasDate ? _primaryGreen : const Color(0xFF9CA3AF),
                     ),
                   ],
@@ -7148,7 +7421,7 @@ class _SosHoldButtonState extends State<_SosHoldButton>
 
   void _onProgress() {
     // Vibrate on every 10% increment while holding
-    final step = (_controller.value * 1).floor();
+    final step = (_controller.value * 10).floor();
     if (step > _lastVibrationStep) {
       _lastVibrationStep = step;
       HapticFeedback.lightImpact();
@@ -7177,13 +7450,15 @@ class _SosHoldButtonState extends State<_SosHoldButton>
   Widget build(BuildContext context) {
     const size = 67.0;
     const strokeWidth = 4.0;
+    // Ring sits just outside the image so the border wraps around it.
+    const ringSize = size + strokeWidth * 2;
     return GestureDetector(
       onLongPressStart: (_) => _start(),
       onLongPressEnd: (_) => _cancel(),
       onLongPressCancel: _cancel,
       child: SizedBox(
-        width: size,
-        height: size,
+        width: ringSize,
+        height: ringSize,
         child: Stack(
           alignment: Alignment.center,
           children: [
@@ -7193,25 +7468,25 @@ class _SosHoldButtonState extends State<_SosHoldButton>
               height: size,
               fit: BoxFit.cover,
             ),
-            // AnimatedBuilder(
-            //   animation: _controller,
-            //   builder: (_, __) {
-            //     if (_controller.value == 0) return const SizedBox.shrink();
-            //     return SizedBox(
-            //       width: size,
-            //       height: size,
-            //       child: CircularProgressIndicator(
-            //         value: _controller.value,
-            //         strokeWidth: strokeWidth,
-            //         strokeCap: StrokeCap.round,
-            //         backgroundColor: Colors.white.withValues(alpha: 0.3),
-            //         valueColor: const AlwaysStoppedAnimation<Color>(
-            //           Color(0xFFB40D1A),
-            //         ),
-            //       ),
-            //     );
-            //   },
-            // ),
+            AnimatedBuilder(
+              animation: _controller,
+              builder: (_, __) {
+                if (_controller.value == 0) return const SizedBox.shrink();
+                return SizedBox(
+                  width: ringSize,
+                  height: ringSize,
+                  child: CircularProgressIndicator(
+                    value: _controller.value,
+                    strokeWidth: strokeWidth,
+                    strokeCap: StrokeCap.round,
+                    backgroundColor: Colors.white.withValues(alpha: 0.3),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFFB40D1A),
+                    ),
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),

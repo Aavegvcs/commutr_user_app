@@ -521,11 +521,13 @@ class TripPassenger {
   /// Convenience inverse of [isBoarded] — still waiting for pickup.
   bool get isNotBoarded => !isBoarded;
 
-  /// True (logout/drop trips) once the passenger has been dropped home — i.e.
-  /// the cab reached their drop point (`reachedHomeTime`/`cabReachedTime` set).
+  /// True (logout/drop trips) once the passenger has actually been dropped
+  /// home — i.e. `reachedHomeTime` is set. `cabReachedTime` only means the cab
+  /// ARRIVED at the drop point; the passenger is still En-Route until they
+  /// de-board, so it must NOT count as dropped (otherwise the stop would vanish
+  /// from the route/markers the moment the cab pulled up).
   bool get isDropped =>
-      (reachedHomeTime != null && reachedHomeTime!.trim().isNotEmpty) ||
-      (cabReachedTime != null && cabReachedTime!.trim().isNotEmpty);
+      reachedHomeTime != null && reachedHomeTime!.trim().isNotEmpty;
 
   /// True when the driver marked this passenger as a no-show (skipped pickup).
   bool get isNoShow => noShow;

@@ -5,11 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/network/api_constants.dart';
+
 /// Chat server base (scheme + host + port, no trailing slash).
-const String kEtsChatBaseUrl = 'http://13.205.219.46:5050';
+const String kEtsChatBaseUrl = ApiConstants.etsChatBaseUrl;
 
 /// Parent origin for embed / postMessage (matches `parent_origin` query param).
-const String kEtsChatParentOrigin = 'http://13.205.219.46';
+const String kEtsChatParentOrigin = ApiConstants.etsChatHost;
 
 const String kEtsChatHiveBoxName = 'ets_chat';
 

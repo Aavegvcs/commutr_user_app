@@ -627,7 +627,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
         final isLoading =
             state is WeeklyOffLoading || state is WeeklyOffInitial;
         return GestureDetector(
-          onTap: isLoading ? null : _showEditWeeklyOffsSheet,
+          onTap: isLoading ? null : null,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(

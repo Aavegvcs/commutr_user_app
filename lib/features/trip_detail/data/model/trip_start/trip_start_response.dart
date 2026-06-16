@@ -93,6 +93,7 @@ class TripData {
   final int?    reachedHomeReq;
   final int?    isReached;
   final String? userAppIVRNumber;
+  final String? cancelorNoshow;
 
   const TripData({
     this.tripID,
@@ -118,6 +119,7 @@ class TripData {
     this.reachedHomeReq,
     this.isReached,
     this.userAppIVRNumber,
+    this.cancelorNoshow,
   });
 
   factory TripData.fromJson(Map<String, dynamic> json) {
@@ -145,6 +147,7 @@ class TripData {
       reachedHomeReq:  json['ReachedHomeReq']  as int?,
       isReached:       json['IsReached']       as int?,
       userAppIVRNumber:json['UserAppIVRNumber'] as String?,
+      cancelorNoshow:  json['CancelorNoshow']   as String?,
     );
   }
 
@@ -173,6 +176,7 @@ class TripData {
       if (reachedHomeReq != null)   'ReachedHomeReq':  reachedHomeReq,
       if (isReached != null)        'IsReached':       isReached,
       if (userAppIVRNumber != null) 'UserAppIVRNumber': userAppIVRNumber,
+      if (cancelorNoshow != null)   'CancelorNoshow':   cancelorNoshow,
     };
   }
 

@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/network/api_constants.dart';
 import '../../../core/storage/auth_local_storage.dart';
 import '../model/address_change_response.dart';
 import '../model/user_profile_response.dart';
@@ -17,7 +18,7 @@ class ProfileRepository {
 
   /// Core service — `GET /State`; resolves `stateCode` from a state name.
   /// Mirrors the signup flow (absolute URL overrides any Dio `baseUrl`).
-  static const String _statePath = 'https://dev-core.commutr.in/api/v1/State';
+  static const String _statePath = '${ApiConstants.appBaseUrl}/State';
 
   final ApiClient _apiClient;
   final AuthLocalStorage _authStorage;

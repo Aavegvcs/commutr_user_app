@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:337332431930:android:a44c1450389354a43c9903",
+        "mobilesdk_app_id": "1:337332431930:android:cca7a9c4cbc20e173c9903",
         "android_client_info": {
-          "package_name": "com.user.commutr"
+          "package_name": "com.user.asnd.commutr"
         }
       },
       "oauth_client": [],
@@ -26,9 +26,9 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:337332431930:android:fef41090608d6dfc3c9903",
+        "mobilesdk_app_id": "1:337332431930:android:a44c1450389354a43c9903",
         "android_client_info": {
-          "package_name": "com.user.commutr_main"
+          "package_name": "com.user.commutr"
         }
       },
       "oauth_client": [],
