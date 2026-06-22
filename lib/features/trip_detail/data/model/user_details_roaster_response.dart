@@ -43,6 +43,10 @@ class RosterUserDetails {
   final String helpDeskContactNumber;
   final String driverIvrNumber;
   final String sosContactNumber;
+  final int noShowCount;
+  final bool isRosterEligible;
+  final String suspensionEndDate;
+  final bool noShowCountIsActive;
 
   const RosterUserDetails({
     required this.locations,
@@ -54,6 +58,10 @@ class RosterUserDetails {
     required this.helpDeskContactNumber,
     required this.driverIvrNumber,
     required this.sosContactNumber,
+    required this.noShowCount,
+    required this.isRosterEligible,
+    required this.suspensionEndDate,
+    required this.noShowCountIsActive,
   });
 
   factory RosterUserDetails.fromJson(Map<String, dynamic> json) {
@@ -76,6 +84,10 @@ class RosterUserDetails {
       helpDeskContactNumber: json['HelpDeskContactNumber']?.toString() ?? '',
       driverIvrNumber: json['DriverIVRNumber']?.toString() ?? '',
       sosContactNumber: json['SOSContactNumber']?.toString() ?? '',
+      noShowCount: (json['NoShowCount'] as num?)?.toInt() ?? 0,
+      isRosterEligible: json['IsRosterEligible'] as bool? ?? false,
+      suspensionEndDate: json['SuspensionEndDate']?.toString() ?? '',
+      noShowCountIsActive: json['NoShowCountIsActive'] as bool? ?? false,
     );
   }
 }

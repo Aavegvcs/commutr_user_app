@@ -19,9 +19,13 @@ import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
+import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_event.dart';
+import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_state.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
+import 'package:commutr_main/features/trip_detail/data/model/user_details_roaster_response.dart';
 import 'package:commutr_main/features/trip_detail/bloc/trip_history_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/trip_history_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/trip_history_state.dart';
@@ -142,6 +146,9 @@ class Welcome extends StatelessWidget {
         BlocProvider<RosterBloc>(
           create: (_) => sl<RosterBloc>()..add(const FetchRosterUserDetails()),
         ),
+        BlocProvider<AppControlBloc>(
+          create: (_) => sl<AppControlBloc>(),
+        ),
         BlocProvider<TripHistoryBloc>(
           create: (_) => sl<TripHistoryBloc>(),
         ),
@@ -206,7 +213,17 @@ class _WelcomeState extends State<_WelcomeView> {
     final rosterState = context.read<RosterBloc>().state;
     if (rosterState is RosterLoaded) {
       _maybeDispatchTripHistoryFetch(rosterState.details.empId);
+      _maybeFetchAppControlSettings(rosterState.details.locCode);
     }
+  }
+
+  /// Fetches per-location app-control settings (which home-screen features are
+  /// enabled) whenever the roster — and therefore [locCode] — is available.
+  /// Called on every screen load (and on each roster refresh) so the settings
+  /// are always re-fetched fresh; no locCode de-dupe.
+  void _maybeFetchAppControlSettings(int locCode) {
+    if (locCode == 0) return;
+    context.read<AppControlBloc>().add(FetchAppControlSettings(locCode));
   }
 
   void _maybeDispatchTripHistoryFetch(int empId) {
@@ -547,8 +564,8 @@ class _WelcomeState extends State<_WelcomeView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(ErrorMessage.from(e,
-                  fallback: 'Failed to open contacts.')),
+              content: Text(
+                  ErrorMessage.from(e, fallback: 'Failed to open contacts.')),
             ),
           );
         }
@@ -1081,19 +1098,74 @@ class _WelcomeState extends State<_WelcomeView> {
   }) async {
     if (!context.mounted) return;
 
-    // Step 1: Show "Reached Home Safely?" confirmation dialog
+    // Step 1: Show "Reached Home Safely?" confirmation dialog.
+    //
+    // Tapping "Need Help" fires an SOS. A BlocListener wrapped around the
+    // confirmation dialog watches the SosBloc and shows a success/error result
+    // popup once the SOS API responds (errorCode == 0 → success, else error).
     final sosBloc = context.read<SosBloc>();
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.5),
-      builder: (_) => _ReachedHomeSafelyDialog(
-        onNeedHelp: () => sosBloc.add(TriggerSos(empId: empId)),
+      builder: (dialogContext) => BlocProvider.value(
+        value: sosBloc,
+        child: BlocListener<SosBloc, SosState>(
+          listener: (_, state) {
+            if (state is SosLoading) return;
+            if (state is SosSuccess ||
+                state is SosError ||
+                state is SosUnauthorized) {
+              // Close the confirmation dialog before showing the result.
+              if (Navigator.of(dialogContext).canPop()) {
+                Navigator.of(dialogContext).pop(false);
+              }
+              final isSuccess = state is SosSuccess;
+              final msg = state is SosSuccess
+                  ? 'SOS alert triggered successfully. Our safety team has '
+                      'been notified and will reach out to you shortly.'
+                  : state is SosError
+                      ? state.message
+                      : (state as SosUnauthorized).message;
+              if (!context.mounted) return;
+              showDialog<void>(
+                context: context,
+                barrierDismissible: true,
+                barrierColor: Colors.black.withValues(alpha: 0.5),
+                builder: (_) => _SosResultDialog(
+                  message: msg,
+                  success: isSuccess,
+                ),
+              );
+            }
+          },
+          child: _ReachedHomeSafelyDialog(
+            onNeedHelp: () => sosBloc.add(TriggerSos(empId: empId)),
+          ),
+        ),
       ),
     );
 
     // "Need Help" or dismissed — don't proceed
     if (confirmed != true || !context.mounted) return;
+
+    // Show a blocking loader while we resolve location and call the
+    // ReachedHome API. It is dismissed inside showResultDialog (every result
+    // path routes through there) just before the success/error popup appears.
+    var loaderShown = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    void dismissLoader() {
+      if (loaderShown && context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loaderShown = false;
+      }
+    }
 
     // Step 2: Get current location
     double lat = 0;
@@ -1127,6 +1199,17 @@ class _WelcomeState extends State<_WelcomeView> {
     }
 
     // Step 3: Call ReachedHome API
+    Future<void> showResultDialog(String msg, {required bool success}) async {
+      dismissLoader();
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierColor: Colors.black.withValues(alpha: 0.5),
+        builder: (_) => _ReachedHomeResultDialog(message: msg, success: success),
+      );
+    }
+
     try {
       final repo = sl<RoasterShiftRepo>();
       final response = await repo.reachedHome(
@@ -1135,27 +1218,33 @@ class _WelcomeState extends State<_WelcomeView> {
         empLat: lat,
         empLng: lng,
       );
-      if (!response.isSuccess) {
-        debugPrint('[REACHED_HOME] API not success: ${response.message}');
-        if (context.mounted) {
-          final msg = response.message.trim().isNotEmpty
+      if (response.isSuccess) {
+        await showResultDialog(
+          response.message.trim().isNotEmpty
               ? response.message
-              : 'Could not mark reached home. Please try again.';
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(msg)),
-          );
+              : 'Marked reached home successfully.',
+          success: true,
+        );
+        // Refresh so the Safe Home Reach button hides (IsReached becomes 1).
+        if (context.mounted) {
+          context.read<TripHomeBloc>().add(const FetchTripHome());
         }
+      } else {
+        debugPrint('[REACHED_HOME] API not success: ${response.message}');
+        await showResultDialog(
+          response.message.trim().isNotEmpty
+              ? response.message
+              : 'Could not mark reached home. Please try again.',
+          success: false,
+        );
       }
     } catch (e) {
       debugPrint('[REACHED_HOME] API error: $e');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(ErrorMessage.from(e,
-                fallback: 'Could not mark reached home. Please try again.')),
-          ),
-        );
-      }
+      await showResultDialog(
+        ErrorMessage.from(e,
+            fallback: 'Could not mark reached home. Please try again.'),
+        success: false,
+      );
     }
 
     // Step 4: Show Rate App dialog (best-effort — open regardless of API result)
@@ -1167,6 +1256,35 @@ class _WelcomeState extends State<_WelcomeView> {
         builder: (_) => _RateAppDialog(empId: empId, tripId: tripId),
       );
     }
+  }
+
+  /// Tapping the "Safe Home Reach" CTA on the active trip card opens the
+  /// Reached-Home-Safely confirmation dialog and runs the reached-home flow.
+  void _onSafeHomeReachTap(TripHomeItem item) {
+    void showBar(String msg) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(msg)));
+    }
+
+    final empId = item.empId;
+    final tripId = item.tripId;
+
+    if (empId == null || empId == 0) {
+      showBar('Employee ID is missing. Pull to refresh.');
+      return;
+    }
+    if (tripId == null || tripId == 0) {
+      showBar('Trip ID is missing. Pull to refresh.');
+      return;
+    }
+
+    _callReachedHomeAndShowRateDialog(
+      context,
+      empId: empId,
+      tripId: tripId,
+      showBar: showBar,
+    );
   }
 
   Widget _buildTripCircleAction({
@@ -1205,6 +1323,11 @@ class _WelcomeState extends State<_WelcomeView> {
     //   isBoarded == false                  -> show Board
     //   isBoarded == true && !isDeBoarded    -> show Deboard
     final bool showDeboard = item.isBoardedNotDeboarded;
+    // The Board/Deboard CTA is additionally gated by the per-location
+    // AppControl setting (boardDebaordEnabledForUser).
+    final appControlState = context.read<AppControlBloc>().state;
+    final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
+        appControlState.settings.boardDebaordEnabledForUser;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1261,7 +1384,8 @@ class _WelcomeState extends State<_WelcomeView> {
             ),
           ],
         ),
-        if (item.canShowBoardButton || showDeboard) ...[
+        if (boardDeboardEnabled &&
+            (item.canShowBoardButton || showDeboard)) ...[
           const SizedBox(height: 10),
           GestureDetector(
             onTap: showDeboard
@@ -1329,6 +1453,7 @@ class _WelcomeState extends State<_WelcomeView> {
         listener: (context, state) {
           if (state is RosterLoaded) {
             _ensureTripHistoryFetched();
+            _maybeFetchAppControlSettings(state.details.locCode);
           }
         },
         child: Stack(
@@ -1336,6 +1461,14 @@ class _WelcomeState extends State<_WelcomeView> {
             Column(
               children: [
                 _buildHeader(),
+                BlocBuilder<RosterBloc, RosterState>(
+                  builder: (context, state) {
+                    if (state is RosterLoaded) {
+                      return _buildNoShowBanner(state.details);
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
                 Expanded(child: _buildMainContent()),
               ],
             ),
@@ -1407,6 +1540,112 @@ class _WelcomeState extends State<_WelcomeView> {
         ),
       ),
     );
+  }
+
+  /// No-show status banner shown below the welcome header.
+  ///
+  /// Visibility rule: only rendered when [RosterUserDetails.noShowCountIsActive]
+  /// is true. When the user is suspended (not roster-eligible with a suspension
+  /// end date) it uses error styling; otherwise informational styling.
+  Widget _buildNoShowBanner(RosterUserDetails details) {
+    if (!details.noShowCountIsActive) {
+      return const SizedBox.shrink();
+    }
+
+    final suspensionDate = _formatSuspensionDate(details.suspensionEndDate);
+    final isSuspended = !details.isRosterEligible && suspensionDate != null;
+
+    final Color bgColor;
+    final Color borderColor;
+    final Color accentColor;
+    final IconData icon;
+    final String title;
+
+    if (isSuspended) {
+      bgColor = const Color(0xFFFDECEA);
+      borderColor = const Color(0xFFF5C2C0);
+      accentColor = const Color(0xFFD32F2F);
+      icon = Icons.block;
+      title = 'Roster Access Restricted';
+    } else {
+      bgColor = const Color(0xFFFFF8E1);
+      borderColor = const Color(0xFFFFE082);
+      accentColor = const Color(0xFFF57F17);
+      icon = Icons.info_outline;
+      title = 'No-Show Status';
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: accentColor, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: accentColor,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                if (isSuspended) ...[
+                  const Text(
+                    'Your roster booking access is currently restricted '
+                    'due to no-show policy violations.',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF444444)),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Access will be restored on:\n$suspensionDate',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF222222),
+                    ),
+                  ),
+                ] else
+                  Text(
+                    'You currently have ${details.noShowCount} '
+                    'no-show(s) recorded.',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF444444),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Formats an ISO suspension date string (e.g. `2026-07-04T00:18:33.813`)
+  /// into a readable `04 Jul 2026`. Returns null when missing/unparseable.
+  static String? _formatSuspensionDate(String raw) {
+    if (raw.trim().isEmpty) return null;
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return null;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final day = dt.day.toString().padLeft(2, '0');
+    return '$day ${months[dt.month - 1]} ${dt.year}';
   }
 
   Widget _buildMainContent() {
@@ -2307,7 +2546,7 @@ class _WelcomeState extends State<_WelcomeView> {
                                 ? (state.profile.firstName?.trim() ?? '')
                                 : '';
                             return Text(
-                              firstName.isNotEmpty ? 'Mr. $firstName' : '',
+                              firstName.isNotEmpty ? '$firstName' : '',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -2384,42 +2623,50 @@ class _WelcomeState extends State<_WelcomeView> {
   }
 
   Widget _buildSchedulesSection() {
-    return BlocBuilder<TripHomeBloc, TripHomeState>(
-      builder: (context, tripState) {
-        return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
-          builder: (context, scheduleState) {
-            return RefreshIndicator(
-              onRefresh: () async {
-                context.read<TripHomeBloc>().add(const FetchTripHome());
-                context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
-              },
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.only(bottom: 200),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Center(
-                        child: Text(
-                          'Schedules',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF222222),
+    // Rebuild when AppControl settings arrive so the Board/Deboard CTA
+    // (gated by boardDebaordEnabledForUser) appears/hides correctly.
+    return BlocBuilder<AppControlBloc, AppControlState>(
+      builder: (context, _) {
+        return BlocBuilder<TripHomeBloc, TripHomeState>(
+          builder: (context, tripState) {
+            return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
+              builder: (context, scheduleState) {
+                return RefreshIndicator(
+                  onRefresh: () async {
+                    context.read<TripHomeBloc>().add(const FetchTripHome());
+                    context
+                        .read<ScheduleHomeBloc>()
+                        .add(const FetchScheduleHome());
+                  },
+                  child: SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 200),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Center(
+                            child: Text(
+                              'Schedules',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF222222),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                        _buildHomeTripAndScheduleBody(
+                          context,
+                          tripState,
+                          scheduleState,
+                        ),
+                      ],
                     ),
-                    _buildHomeTripAndScheduleBody(
-                      context,
-                      tripState,
-                      scheduleState,
-                    ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             );
           },
         );
@@ -2664,11 +2911,9 @@ class _WelcomeState extends State<_WelcomeView> {
     final accent = const Color(0xFF1A6B3C);
     final IconData icon =
         isError ? Icons.cloud_off_rounded : Icons.event_busy_rounded;
-    final Color iconBg = isError
-        ? const Color(0xFFFDECEC)
-        : const Color(0xFFEAF4EE);
-    final Color iconColor =
-        isError ? const Color(0xFFD64545) : accent;
+    final Color iconBg =
+        isError ? const Color(0xFFFDECEC) : const Color(0xFFEAF4EE);
+    final Color iconColor = isError ? const Color(0xFFD64545) : accent;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -3653,6 +3898,21 @@ class _WelcomeState extends State<_WelcomeView> {
     final bool isPrinted =
         (item.tripStatusName ?? '').trim().toLowerCase() == 'printed';
 
+    // ─── Safe Home Reach button ──────────────────────────────────────────
+    // Shown only when the backend requests it (ReachedHomeReq == 1) and the
+    // user has not already reached home (IsReached != 1):
+    //   - boardDebaordEnabledForUser == false -> show as soon as requested.
+    //   - boardDebaordEnabledForUser == true  -> show only after the user has
+    //     both boarded and deboarded.
+    final appControlState = context.read<AppControlBloc>().state;
+    final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
+        appControlState.settings.boardDebaordEnabledForUser;
+    final bool showSafeHomeReachButton = item.reachedHomeReq == 1 &&
+        item.isReached != 1 &&
+        (boardDeboardEnabled
+            ? (item.isBoarded && item.isDeBoarded)
+            : true);
+
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
     final Color trackBg = isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
     final Color trackFg = isScheduled ? const Color(0xFFB0B0B0) : accentColor;
@@ -4195,6 +4455,34 @@ class _WelcomeState extends State<_WelcomeView> {
               if (!isCancelledOrNoShow) const SizedBox(height: 14),
               if (isCancelledOrNoShow)
                 const SizedBox.shrink()
+              else if (showSafeHomeReachButton)
+                GestureDetector(
+                  onTap: () => _onSafeHomeReachTap(item),
+                  child: Container(
+                    height: 48,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A5C38),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.home_outlined,
+                            size: 18, color: Colors.white),
+                        SizedBox(width: 8),
+                        Text(
+                          'Safe Home Reach',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
               else if (isCompleted)
                 const SizedBox.shrink()
               else if (isPrinted)
@@ -4895,7 +5183,8 @@ class _BoardTripDialogViewState extends State<_BoardTripDialogView> {
   }
 
   String _friendlyMessage(String raw) {
-    return ErrorMessage.from(raw, fallback: 'Something went wrong. Please try again.');
+    return ErrorMessage.from(raw,
+        fallback: 'Something went wrong. Please try again.');
   }
 
   @override
@@ -5145,7 +5434,8 @@ class _CancelActiveTripDialogView extends StatelessWidget {
   }
 
   String _friendlyMessage(String raw) {
-    return ErrorMessage.from(raw, fallback: 'Something went wrong. Please try again.');
+    return ErrorMessage.from(raw,
+        fallback: 'Something went wrong. Please try again.');
   }
 
   @override
@@ -5220,14 +5510,14 @@ class _CancelActiveTripDialogView extends StatelessWidget {
                         : 'Cancel this Logout trip?',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
                       color: Color(0xff181C1B),
                     ),
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'Are you sure you want to cancel your trip? You might be charged a cancellation fee.',
+                    'You are about to cancel this ride. Do you want to continue?',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 16,
@@ -5443,30 +5733,26 @@ class _CancelRideDialogView extends StatelessWidget {
 
                   // Title
                   Text(
-                    isLogin
-                        ? 'Cancel this Login ride?'
-                        : 'Cancel this Logout ride?',
+                    'Cancel trip?',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
                       color: Color(0xff181C1B),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  // Subtitle
-                  const Text(
-                    'Are you sure you want to cancel your trip? You might be charged a cancellation fee.',
+                  Text(
+                    'Are you sure you want to cancel this ${isLogin ? "Login" : "Logout"} trip?',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 16,
                       color: Color(0xFF888888),
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                   const SizedBox(height: 32),
-
                   // Buttons row
                   Row(
                     children: [
@@ -5513,7 +5799,7 @@ class _CancelRideDialogView extends StatelessWidget {
                                   ),
                                 )
                               : const Text(
-                                  'Cancel Ride',
+                                  'Cancel Trip',
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,
@@ -5539,7 +5825,7 @@ class _CancelRideDialogView extends StatelessWidget {
                               ? null
                               : () => Navigator.of(context).pop(false),
                           child: const Text(
-                            'Keep Ride',
+                            'Go Back',
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
@@ -5784,20 +6070,29 @@ class AppDrawer extends StatelessWidget {
               //     );
               //   },
               // ),
-              _DrawerItem(
-                icon: Icons.people_outline,
-                label: 'ADHOC Request',
-                onTap: () {
-                  final rosterState = context.read<RosterBloc>().state;
-                  final empId = rosterState is RosterLoaded
-                      ? rosterState.details.empId
-                      : 0;
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => AdhocRequestScreen(empId: empId),
-                    ),
+              // ADHOC Request is shown only when enabled for the user's
+              // location (AppControl settings).
+              BlocBuilder<AppControlBloc, AppControlState>(
+                builder: (context, state) {
+                  final bool adhocEnabled = state is AppControlLoaded &&
+                      state.settings.adhocRequestEnabledForUser;
+                  if (!adhocEnabled) return const SizedBox.shrink();
+                  return _DrawerItem(
+                    icon: Icons.people_outline,
+                    label: 'ADHOC Request',
+                    onTap: () {
+                      final rosterState = context.read<RosterBloc>().state;
+                      final empId = rosterState is RosterLoaded
+                          ? rosterState.details.empId
+                          : 0;
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => AdhocRequestScreen(empId: empId),
+                        ),
+                      );
+                    },
                   );
                 },
               ),
@@ -6274,56 +6569,77 @@ class _ReachedHomeSafelyDialog extends StatelessWidget {
               style: TextStyle(fontSize: 14, color: Color(0xFF888888)),
             ),
             const SizedBox(height: 28),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).pop(false);
-                      onNeedHelp();
-                    },
-                    icon: const Icon(Icons.warning_amber_rounded,
-                        size: 18, color: Color(0xFFBA1A1A)),
-                    label: const Text(
-                      'Need Help',
-                      style: TextStyle(
-                        color: Color(0xFFBA1A1A),
-                        fontWeight: FontWeight.w600,
+            // While the SOS request is in flight, disable both buttons and show
+            // a spinner on "Need Help" so the user gets feedback and can't fire
+            // a duplicate SOS.
+            BlocBuilder<SosBloc, SosState>(
+              builder: (context, sosState) {
+                final isSosLoading = sosState is SosLoading;
+                return Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        // Fire SOS but DON'T pop here — the BlocListener
+                        // wrapping this dialog closes it and shows the result
+                        // popup once the SOS API responds. Popping now would
+                        // tear down that listener before the result arrives.
+                        onPressed: isSosLoading ? null : onNeedHelp,
+                        icon: isSosLoading
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Color(0xFFBA1A1A)),
+                                ),
+                              )
+                            : const Icon(Icons.warning_amber_rounded,
+                                size: 18, color: Color(0xFFBA1A1A)),
+                        label: const Text(
+                          'Need Help',
+                          style: TextStyle(
+                            color: Color(0xFFBA1A1A),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          side: const BorderSide(
+                              color: Color(0xFFBA1A1A), width: 1.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
                       ),
                     ),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      side: const BorderSide(
-                          color: Color(0xFFBA1A1A), width: 1.5),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(999),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: isSosLoading
+                            ? null
+                            : () => Navigator.of(context).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1A5C38),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: const Text(
+                          'Yes',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.of(context).pop(true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1A5C38),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      'Yes',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+                  ],
+                );
+              },
             ),
           ],
         ),
@@ -6399,12 +6715,13 @@ class _RateAppDialogState extends State<_RateAppDialog> {
     return Dialog(
       backgroundColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             const Text(
               'How was your ride?',
               textAlign: TextAlign.center,
@@ -6518,6 +6835,7 @@ class _RateAppDialogState extends State<_RateAppDialog> {
               ),
             ),
           ],
+          ),
         ),
       ),
     );
@@ -6576,6 +6894,185 @@ class _FeedbackSuccessDialog extends StatelessWidget {
                 ),
                 child: const Text(
                   'Go Back',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Success / error result dialog for the "Reached Home" API call.
+class _ReachedHomeResultDialog extends StatelessWidget {
+  const _ReachedHomeResultDialog({
+    required this.message,
+    required this.success,
+  });
+
+  final String message;
+  final bool success;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color accent =
+        success ? const Color(0xFF1A5C38) : const Color(0xFFB40D1A);
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 80),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: accent,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                success ? Icons.check : Icons.close,
+                color: Colors.white,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              success ? 'Reached Home' : 'Something Went Wrong',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF181C1B),
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF5C5F5E),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                ),
+                child: const Text(
+                  'OK',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Result popup shown after an SOS trigger completes.
+///
+/// [success] is true when the API responds with `errorCode == 0`; otherwise the
+/// error message from the API response is shown.
+class _SosResultDialog extends StatelessWidget {
+  const _SosResultDialog({
+    required this.message,
+    required this.success,
+  });
+
+  final String message;
+  final bool success;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color accent =
+        success ? const Color(0xFF1A5C38) : const Color(0xFFB40D1A);
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 80),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: accent,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                success ? Icons.check : Icons.close,
+                color: Colors.white,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              success ? 'SOS Triggered' : 'SOS Failed',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF181C1B),
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF5C5F5E),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                ),
+                child: const Text(
+                  'OK',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,

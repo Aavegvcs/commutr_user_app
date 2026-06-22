@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/network/api_constants.dart';
 import '../../../core/storage/auth_local_storage.dart';
+import '../../trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
 import '../../trip_detail/data/model/user_details_roaster_response.dart';
 import '../bloc/chat_bloc.dart';
 import '../bloc/chat_event.dart';
@@ -24,6 +25,7 @@ class TripGroupChatScreen extends StatelessWidget {
   final String participants;
   final String myName;
   final List<DrModel> drList;
+  final List<TripPassenger> passengers;
 
   const TripGroupChatScreen({
     super.key,
@@ -34,6 +36,7 @@ class TripGroupChatScreen extends StatelessWidget {
     required this.participants,
     this.myName = 'You',
     this.drList = const [],
+    this.passengers = const [],
   });
 
   @override
@@ -76,6 +79,7 @@ class TripGroupChatScreen extends StatelessWidget {
         participants: participants,
         myName: myName,
         drList: drList,
+        passengers: passengers,
         signalR: signalR,
       ),
     );
@@ -90,6 +94,7 @@ class _ChatView extends StatefulWidget {
   final String participants;
   final String myName;
   final List<DrModel> drList;
+  final List<TripPassenger> passengers;
   final ChatSignalRService signalR;
 
   const _ChatView({
@@ -100,6 +105,7 @@ class _ChatView extends StatefulWidget {
     required this.participants,
     required this.myName,
     required this.drList,
+    required this.passengers,
     required this.signalR,
   });
 
@@ -158,6 +164,15 @@ class _ChatViewState extends State<_ChatView> {
   String _senderDisplayName(ChatMessage msg, bool isMine) {
     if (isMine) {
       return 'You';
+    }
+
+    // Match the message sender (empId) against the trip's passengers; the
+    // ViewChatMessage API returns only empId, so the name comes from here.
+    final passenger = widget.passengers
+        .where((p) => p.empId != null && p.empId == msg.senderEmpId)
+        .firstOrNull;
+    if (passenger != null && passenger.fullName.trim().isNotEmpty) {
+      return passenger.fullName.trim();
     }
 
     final driver = widget.drList

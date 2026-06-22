@@ -406,8 +406,7 @@ class _AdhocRequestViewState extends State<_AdhocRequestView> {
           ),
         ),
         content: Text(
-          'Are you sure you want to cancel the ${item.isLogin ? "Login" : "Logout"} request for ${item.requestDate}?',
-          style: const TextStyle(
+          'Are you sure you want to cancel your ${item.isLogin ? "Login" : "Logout"} request for ${item.requestDate}?',          style: const TextStyle(
             fontSize: 13,
             color: Color(0xFF596064),
             fontFamily: 'Manrope',

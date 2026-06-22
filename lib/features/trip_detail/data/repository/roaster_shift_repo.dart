@@ -10,17 +10,25 @@ class ReachedHomeResponse {
 
   const ReachedHomeResponse({required this.isSuccess, required this.message});
 
+  /// Parses the inner result object, e.g.:
+  ///   { "errorCode": 0, "dB_Response": "Reached home updated successfully." }
+  ///
+  /// Success is driven solely by `errorCode == 0`. The user-facing message comes
+  /// from `dB_Response` (falling back to a top-level `message` if present).
   factory ReachedHomeResponse.fromJson(Map<String, dynamic> json) {
     final errorCode = json['ErrorCode'] ?? json['errorCode'] ?? 0;
-    final dbResponse =
-        (json['DBResponse'] ?? json['dbResponse'] ?? '').toString().trim();
+    final dbResponse = (json['dB_Response'] ??
+            json['DBResponse'] ??
+            json['dbResponse'] ??
+            '')
+        .toString()
+        .trim();
     final msg =
         (json['Message'] ?? json['message'] ?? '').toString().trim();
-    final success =
-        (errorCode == 0 || errorCode == '0') && dbResponse == '1';
+    final success = errorCode == 0 || errorCode == '0';
     return ReachedHomeResponse(
       isSuccess: success,
-      message: msg.isNotEmpty ? msg : dbResponse,
+      message: dbResponse.isNotEmpty ? dbResponse : msg,
     );
   }
 }
@@ -53,10 +61,19 @@ class RoasterShiftRepo {
       );
       final raw = response.data;
       Map<String, dynamic>? payload;
-      if (raw is Map<String, dynamic>) {
-        payload = raw;
-      } else if (raw is Map) {
-        payload = Map<String, dynamic>.from(raw);
+      if (raw is Map) {
+        // The API wraps the data in a `result` array:
+        //   { "result": [ { "errorCode": 0, "dB_Response": "..." } ], ... }
+        // Prefer the first result entry; fall back to the top-level map for
+        // older/flat response shapes.
+        final result = raw['result'] ?? raw['Result'];
+        if (result is List && result.isNotEmpty && result.first is Map) {
+          payload = Map<String, dynamic>.from(result.first as Map);
+        } else if (result is Map) {
+          payload = Map<String, dynamic>.from(result);
+        } else {
+          payload = Map<String, dynamic>.from(raw);
+        }
       } else if (raw is List && raw.isNotEmpty && raw.first is Map) {
         payload = Map<String, dynamic>.from(raw.first as Map);
       }

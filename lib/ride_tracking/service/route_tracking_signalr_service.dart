@@ -13,6 +13,35 @@ double? _readDouble(Object? v) {
   return double.tryParse(v.toString());
 }
 
+/// Coerces a nested JSON value into a `Map<String, dynamic>`. The backend may
+/// deliver nested objects either as a real map or as a JSON-encoded string;
+/// returns null when the value is missing or can't be decoded into a map.
+Map<String, dynamic>? _readMap(Object? v) {
+  if (v == null) return null;
+  if (v is Map) return Map<String, dynamic>.from(v);
+  if (v is String && v.trim().isNotEmpty) {
+    try {
+      final decoded = jsonDecode(v);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+  }
+  return null;
+}
+
+/// Coerces a nested JSON value into a `List`. Handles a real list or a
+/// JSON-encoded string; returns an empty list when missing or undecodable.
+List<dynamic> _readList(Object? v) {
+  if (v == null) return const [];
+  if (v is List) return v;
+  if (v is String && v.trim().isNotEmpty) {
+    try {
+      final decoded = jsonDecode(v);
+      if (decoded is List) return decoded;
+    } catch (_) {}
+  }
+  return const [];
+}
+
 /// Payload delivered by the backend `ReceiveRouteLocation` event.
 class RouteLocationPayload {
   final int? dsId;
@@ -25,6 +54,7 @@ class RouteLocationPayload {
   final String? source;
   final bool? panic;
   final int? logId;
+  final Miscellaneous? miscellaneous;
   final List<RouteTripPassenger> passengers;
 
   const RouteLocationPayload({
@@ -38,6 +68,7 @@ class RouteLocationPayload {
     this.source,
     this.panic,
     this.logId,
+    this.miscellaneous,
     this.passengers = const [],
   });
 
@@ -53,9 +84,14 @@ class RouteLocationPayload {
       source: json['source']?.toString(),
       panic: json['panic'] as bool?,
       logId: (json['logId'] as num?)?.toInt(),
-      passengers: (json['passengers'] as List<dynamic>? ?? const [])
-          .whereType<Map>()
-          .map((e) => RouteTripPassenger.fromJson(Map<String, dynamic>.from(e)))
+      miscellaneous: () {
+        final m = _readMap(json['miscellaneous']);
+        return m != null ? Miscellaneous.fromJson(m) : null;
+      }(),
+      passengers: _readList(json['passengers'])
+          .map(_readMap)
+          .whereType<Map<String, dynamic>>()
+          .map(RouteTripPassenger.fromJson)
           .toList(),
     );
   }
@@ -71,6 +107,7 @@ class RouteLocationPayload {
         'source': source,
         'panic': panic,
         'logId': logId,
+        'miscellaneous': miscellaneous?.toJson(),
         'passengers': passengers.map((e) => e.toJson()).toList(),
       };
 
@@ -80,6 +117,40 @@ class RouteLocationPayload {
       'speed=$speed, gpsTime=$gpsTime, status=$tripStatusName, panic=$panic, '
       'logId=$logId, passengers=${passengers.length})';
 }
+
+// Miscellaneous
+class Miscellaneous {
+  final double? speed;
+  final bool? gpsLoss;
+  final bool? networkLoss;
+  final double? bearing;
+
+  Miscellaneous({
+    this.speed,
+    this.gpsLoss,
+    this.networkLoss,
+    this.bearing,
+  });
+
+  factory Miscellaneous.fromJson(Map<String, dynamic> json) {
+    return Miscellaneous(
+      speed: (json['speed'] as num?)?.toDouble(),
+      gpsLoss: json['gpsLoss'] as bool?,
+      networkLoss: json['networkLoss'] as bool?,
+      bearing: (json['bearing'] as num?)?.toDouble(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'speed': speed,
+      'gpsLoss': gpsLoss,
+      'networkLoss': networkLoss,
+      'bearing': bearing,
+    };
+  }
+}
+
 
 /// A single passenger attached to a route-tracking location update.
 class RouteTripPassenger {
@@ -186,7 +257,10 @@ class RouteTripPassenger {
       empDirectDistance: _readDouble(json['empDirectDistance']),
       empCost: _readDouble(json['empCost']),
       plannedScheduleTime: json['plannedScheduleTime']?.toString(),
-      etaDeviationMinutes: (json['EtaDeviationMinutes'] as num?)?.toInt(),
+      etaDeviationMinutes:
+          ((json['etaDeviationMinutes'] ?? json['EtaDeviationMinutes'])
+                  as num?)
+              ?.toInt(),
       plannedLat: _readDouble(json['plannedLat']),
       plannedLng: _readDouble(json['plannedLng']),
       empSigninTime: json['empSigninTime']?.toString(),

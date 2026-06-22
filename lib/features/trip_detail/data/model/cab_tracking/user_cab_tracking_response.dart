@@ -630,7 +630,10 @@ class TripPassenger {
       empCost: readDouble(json['empCost']),
       plannedScheduleTime:
           (json['plannedScheduleTime'] ?? json['pSchTime'])?.toString(),
-      etaDeviationMinutes: (json['EtaDeviationMinutes'] as num?)?.toInt(),
+      etaDeviationMinutes:
+          ((json['etaDeviationMinutes'] ?? json['EtaDeviationMinutes'])
+                  as num?)
+              ?.toInt(),
       empSigninTime: json['empSigninTime']?.toString(),
       empSigninLat: readDouble(json['empSigninLat']),
       empSigninLng: readDouble(json['empSigninLng']),

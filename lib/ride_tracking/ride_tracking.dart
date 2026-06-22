@@ -238,6 +238,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   double _carBearing = 0.0;
   double _bearingFrom = 0.0;
   double _bearingTo = 0.0;
+  // True when the current heading came from the server bearing and was applied
+  // instantly. While set, the per-frame move tick must NOT re-interpolate the
+  // rotation (that would ease it back down from the snapped value).
+  bool _bearingSnapped = false;
 
   // Car PNG is a top-view image facing LEFT. Google Maps treats marker rotation
   // 0° as facing RIGHT/EAST, so we add 180° to make the car face the heading.
@@ -375,7 +379,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     }
     _rebuildRoutePolylines(_plannedPoints, cabOverride: newLatLng);
     unawaited(_refreshActiveLegPolyline(cab: newLatLng));
-    _animateCarTo(newLatLng);
+    // Prefer the server-reported heading (miscellaneous.bearing) so the car icon
+    // points where the device says it's heading, falling back to the computed
+    // bearing from consecutive positions when the payload omits it.
+    _animateCarTo(newLatLng, serverBearing: payload.miscellaneous?.bearing);
   }
 
   /// Merges any passenger boarding data carried on a SignalR payload into the
@@ -477,7 +484,13 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         empDistance: cached.empDistance,
         empDirectDistance: cached.empDirectDistance,
         empCost: cached.empCost,
-        plannedScheduleTime: cached.plannedScheduleTime,
+        // Prefer the live SignalR schedule/deviation so the expected arrival
+        // clock (plannedScheduleTime + etaDeviationMinutes) stays current on
+        // every push, falling back to the cached values when absent.
+        plannedScheduleTime:
+            live.plannedScheduleTime ?? cached.plannedScheduleTime,
+        etaDeviationMinutes:
+            live.etaDeviationMinutes ?? cached.etaDeviationMinutes,
         empSigninTime: live.empSigninTime ?? cached.empSigninTime,
         empSigninLat: live.empSigninLat ?? cached.empSigninLat,
         empSigninLng: live.empSigninLng ?? cached.empSigninLng,
@@ -1599,20 +1612,38 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
   }
 
-  void _animateCarTo(LatLng target) {
+  void _animateCarTo(LatLng target, {double? serverBearing}) {
     final from = _animatedDriverLatLng;
 
     // Only update the heading on meaningful movement (>1m). Below that, GPS
     // noise would spin the marker randomly while the car is effectively stopped.
     final dist = _approxDistanceMeters(from, target);
     _bearingFrom = _carBearing;
-    if (dist > 1) {
-      // Compute the new compass heading and pick the shortest rotation path
-      // from the current bearing (e.g. 350° → 10° rotates +20°, not -340°).
-      final newBearing = _bearing(from, target);
-      _bearingTo = _bearingFrom + _shortestTurn(_bearingFrom, newBearing);
+    final bool hasServerBearing = serverBearing != null && serverBearing >= 0;
+    // Prefer the server-reported heading (miscellaneous.bearing) when present and
+    // valid; otherwise derive it from consecutive positions. Either way the
+    // marker rotates the shortest angular path so it never spins wildly.
+    final double? targetBearing = hasServerBearing
+        ? serverBearing % 360
+        : (dist > 1 ? _bearing(from, target) : null);
+    if (targetBearing != null) {
+      // Compute the shortest rotation path from the current bearing
+      // (e.g. 350° → 10° rotates +20°, not -340°).
+      _bearingTo = _bearingFrom + _shortestTurn(_bearingFrom, targetBearing);
     } else {
       _bearingTo = _bearingFrom;
+    }
+
+    // The server bearing is authoritative and arrives per push, so apply it to
+    // the icon INSTANTLY rather than easing it across the 800ms position tween —
+    // this is what makes the rotation feel real-time. The position still
+    // animates smoothly underneath it. `_bearingSnapped` tells the per-frame
+    // tick not to re-interpolate the rotation back down toward the old value.
+    _bearingSnapped = hasServerBearing && targetBearing != null;
+    if (_bearingSnapped) {
+      _carBearing = _bearingTo;
+      _renderDriverMarker();
+      setState(() {});
     }
 
     _moveController.stop();
@@ -1656,13 +1687,23 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
     _animatedDriverLatLng = LatLng(lat, lng);
 
-    // Interpolate the rotation with the same eased progress as the position so
-    // the car turns gradually into the new heading instead of snapping.
-    final t = _moveController.value;
-    _carBearing = _bearingFrom + (_bearingTo - _bearingFrom) * t;
+    // When the heading came from the server it was already snapped instantly in
+    // _animateCarTo — keep it fixed for this move instead of easing it. For a
+    // computed (positional) bearing, interpolate with the same eased progress as
+    // the position so the car turns gradually into the new heading.
+    if (!_bearingSnapped) {
+      final t = _moveController.value;
+      _carBearing = _bearingFrom + (_bearingTo - _bearingFrom) * t;
+    }
 
-    // Update driver marker position + rotation. The +180 offset compensates for
-    // the car PNG facing LEFT while Maps renders rotation 0° as facing EAST.
+    _renderDriverMarker();
+    setState(() {});
+  }
+
+  /// (Re)builds the animated driver marker at the current position + heading.
+  /// The +180 offset compensates for the car PNG facing LEFT while Maps renders
+  /// rotation 0° as facing EAST.
+  void _renderDriverMarker() {
     _markers.removeWhere((m) => m.markerId.value == 'driver');
     _markers.add(Marker(
       markerId: const MarkerId('driver'),
@@ -1673,7 +1714,6 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       flat: true,
       zIndexInt: 1,
     ));
-    setState(() {});
   }
 
   double _approxDistanceMeters(LatLng a, LatLng b) {
@@ -2753,6 +2793,7 @@ class _ExpandedSection extends StatelessWidget {
           otherName: 'Trip Group Chat',
           participants: participants,
           myName: name.isNotEmpty ? name : 'You',
+          passengers: data?.status?.passengers ?? const [],
         ),
       ),
     );
@@ -3016,13 +3057,33 @@ class _TrackingStatusBanner extends StatelessWidget {
       }
     }
 
-    final showEta =
+    // Server-driven expected arrival clock (plannedScheduleTime + deviation).
+    // When this resolves it is ALWAYS shown, regardless of trip phase / no-show
+    // / boarded state — the planned arrival time is meaningful in every case.
+    final arrivalClock = formatPlannedArrivalClock(
+      me.plannedScheduleTime,
+      me.etaDeviationMinutes,
+    );
+
+    // The duration ETA is only meaningful while the viewer is still awaiting
+    // pickup/drop; suppress it for no-show or once a logout passenger is home.
+    final showDurationEta =
         me.state != StopState.noShow && !(timeline.meBoarded && logout);
-    final etaLabel = !showEta
+
+    // Render the strip whenever we have a server arrival clock, or (failing
+    // that) a duration ETA worth showing.
+    final showEtaStrip = arrivalClock != null || showDurationEta;
+
+    // Contextual label. Falls back to a neutral "Scheduled arrival" when the
+    // viewer-specific phrasing doesn't apply (no-show / already home) but the
+    // server still gives us a planned arrival clock to display.
+    final etaLabel = !showEtaStrip
         ? null
-        : (!timeline.meBoarded
-            ? (logout ? 'ETA to your drop' : 'ETA to your pickup')
-            : (logout ? 'ETA to your drop' : 'ETA to office'));
+        : (me.state == StopState.noShow || (timeline.meBoarded && logout)
+            ? 'Scheduled arrival'
+            : (!timeline.meBoarded
+                ? (logout ? 'ETA to your drop' : 'ETA to your pickup')
+                : (logout ? 'ETA to your drop' : 'ETA to office')));
 
     return Container(
       decoration: BoxDecoration(
@@ -3095,11 +3156,8 @@ class _TrackingStatusBanner extends StatelessWidget {
                     ),
                   ), 
                   Text(
-                    formatPlannedArrivalClock(
-                          me.plannedScheduleTime,
-                          me.etaDeviationMinutes,
-                        ) ??
-                        formatEta(etaMinutes),
+                    arrivalClock ??
+                        (showDurationEta ? formatEta(etaMinutes) : '—'),
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
