@@ -67,6 +67,9 @@ import '../../../features/adhoc/presentation/screen/adhoc_request_screen.dart';
 import '../../../features/sos/bloc/sos_bloc.dart';
 import '../../../features/sos/bloc/sos_event.dart';
 import '../../../features/sos/bloc/sos_state.dart';
+import '../../../features/team_cab/bloc/team_cab_bloc.dart';
+import '../../../features/team_cab/bloc/team_cab_event.dart';
+import '../../../features/team_cab/bloc/team_cab_state.dart';
 import '../../../features/team_cab/presentation/screen/team_cab_screen.dart';
 import '../../../weekly_off/presentation/screen/weekly_off.dart';
 import '../../../features/trip_detail/data/repository/user_feedback_repo.dart';
@@ -146,6 +149,9 @@ class Welcome extends StatelessWidget {
         BlocProvider<RosterBloc>(
           create: (_) => sl<RosterBloc>()..add(const FetchRosterUserDetails()),
         ),
+        BlocProvider<TeamCabBloc>(
+          create: (_) => sl<TeamCabBloc>(),
+        ),
         BlocProvider<AppControlBloc>(
           create: (_) => sl<AppControlBloc>(),
         ),
@@ -199,6 +205,7 @@ class _WelcomeState extends State<_WelcomeView> {
               fromDate: _defaultFromDate(),
               toDate: _defaultToDate(),
             ));
+        _fetchTeamCab(rosterState.details.empId);
       }
     });
   }
@@ -214,7 +221,17 @@ class _WelcomeState extends State<_WelcomeView> {
     if (rosterState is RosterLoaded) {
       _maybeDispatchTripHistoryFetch(rosterState.details.empId);
       _maybeFetchAppControlSettings(rosterState.details.locCode);
+      _fetchTeamCab(rosterState.details.empId);
     }
+  }
+
+  /// Fetches the team-tracking-panel so the side-nav can decide whether to show
+  /// the Team Cab module (only when the API returns `isSuccess == true`).
+  void _fetchTeamCab(int empId) {
+    if (empId == 0) return;
+    context
+        .read<TeamCabBloc>()
+        .add(FetchTeamCab(empId: empId, date: DateTime.now()));
   }
 
   /// Fetches per-location app-control settings (which home-screen features are
@@ -224,6 +241,13 @@ class _WelcomeState extends State<_WelcomeView> {
   void _maybeFetchAppControlSettings(int locCode) {
     if (locCode == 0) return;
     context.read<AppControlBloc>().add(FetchAppControlSettings(locCode));
+  }
+
+  /// Current per-location hybrid-schedule flag from the loaded AppControl
+  /// settings (defaults to `false` until/unless settings are loaded).
+  bool get _hybridScheduleEnabled {
+    final s = context.read<AppControlBloc>().state;
+    return s is AppControlLoaded && s.settings.hybridScheduleEnabled;
   }
 
   void _maybeDispatchTripHistoryFetch(int empId) {
@@ -446,7 +470,10 @@ class _WelcomeState extends State<_WelcomeView> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => TripDetailsScreen(flowArgs: args),
+        builder: (_) => TripDetailsScreen(
+          flowArgs: args,
+          hybridScheduleEnabled: _hybridScheduleEnabled,
+        ),
       ),
     );
   }
@@ -1454,6 +1481,7 @@ class _WelcomeState extends State<_WelcomeView> {
           if (state is RosterLoaded) {
             _ensureTripHistoryFetched();
             _maybeFetchAppControlSettings(state.details.locCode);
+            _fetchTeamCab(state.details.empId);
           }
         },
         child: Stack(
@@ -1463,7 +1491,8 @@ class _WelcomeState extends State<_WelcomeView> {
                 _buildHeader(),
                 BlocBuilder<RosterBloc, RosterState>(
                   builder: (context, state) {
-                    if (state is RosterLoaded) {
+                    // Hide the no-show banner on the Trip History module.
+                    if (state is RosterLoaded && _selectedIndex != 1) {
                       return _buildNoShowBanner(state.details);
                     }
                     return const SizedBox.shrink();
@@ -2637,6 +2666,17 @@ class _WelcomeState extends State<_WelcomeView> {
                     context
                         .read<ScheduleHomeBloc>()
                         .add(const FetchScheduleHome());
+                    // Re-fetch the roster (source of locCode) and the
+                    // per-location AppControl settings on pull-to-refresh.
+                    context
+                        .read<RosterBloc>()
+                        .add(const FetchRosterUserDetails());
+                    final rosterState = context.read<RosterBloc>().state;
+                    if (rosterState is RosterLoaded) {
+                      _maybeFetchAppControlSettings(
+                        rosterState.details.locCode,
+                      );
+                    }
                   },
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -4862,7 +4902,9 @@ class _WelcomeState extends State<_WelcomeView> {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => TripDetailsScreen(),
+            builder: (context) => TripDetailsScreen(
+              hybridScheduleEnabled: _hybridScheduleEnabled,
+            ),
           ),
         );
       },
@@ -6034,10 +6076,15 @@ class AppDrawer extends StatelessWidget {
                 icon: Icons.calendar_today_outlined,
                 label: 'Create Schedule',
                 onTap: () {
+                  final appControl = context.read<AppControlBloc>().state;
+                  final hybridEnabled = appControl is AppControlLoaded &&
+                      appControl.settings.hybridScheduleEnabled;
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => TripDetailsScreen(),
+                      builder: (context) => TripDetailsScreen(
+                        hybridScheduleEnabled: hybridEnabled,
+                      ),
                     ),
                   );
                 },
@@ -6057,19 +6104,28 @@ class AppDrawer extends StatelessWidget {
                 label: 'Trip History',
                 onTap: () => onTripHistoryTap?.call(),
               ),
-              // _DrawerItem(
-              //   icon: Icons.people_outline,
-              //   label: 'Team Cab',
-              //   onTap: () {
-              //     Navigator.pop(context);
-              //     Navigator.push(
-              //       context,
-              //       MaterialPageRoute(
-              //         builder: (_) => const TeamCabScreen(),
-              //       ),
-              //     );
-              //   },
-              // ),
+              // Team Cab is shown only when the team-tracking-panel API
+              // responds with isSuccess == true for this employee.
+              BlocBuilder<TeamCabBloc, TeamCabState>(
+                builder: (context, state) {
+                  final bool teamCabEnabled =
+                      state is TeamCabLoaded && state.data.isSuccess;
+                  if (!teamCabEnabled) return const SizedBox.shrink();
+                  return _DrawerItem(
+                    icon: Icons.people_outline,
+                    label: 'Team Cab',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const TeamCabScreen(),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
               // ADHOC Request is shown only when enabled for the user's
               // location (AppControl settings).
               BlocBuilder<AppControlBloc, AppControlState>(
@@ -7168,14 +7224,17 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
   }
 
   Future<void> _pickDate({required bool isFrom}) async {
-    final initial = isFrom
-        ? (_fromDate ?? DateTime.now())
-        : (_toDate ?? _fromDate ?? DateTime.now());
+    // Trip history is historical: never allow selecting a future date.
+    final today = _dateOnly(DateTime.now());
+    var initial = isFrom
+        ? (_fromDate ?? today)
+        : (_toDate ?? _fromDate ?? today);
+    if (initial.isAfter(today)) initial = today;
     final picked = await showDatePicker(
       context: context,
       initialDate: initial,
       firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      lastDate: today,
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(

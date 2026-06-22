@@ -13,6 +13,7 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
   ShiftBloc(this._repository) : super(const ShiftInitial()) {
     on<FetchShifts>(_onFetch);
     on<UpdateShiftSchedules>(_onUpdateSchedules);
+    on<UpdateHybridSchedules>(_onUpdateHybridSchedules);
     on<CancelSchedule>(_onCancelSchedule);
   }
 
@@ -90,6 +91,49 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
       emit(ShiftUpdateSuccess(response.displayMessage));
     } catch (e) {
       debugPrint('[SHIFT_BLOC] UpdateShiftSchedules ✖ $e');
+      if (_isUnauthorized(e)) {
+        debugPrint(
+          '[SHIFT_BLOC] 401 reached bloc ⇒ refresh-token flow exhausted, '
+          'session ended.',
+        );
+        emit(const ShiftUnauthorized());
+      } else {
+        emit(ShiftUpdateError(_friendlyMessage(e)));
+      }
+    }
+  }
+
+  Future<void> _onUpdateHybridSchedules(
+    UpdateHybridSchedules event,
+    Emitter<ShiftState> emit,
+  ) async {
+    debugPrint(
+      '[SHIFT_BLOC] UpdateHybridSchedules → '
+      'locCode=${event.locCode} '
+      'selectedDates="${event.selectedDates}" '
+      'shiftStart="${event.shiftStart}" '
+      'shiftEnd="${event.shiftEnd}" '
+      'weekOffs="${event.weekOffs}" '
+      'userEmpIds="${event.userEmpIds}" '
+      '(401 ⇒ refresh-token flow handled transparently by ApiClient)',
+    );
+    emit(const ShiftUpdateInProgress());
+    try {
+      final response = await _repository.updateScheduleHybrid(
+        locCode: event.locCode,
+        selectedDates: event.selectedDates,
+        shiftStart: event.shiftStart,
+        shiftEnd: event.shiftEnd,
+        weekOffs: event.weekOffs,
+        userEmpIds: event.userEmpIds,
+      );
+      debugPrint(
+        '[SHIFT_BLOC] UpdateHybridSchedules ✓ '
+        'message="${response.message}" dbResponse="${response.dbResponse}"',
+      );
+      emit(ShiftUpdateSuccess(response.displayMessage));
+    } catch (e) {
+      debugPrint('[SHIFT_BLOC] UpdateHybridSchedules ✖ $e');
       if (_isUnauthorized(e)) {
         debugPrint(
           '[SHIFT_BLOC] 401 reached bloc ⇒ refresh-token flow exhausted, '

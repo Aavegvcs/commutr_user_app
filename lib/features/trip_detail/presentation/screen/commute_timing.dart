@@ -21,6 +21,15 @@ class CommuteTimingScreen extends StatelessWidget {
   final TripScheduleFlowArgs? flowArgs;
   final List<DrModel> drList;
 
+  /// When `true`, the user picked arbitrary (non-contiguous) dates via the
+  /// hybrid random-date selector and we call `/TransRoster/UpdateScheduleHybrid`
+  /// instead of `/TransRoster/UpdateSchedules`.
+  final bool useHybrid;
+
+  /// Comma-joined `yyyy-MM-dd` dates for the hybrid call. Only meaningful when
+  /// [useHybrid] is `true`.
+  final String selectedDates;
+
   const CommuteTimingScreen({
     super.key,
     required this.locCode,
@@ -31,6 +40,8 @@ class CommuteTimingScreen extends StatelessWidget {
     required this.weekOffs,
     this.flowArgs,
     this.drList = const [],
+    this.useHybrid = false,
+    this.selectedDates = '',
   });
 
   @override
@@ -52,6 +63,8 @@ class CommuteTimingScreen extends StatelessWidget {
         weekOffs: weekOffs,
         flowArgs: flowArgs,
         drList: drList,
+        useHybrid: useHybrid,
+        selectedDates: selectedDates,
       ),
     );
   }
@@ -66,6 +79,8 @@ class _CommuteTimingView extends StatefulWidget {
   final String weekOffs;
   final TripScheduleFlowArgs? flowArgs;
   final List<DrModel> drList;
+  final bool useHybrid;
+  final String selectedDates;
 
   const _CommuteTimingView({
     required this.locCode,
@@ -76,6 +91,8 @@ class _CommuteTimingView extends StatefulWidget {
     required this.weekOffs,
     this.flowArgs,
     required this.drList,
+    required this.useHybrid,
+    required this.selectedDates,
   });
 
   @override
@@ -194,6 +211,36 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
     // Always include self; append any selected DR emp IDs
     final allIds = <int>{widget.empId, ..._selectedEmpIds};
     final userEmpIds = allIds.join(',');
+
+    // Hybrid flow: arbitrary (non-contiguous) dates were picked upstream, so
+    // call /TransRoster/UpdateScheduleHybrid with the comma-joined date list
+    // instead of the contiguous from/to range.
+    if (widget.useHybrid) {
+      debugPrint(
+        '[COMMUTE_TIMING] Next tapped (HYBRID) → '
+        'isLogIn=${widget.isLogIn} '
+        'locCode=${widget.locCode} '
+        'empId=${widget.empId} '
+        'selectedDates="${widget.selectedDates}" '
+        'weekOffs="${widget.weekOffs}" '
+        'selectedPickShift=${selectedPickShift?.shiftId}/"${selectedPickShift?.shiftTime}" '
+        'selectedDropShift=${selectedDropShift?.shiftId}/"${selectedDropShift?.shiftTime}" '
+        '→ shiftStart="$shiftStart" shiftEnd="$shiftEnd" '
+        '→ userEmpIds="$userEmpIds"',
+      );
+
+      context.read<ShiftBloc>().add(
+            UpdateHybridSchedules(
+              locCode: widget.locCode,
+              selectedDates: widget.selectedDates,
+              shiftStart: shiftStart,
+              shiftEnd: shiftEnd,
+              weekOffs: "",
+              userEmpIds: userEmpIds,
+            ),
+          );
+      return;
+    }
 
     debugPrint(
       '[COMMUTE_TIMING] Next tapped → '

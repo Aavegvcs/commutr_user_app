@@ -217,6 +217,101 @@ class RoasterShiftRepo {
     }
   }
 
+  /// Schedules a hybrid roster for a set of arbitrary (non-contiguous) dates.
+  ///
+  /// Maps to:
+  /// ```
+  /// POST /TransRoster/UpdateScheduleHybrid
+  /// {
+  ///   "LocCode": <locCode>,
+  ///   "SelectedDates": "2026-06-20,2026-06-21,2026-06-24",
+  ///   "ShiftStart": <shiftStart>,
+  ///   "ShiftEnd": <shiftEnd>,
+  ///   "WeekOffs": "",
+  ///   "User_Empids": <userEmpIds>
+  /// }
+  /// ```
+  ///
+  /// Reuses [UpdateSchedulesResponse] since the response envelope matches
+  /// `/TransRoster/UpdateSchedules`.
+  Future<UpdateSchedulesResponse> updateScheduleHybrid({
+    required int locCode,
+    required String selectedDates,
+    required String shiftStart,
+    required String shiftEnd,
+    required String userEmpIds,
+    String weekOffs = '',
+  }) async {
+    final body = {
+      'LocCode': locCode,
+      'SelectedDates': selectedDates,
+      'ShiftStart': shiftStart,
+      'ShiftEnd': shiftEnd,
+      'WeekOffs': weekOffs,
+      'User_Empids': userEmpIds,
+    };
+
+    debugPrint('[UPDATE_SCHEDULE_HYBRID] → POST /TransRoster/UpdateScheduleHybrid');
+    debugPrint('[UPDATE_SCHEDULE_HYBRID] → body=$body');
+
+    try {
+      final response = await _apiClient.dio.post<dynamic>(
+        '/TransRoster/UpdateScheduleHybrid',
+        data: body,
+      );
+      debugPrint(
+        '[UPDATE_SCHEDULE_HYBRID] ← status=${response.statusCode} '
+        'dataType=${response.data.runtimeType}',
+      );
+      debugPrint('[UPDATE_SCHEDULE_HYBRID] ← raw=${response.data}');
+
+      final raw = response.data;
+
+      Map<String, dynamic>? payload;
+      if (raw is Map<String, dynamic>) {
+        payload = raw;
+      } else if (raw is Map) {
+        payload = Map<String, dynamic>.from(raw);
+      } else if (raw is List &&
+          raw.isNotEmpty &&
+          raw.first is Map<String, dynamic>) {
+        payload = raw.first as Map<String, dynamic>;
+      } else if (raw is List && raw.isNotEmpty && raw.first is Map) {
+        payload = Map<String, dynamic>.from(raw.first as Map);
+      }
+
+      if (payload == null) {
+        debugPrint('[UPDATE_SCHEDULE_HYBRID] ✖ payload is null/unrecognized');
+        throw Exception('Unexpected response format');
+      }
+
+      final parsed = UpdateSchedulesResponse.fromJson(payload);
+
+      debugPrint(
+        '[UPDATE_SCHEDULE_HYBRID] parsed → '
+        'envelopeSuccess=${parsed.envelopeSuccess} '
+        'message="${parsed.message}" '
+        'errorCode=${parsed.errorCode} '
+        'dbResponse="${parsed.dbResponse}" '
+        'isSuccess=${parsed.isSuccess}',
+      );
+
+      if (!parsed.isSuccess) {
+        throw Exception(
+          parsed.displayMessage.isNotEmpty
+              ? parsed.displayMessage
+              : 'Failed to update schedules',
+        );
+      }
+
+      return parsed;
+    } catch (e, st) {
+      debugPrint('[UPDATE_SCHEDULE_HYBRID] ✖ exception=$e');
+      debugPrint('[UPDATE_SCHEDULE_HYBRID] ✖ stack=$st');
+      rethrow;
+    }
+  }
+
   /// Cancels a previously scheduled trip for the given date.
   ///
   /// Maps to:

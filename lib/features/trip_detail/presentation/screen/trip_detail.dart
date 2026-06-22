@@ -12,21 +12,37 @@ class TripDetailsScreen extends StatelessWidget {
   /// When set (edit from welcome), dates and trip type are pre-filled.
   final TripScheduleFlowArgs? flowArgs;
 
-  const TripDetailsScreen({super.key, this.flowArgs});
+  /// Per-location AppControl flag. When `true`, a "Select random dates" switch
+  /// is shown; turning it on lets the user pick multiple non-contiguous dates
+  /// (instead of a range) which are scheduled via `/TransRoster/UpdateScheduleHybrid`.
+  final bool hybridScheduleEnabled;
+
+  const TripDetailsScreen({
+    super.key,
+    this.flowArgs,
+    this.hybridScheduleEnabled = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
       create: (_) => sl<WeeklyOffBloc>()..add(LoadWeeklyOffEvent()),
-      child: _TripDetailsView(flowArgs: flowArgs),
+      child: _TripDetailsView(
+        flowArgs: flowArgs,
+        hybridScheduleEnabled: hybridScheduleEnabled,
+      ),
     );
   }
 }
 
 class _TripDetailsView extends StatefulWidget {
   final TripScheduleFlowArgs? flowArgs;
+  final bool hybridScheduleEnabled;
 
-  const _TripDetailsView({this.flowArgs});
+  const _TripDetailsView({
+    this.flowArgs,
+    required this.hybridScheduleEnabled,
+  });
 
   @override
   State<_TripDetailsView> createState() => _TripDetailsViewState();
@@ -67,6 +83,13 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
 
   /// Completed ranges (inclusive start/end, date-only).
   List<DateTimeRange> _selectedRanges = [];
+
+  /// When `true` (hybrid only), the user picks multiple individual dates rather
+  /// than a contiguous range. Backed by [_selectedHybridDates].
+  bool _randomDateSelect = false;
+
+  /// Individual dates chosen in random-date mode (date-only).
+  final Set<DateTime> _selectedHybridDates = {};
 
   // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
   Set<int> weeklyOffs = {0, 6}; // Sun & Sat by default
@@ -113,7 +136,11 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
 
   bool _sameDay(DateTime a, DateTime b) => _dateOnly(a) == _dateOnly(b);
 
+  /// `true` when the hybrid random-date selector is active.
+  bool get _isRandomMode => widget.hybridScheduleEnabled && _randomDateSelect;
+
   int _totalSelectedDayCount() {
+    if (_isRandomMode) return _selectedHybridDates.length;
     int n = 0;
     for (final r in _selectedRanges) {
       n += r.end.difference(r.start).inDays + 1;
@@ -187,6 +214,18 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
     setState(() {
       _selectedSingleDate = null;
       _selectedRanges = [];
+      _selectedHybridDates.clear();
+    });
+  }
+
+  void _toggleHybridDate(DateTime day) {
+    final d = _dateOnly(day);
+    setState(() {
+      if (_selectedHybridDates.contains(d)) {
+        _selectedHybridDates.remove(d);
+      } else {
+        _selectedHybridDates.add(d);
+      }
     });
   }
 
@@ -395,6 +434,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                                   _selectedSingleDate!, tempOffs)) {
                             _selectedSingleDate = null;
                           }
+                          _selectedHybridDates.removeWhere(
+                              (d) => _isWeekOffForSet(d, tempOffs));
                         });
                         Navigator.pop(ctx);
                       },
@@ -708,31 +749,36 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: _dateFieldBox(
-                label: 'FROM',
-                value: _formatShortDate(_rangeStartDisplay),
-                isPlaceholder: _rangeStartDisplay == null,
-                isActive: hasSelection,
+        if (widget.hybridScheduleEnabled) ...[
+          _buildRandomDateSwitch(),
+          const SizedBox(height: 12),
+        ],
+        if (!_isRandomMode)
+          Row(
+            children: [
+              Expanded(
+                child: _dateFieldBox(
+                  label: 'FROM',
+                  value: _formatShortDate(_rangeStartDisplay),
+                  isPlaceholder: _rangeStartDisplay == null,
+                  isActive: hasSelection,
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Icon(Icons.arrow_forward,
-                size: 18, color: primaryGreen.withValues(alpha: 0.6)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _dateFieldBox(
-                label: 'TO',
-                value: _formatShortDate(_rangeEndDisplay),
-                isPlaceholder: _rangeEndDisplay == null,
-                isActive: hasSelection,
+              const SizedBox(width: 10),
+              Icon(Icons.arrow_forward,
+                  size: 18, color: primaryGreen.withValues(alpha: 0.6)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _dateFieldBox(
+                  label: 'TO',
+                  value: _formatShortDate(_rangeEndDisplay),
+                  isPlaceholder: _rangeEndDisplay == null,
+                  isActive: hasSelection,
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+            ],
+          ),
+        if (!_isRandomMode) const SizedBox(height: 12),
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -745,7 +791,9 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
                 child: Text(
-                  'Select travel dates',
+                  _isRandomMode
+                      ? 'Tap dates to select multiple'
+                      : 'Select travel dates',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
@@ -757,7 +805,10 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
               SizedBox(
                 height: 340,
                 child: _HorizontalDateRangePicker(
-                  key: ValueKey(_initialPickerRange),
+                  key: ValueKey('$_randomDateSelect-$_initialPickerRange'),
+                  multiSelect: _isRandomMode,
+                  selectedDates: _selectedHybridDates,
+                  onDateToggled: _toggleHybridDate,
                   initialRange: _initialPickerRange,
                   firstDate: today,
                   lastDate: lastDate,
@@ -772,6 +823,62 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildRandomDateSwitch() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: _randomDateSelect ? lightGreen : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: _randomDateSelect ? primaryGreen : const Color(0xFFE5E5E5),
+          width: _randomDateSelect ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.event_available_outlined, color: primaryGreen, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Select random dates',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1A1A),
+                  ),
+                ),
+                Text(
+                  'Pick multiple individual days instead of a range',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: primaryGreen.withValues(alpha: 0.7),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: _randomDateSelect,
+            activeThumbColor: primaryGreen,
+            onChanged: (v) {
+              setState(() {
+                _randomDateSelect = v;
+                // Reset selections when switching modes so the two pickers
+                // never carry stale state across each other.
+                _selectedSingleDate = null;
+                _selectedRanges = [];
+                _selectedHybridDates.clear();
+              });
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -870,10 +977,12 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
           Text(
             count == 0
                 ? 'Select travel dates below'
-                : _hasOnlySingleDate
-                    ? 'Travel on ${_formatShortDate(_selectedSingleDate)}'
-                    : '$count day${count == 1 ? '' : 's'} selected'
-                        '${rangeCount > 0 ? ' · $rangeCount range${rangeCount == 1 ? '' : 's'}' : ''}',
+                : _isRandomMode
+                    ? '$count date${count == 1 ? '' : 's'} selected'
+                    : _hasOnlySingleDate
+                        ? 'Travel on ${_formatShortDate(_selectedSingleDate)}'
+                        : '$count day${count == 1 ? '' : 's'} selected'
+                            '${rangeCount > 0 ? ' · $rangeCount range${rangeCount == 1 ? '' : 's'}' : ''}',
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -893,6 +1002,47 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
         height: 52,
         child: ElevatedButton(
           onPressed: () {
+            final weekOffs = _weekOffsApiString(weeklyOffs);
+
+            // Hybrid random-date mode → carry the comma-joined date list.
+            if (_isRandomMode) {
+              if (_selectedHybridDates.isEmpty) {
+                debugPrint('[TRIP_DETAIL] Next blocked: no random dates');
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    const SnackBar(
+                      content: Text('Please select at least one date'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                return;
+              }
+              final sorted = _selectedHybridDates.toList()..sort();
+              final selectedDates = sorted.map(_formatApiDate).join(',');
+              final firstDate = _formatApiDate(sorted.first);
+              final lastDate = _formatApiDate(sorted.last);
+              debugPrint(
+                '[TRIP_DETAIL] → SelectOfficeScreen (HYBRID) '
+                'selectedDates="$selectedDates" weekOffs="$weekOffs"',
+              );
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SelectOfficeScreen(
+                    isLogIn: isLogIn,
+                    fromDate: firstDate,
+                    toDate: lastDate,
+                    weekOffs: weekOffs,
+                    flowArgs: widget.flowArgs,
+                    useHybrid: true,
+                    selectedDates: selectedDates,
+                  ),
+                ),
+              );
+              return;
+            }
+
             final start = _rangeStartDisplay;
             final end = _rangeEndDisplay;
             debugPrint(
@@ -913,7 +1063,6 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
             }
             final fromDate = _formatApiDate(start);
             final toDate = _formatApiDate(end);
-            final weekOffs = _weekOffsApiString(weeklyOffs);
             debugPrint(
               '[TRIP_DETAIL] → SelectOfficeScreen '
               'fromDate=$fromDate toDate=$toDate weekOffs="$weekOffs"',
@@ -966,6 +1115,9 @@ class _HorizontalDateRangePicker extends StatefulWidget {
     required this.lightColor,
     required this.isSelectable,
     required this.onRangeSelected,
+    this.multiSelect = false,
+    this.selectedDates = const {},
+    this.onDateToggled,
   });
 
   final DateTimeRange? initialRange;
@@ -975,6 +1127,13 @@ class _HorizontalDateRangePicker extends StatefulWidget {
   final Color lightColor;
   final bool Function(DateTime day) isSelectable;
   final ValueChanged<DateTimeRange> onRangeSelected;
+
+  /// When `true`, tapping toggles individual days (multi-select) via
+  /// [onDateToggled] and [selectedDates] drives the highlight; range selection
+  /// is disabled.
+  final bool multiSelect;
+  final Set<DateTime> selectedDates;
+  final ValueChanged<DateTime>? onDateToggled;
 
   @override
   State<_HorizontalDateRangePicker> createState() =>
@@ -1060,6 +1219,12 @@ class _HorizontalDateRangePickerState
   void _onDayTap(DateTime day) {
     if (!widget.isSelectable(day)) return;
     final d = _dateOnly(day);
+
+    // Multi-select (hybrid) mode → just toggle the day; the parent owns the set.
+    if (widget.multiSelect) {
+      widget.onDateToggled?.call(d);
+      return;
+    }
 
     // No selection at all → first tap, select single day
     if (_rangeStart == null) {
@@ -1206,9 +1371,14 @@ class _HorizontalDateRangePickerState
     final isFuture = d.isAfter(_dateOnly(widget.lastDate));
     final isDisabled = isPast || isFuture || !widget.isSelectable(date);
     final selectable = !isDisabled;
-    final role = selectable ? _dayRole(date) : _PickerDayRole.none;
+    final isMultiSelected =
+        widget.multiSelect && selectable && widget.selectedDates.contains(d);
+    final role = (selectable && !widget.multiSelect)
+        ? _dayRole(date)
+        : _PickerDayRole.none;
     final inRange = role != _PickerDayRole.none;
-    final isEndpoint = role == _PickerDayRole.single ||
+    final isEndpoint = isMultiSelected ||
+        role == _PickerDayRole.single ||
         role == _PickerDayRole.start ||
         role == _PickerDayRole.end;
 

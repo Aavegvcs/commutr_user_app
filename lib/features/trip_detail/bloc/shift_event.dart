@@ -48,6 +48,39 @@ class UpdateShiftSchedules extends ShiftEvent {
       ];
 }
 
+/// Schedules a hybrid roster for arbitrary (non-contiguous) dates via
+/// `POST /TransRoster/UpdateScheduleHybrid`.
+///
+/// [selectedDates] is a comma-joined `yyyy-MM-dd` list, e.g.
+/// `"2026-06-20,2026-06-21,2026-06-24"`.
+class UpdateHybridSchedules extends ShiftEvent {
+  final int locCode;
+  final String selectedDates;
+  final String shiftStart;
+  final String shiftEnd;
+  final String weekOffs;
+  final String userEmpIds;
+
+  const UpdateHybridSchedules({
+    required this.locCode,
+    required this.selectedDates,
+    required this.shiftStart,
+    required this.shiftEnd,
+    required this.weekOffs,
+    required this.userEmpIds,
+  });
+
+  @override
+  List<Object?> get props => [
+        locCode,
+        selectedDates,
+        shiftStart,
+        shiftEnd,
+        weekOffs,
+        userEmpIds,
+      ];
+}
+
 /// Cancels a scheduled trip via `POST /TransRoster/CancelSchedules`.
 ///
 /// [tripType] must be `"1"` for a Login (pickup) trip or `"2"` for a Logout

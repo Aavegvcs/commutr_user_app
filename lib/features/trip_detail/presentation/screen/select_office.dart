@@ -17,6 +17,10 @@ class SelectOfficeScreen extends StatelessWidget {
   final String weekOffs;
   final TripScheduleFlowArgs? flowArgs;
 
+  /// Hybrid random-date flow (see [CommuteTimingScreen.useHybrid]).
+  final bool useHybrid;
+  final String selectedDates;
+
   const SelectOfficeScreen({
     super.key,
     required this.isLogIn,
@@ -24,6 +28,8 @@ class SelectOfficeScreen extends StatelessWidget {
     required this.toDate,
     required this.weekOffs,
     this.flowArgs,
+    this.useHybrid = false,
+    this.selectedDates = '',
   });
 
   @override
@@ -36,6 +42,8 @@ class SelectOfficeScreen extends StatelessWidget {
         toDate: toDate,
         weekOffs: weekOffs,
         flowArgs: flowArgs,
+        useHybrid: useHybrid,
+        selectedDates: selectedDates,
       ),
     );
   }
@@ -47,6 +55,8 @@ class _SelectOfficeView extends StatefulWidget {
   final String toDate;
   final String weekOffs;
   final TripScheduleFlowArgs? flowArgs;
+  final bool useHybrid;
+  final String selectedDates;
 
   const _SelectOfficeView({
     required this.isLogIn,
@@ -54,6 +64,8 @@ class _SelectOfficeView extends StatefulWidget {
     required this.toDate,
     required this.weekOffs,
     this.flowArgs,
+    required this.useHybrid,
+    required this.selectedDates,
   });
 
   @override
@@ -318,6 +330,8 @@ class _SelectOfficeViewState extends State<_SelectOfficeView> {
                           weekOffs: widget.weekOffs,
                           flowArgs: widget.flowArgs,
                           drList: state.details.drList,
+                          useHybrid: widget.useHybrid,
+                          selectedDates: widget.selectedDates,
                         ),
                       ),
                     );

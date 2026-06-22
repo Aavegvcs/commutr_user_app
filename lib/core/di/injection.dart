@@ -1,4 +1,6 @@
 import 'package:commutr_main/features/adhoc/bloc/adhoc_bloc.dart';
+import 'package:commutr_main/features/team_cab/bloc/team_cab_bloc.dart';
+import 'package:commutr_main/features/team_cab/data/repository/team_cab_repo.dart';
 import 'package:commutr_main/features/notification/bloc/notification_bloc.dart';
 import 'package:commutr_main/features/share_cab/data/repository/share_cab_repo.dart';
 import 'package:commutr_main/features/share_cab/data/repository/call_driver_ivr_repo.dart';
@@ -111,6 +113,14 @@ void setupDependencies() {
 
   sl.registerFactory<RosterBloc>(
     () => RosterBloc(sl()),
+  );
+
+  sl.registerLazySingleton<TeamCabRepository>(
+    () => TeamCabRepository(sl(instanceName: appApiClientKey)),
+  );
+
+  sl.registerFactory<TeamCabBloc>(
+    () => TeamCabBloc(sl()),
   );
 
   sl.registerLazySingleton<AppControlRepository>(

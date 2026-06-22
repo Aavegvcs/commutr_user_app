@@ -23,7 +23,11 @@ class AppControlLoaded extends AppControlState {
   const AppControlLoaded(this.settings);
 
   @override
-  List<Object?> get props => [settings.adhocRequestEnabledForUser, settings.boardDebaordEnabledForUser];
+  List<Object?> get props => [
+        settings.adhocRequestEnabledForUser,
+        settings.boardDebaordEnabledForUser,
+        settings.hybridScheduleEnabled,
+      ];
 }
 
 class AppControlError extends AppControlState {
