@@ -194,9 +194,14 @@ class _WeeklyOffViewState extends State<_WeeklyOffView> {
               ..addAll(_selectionFromWeekOff(row?.weekOff));
           });
         } else if (state is WeeklyOffSaved) {
+          final dbResponse = state.response.result?.isNotEmpty == true
+              ? state.response.result!.first.dBResponse
+              : null;
           _showResultDialog(
             success: true,
-            message: state.response.message ?? 'Preferences saved!',
+            message: dbResponse?.trim().isNotEmpty == true
+                ? dbResponse!
+                : (state.response.message ?? 'Preferences saved!'),
           );
         } else if (state is WeeklyOffFailure) {
           if (!mounted) return;

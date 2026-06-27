@@ -1,9 +1,13 @@
 
+import 'dart:io' show Platform;
+
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/features/auth/presentation/screens/signup.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../bloc/auth_bloc.dart';
 import '../../bloc/auth_event.dart';
@@ -33,10 +37,15 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
   static const Color _dividerColor = Color(0xFFCCCCCC);
   static const Color _linkColor = Color(0xFF2E8B6E);
 
+  /// True only when the field holds exactly 10 digits.
+  bool get _isPhoneComplete => _phoneController.text.trim().length == 10;
+
   @override
   void initState() {
     super.initState();
     _phoneFocus.addListener(() => setState(() {}));
+    // Rebuild on every change so the Send OTP button enables/disables live.
+    _phoneController.addListener(() => setState(() {}));
   }
 
   @override
@@ -92,81 +101,199 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
         builder: (context, state) {
           return Scaffold(
             backgroundColor: Colors.white,
-            body: SafeArea(
-              child: SingleChildScrollView(
-                child: Form(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 16.0),
-                        child: _buildLogoBar(),
+            // On iOS we manage keyboard insets manually so the Send OTP button
+            // can sit just above the keyboard; let the Scaffold resize on Android.
+            resizeToAvoidBottomInset: !Platform.isIOS,
+            body: Platform.isIOS
+                ? _buildIosBody(context, state)
+                : _buildDefaultBody(context, state),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Original layout, unchanged — used on Android and any non-iOS platform.
+  Widget _buildDefaultBody(BuildContext context, AuthState state) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Form(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 16.0),
+                child: _buildLogoBar(),
+              ),
+              _buildHeroImage(),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 28),
+                    const Text(
+                      'Your Everyday\nCommute Partner',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w700,
+                        color: _darkGreen,
+                        height: 1.25,
+                        letterSpacing: -0.3,
                       ),
-                      _buildHeroImage(),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 28),
-                            const Text(
-                              'Your Everyday\nCommute Partner',
-                              style: TextStyle(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w700,
-                                color: _darkGreen,
-                                height: 1.25,
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            const Text(
-                              'Sign in to sync your transit journals and live\njourney alerts.',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: _textGrey,
-                                height: 1.5,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                            const SizedBox(height: 28),
-                            const Text(
-                              'Phone Number',
-                              style: TextStyle(
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w500,
-                                color: _textDark,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildPhoneField(),
-                            if (_phoneFieldError != null) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                _phoneFieldError!,
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    height: 1.2,
-                                    color: Colors.redAccent),
-                              ),
-                            ],
-                            const SizedBox(height: 18),
-                            _buildSendOtpButton(context, state),
-                            const SizedBox(height: 20),
-                            _buildSignUpRow(),
-                            const SizedBox(height: 20),
-                            _buildTermsText(),
-                            const SizedBox(height: 20),
-                          ],
-                        ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Sign in to sync your transit journals and live\njourney alerts.',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: _textGrey,
+                        height: 1.5,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    const Text(
+                      'Phone Number',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w500,
+                        color: _textDark,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildPhoneField(),
+                    if (_phoneFieldError != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _phoneFieldError!,
+                        style: const TextStyle(
+                            fontSize: 12,
+                            height: 1.2,
+                            color: Colors.redAccent),
                       ),
                     ],
-                  ),
+                    const SizedBox(height: 18),
+                    _buildSendOtpButton(context, state),
+                    // const SizedBox(height: 20),
+                    // _buildSignUpRow(),
+                    const SizedBox(height: 20),
+                    _buildTermsText(),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// iOS-only keyboard-aware layout.
+  ///
+  /// Content scrolls in the available space while the Send OTP button + terms
+  /// are pinned to the bottom and lifted above the keyboard by the current
+  /// view inset, so the button is never hidden on any screen size.
+  Widget _buildIosBody(BuildContext context, AuthState state) {
+    final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
+    return SafeArea(
+      bottom: true,
+      child: Form(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Scrollable hero/intro/phone-field region.
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16.0),
+                      child: _buildLogoBar(),
+                    ),
+                    _buildHeroImage(),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 28),
+                          const Text(
+                            'Your Everyday\nCommute Partner',
+                            style: TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w700,
+                              color: _darkGreen,
+                              height: 1.25,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          const Text(
+                            'Sign in to sync your transit journals and live\njourney alerts.',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: _textGrey,
+                              height: 1.5,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+                          const Text(
+                            'Phone Number',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w500,
+                              color: _textDark,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _buildPhoneField(),
+                          if (_phoneFieldError != null) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              _phoneFieldError!,
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  height: 1.2,
+                                  color: Colors.redAccent),
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          );
-        },
+            // Pinned bottom bar — animates up with the keyboard.
+            AnimatedPadding(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(
+                left: 24.0,
+                right: 24.0,
+                top: 8.0,
+                bottom: keyboardInset > 0 ? keyboardInset + 12.0 : 20.0,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildSendOtpButton(context, state),
+                  const SizedBox(height: 16),
+                  _buildTermsText(),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -300,23 +427,29 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
 
   Widget _buildSendOtpButton(BuildContext context, AuthState state) {
     final isLoading = state is OtpRequestLoading;
+    // iOS: button is enabled only with exactly 10 digits entered.
+    // Android keeps its original behavior (always tappable, validated on tap).
+    final canSubmit = Platform.isIOS ? _isPhoneComplete : true;
+    final isEnabled = !isLoading && canSubmit;
     return SizedBox(
       width: double.infinity,
       height: 54,
       child: ElevatedButton(
-        onPressed: isLoading
-            ? null
-            : () {
+        onPressed: isEnabled
+            ? () {
                 final err = _validatePhone(_phoneController.text);
                 setState(() => _phoneFieldError = err);
                 if (err != null) return;
                 context
                     .read<AuthBloc>()
                     .add(RequestOtpEvent(_phoneController.text));
-              },
+              }
+            : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: _darkGreen,
           foregroundColor: Colors.white,
+          disabledBackgroundColor: _darkGreen.withValues(alpha: 0.4),
+          disabledForegroundColor: Colors.white.withValues(alpha: 0.8),
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(30),
@@ -374,21 +507,48 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
     );
   }
 
+  Future<void> _openTermsOfService() async {
+    final uri = Uri.parse('https://www.aaveg.com/Terms_of_services');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open Terms of Service'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    final uri = Uri.parse('https://www.aaveg.com/privacy-policy');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open Privacy Policy'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
   Widget _buildTermsText() {
     return Center(
       child: RichText(
         textAlign: TextAlign.center,
-        text: const TextSpan(
-          style: TextStyle(
+        text: TextSpan(
+          style: const TextStyle(
             fontSize: 11.5,
             color: _textGrey,
             height: 1.6,
           ),
           children: [
-            TextSpan(text: 'By continuing, you agree to our '),
+            const TextSpan(text: 'By continuing, you agree to our '),
             TextSpan(
               text: 'Terms of Service',
-              style: TextStyle(
+              recognizer: TapGestureRecognizer()..onTap = _openTermsOfService,
+              style: const TextStyle(
                 fontWeight: FontWeight.w600,
                 color: _textDark,
               ),
@@ -396,12 +556,13 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
             TextSpan(text: '\nand '),
             TextSpan(
               text: 'Privacy Policy',
-              style: TextStyle(
+              recognizer: TapGestureRecognizer()..onTap = _openPrivacyPolicy,
+              style: const TextStyle(
                 fontWeight: FontWeight.w600,
                 color: _textDark,
               ),
             ),
-            TextSpan(text: '.'),
+            const TextSpan(text: '.'),
           ],
         ),
       ),

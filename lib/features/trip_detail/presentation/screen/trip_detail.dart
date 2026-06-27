@@ -92,7 +92,13 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   final Set<DateTime> _selectedHybridDates = {};
 
   // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-  Set<int> weeklyOffs = {0, 6}; // Sun & Sat by default
+  // Sourced exclusively from the weekly-off API; `null` until loaded (or when
+  // the API returns no value). No static fallback — Next is blocked (with a
+  // snackbar) while this is null/empty.
+  Set<int>? weeklyOffs;
+
+  /// `true` once the weekly-off API has responded with a usable, non-empty set.
+  bool get _hasWeeklyOffs => weeklyOffs != null && weeklyOffs!.isNotEmpty;
 
   final Color primaryGreen = const Color(0xFF1A6B3C);
   final Color lightGreen = const Color(0xFFE8F5EE);
@@ -118,7 +124,8 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   ];
 
   // Flutter's date.weekday: Mon=1 ... Sat=6, Sun=7  →  map to 0=Sun..6=Sat
-  bool _isWeekOff(DateTime date) => weeklyOffs.contains(date.weekday % 7);
+  bool _isWeekOff(DateTime date) =>
+      weeklyOffs?.contains(date.weekday % 7) ?? false;
   bool _isWeekOffForSet(DateTime date, Set<int> offs) =>
       offs.contains(date.weekday % 7);
 
@@ -231,7 +238,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
 
   // ─── Bottom sheet ──────────────────────────────────────────────────────────
   void _showEditWeeklyOffsSheet() {
-    Set<int> tempOffs = Set.from(weeklyOffs);
+    Set<int> tempOffs = Set.from(weeklyOffs ?? const <int>{});
 
     showModalBottomSheet(
       context: context,
@@ -481,14 +488,16 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
     return '${date.year}-$m-$d';
   }
 
-  Set<int> _parseWeeklyOff(String? weekOff) {
-    if (weekOff == null || weekOff.trim().isEmpty) return {0, 6};
+  /// Parses the API's weekly-off string into a day-index set, or `null` when
+  /// the value is missing/empty/unparseable. No static fallback.
+  Set<int>? _parseWeeklyOff(String? weekOff) {
+    if (weekOff == null || weekOff.trim().isEmpty) return null;
     final parsed = weekOff
         .split(',')
         .map((s) => _dayLabels.indexOf(s.trim().toUpperCase()))
         .where((i) => i >= 0)
         .toSet();
-    return parsed.isEmpty ? {0, 6} : parsed;
+    return parsed.isEmpty ? null : parsed;
   }
 
   void _handleSessionExpired(String message) {
@@ -524,6 +533,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
             // If today (pre-selected by default) is a weekly off per the
             // loaded config, drop the pre-selection so the picker stays valid.
             if (_selectedSingleDate != null &&
+                newWeeklyOffs != null &&
                 _isWeekOffForSet(_selectedSingleDate!, newWeeklyOffs)) {
               _selectedSingleDate = null;
             }
@@ -662,15 +672,17 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   }
 
   Widget _buildWeeklyOffs() {
-    final sortedOffs = weeklyOffs.toList()..sort();
+    final sortedOffs = (weeklyOffs?.toList() ?? [])..sort();
     return BlocBuilder<WeeklyOffBloc, WeeklyOffState>(
       builder: (context, state) {
-        final isLoading =
-            state is WeeklyOffLoading || state is WeeklyOffInitial;
+        // Show the spinner while fetching and until a usable set is available.
+        final isLoading = state is WeeklyOffLoading ||
+            state is WeeklyOffInitial ||
+            !_hasWeeklyOffs;
         return GestureDetector(
           onTap: isLoading ? null : null,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
@@ -697,7 +709,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                     color: Color(0xFF1A1A1A),
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 12),
                 if (isLoading)
                   SizedBox(
                     width: 18,
@@ -708,11 +720,15 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                     ),
                   )
                 else
-                  Row(
-                    spacing: 6,
-                    children: sortedOffs
-                        .map((i) => _buildChip(_dayLabels[i]))
-                        .toList(),
+                  Expanded(
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: sortedOffs
+                          .map((i) => _buildChip(_dayLabels[i]))
+                          .toList(),
+                    ),
                   ),
               ],
             ),
@@ -1002,7 +1018,19 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
         height: 52,
         child: ElevatedButton(
           onPressed: () {
-            final weekOffs = _weekOffsApiString(weeklyOffs);
+            // Block until the weekly-off API has returned a usable set.
+            if (!_hasWeeklyOffs) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text('Weekly offs not available yet'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              return;
+            }
+            final weekOffs = _weekOffsApiString(weeklyOffs!);
 
             // Hybrid random-date mode → carry the comma-joined date list.
             if (_isRandomMode) {

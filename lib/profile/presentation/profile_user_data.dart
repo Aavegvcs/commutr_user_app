@@ -14,6 +14,7 @@ class ProfileUserData {
     required this.office,
     required this.nodalPoint,
     this.empId,
+    this.employeeId,
   });
 
   final String fullName;
@@ -28,6 +29,7 @@ class ProfileUserData {
   final String pincode;
   final String office;
   final String nodalPoint;
+  final String? employeeId;
 
   /// Numeric employee ID from the API.
   final int? empId;
@@ -46,6 +48,7 @@ class ProfileUserData {
       office: r.locationName ?? '',
       nodalPoint: r.resolvedNodalPoint,
       empId: r.empId,
+      employeeId: r.employeeId??''
     );
   }
 

@@ -172,7 +172,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
           }
         }
       }
-      pick ??= result.pickShifts.isNotEmpty ? result.pickShifts.first : null;
+      pick ??= _firstFuturePick(result.pickShifts);
       if (pick != null && selectedPickShift?.shiftId != pick.shiftId) {
         setState(() => selectedPickShift = pick);
         debugPrint(
@@ -192,7 +192,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
         }
       }
     }
-    drop ??= result.dropShifts.isNotEmpty ? result.dropShifts.first : null;
+    drop ??= _firstFutureDrop(result.dropShifts);
     if (drop != null && selectedDropShift?.shiftId != drop.shiftId) {
       setState(() => selectedDropShift = drop);
       debugPrint(
@@ -281,6 +281,59 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
     if (parts.isEmpty) return '?';
     if (parts.length == 1) return parts[0][0].toUpperCase();
     return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+  }
+
+  /// Parses a `HH:mm` (24-hour) shift string into minutes-since-midnight.
+  /// Returns `null` when the string can't be parsed.
+  int? _shiftMinutes(String raw) {
+    final parts = raw.trim().split(':');
+    if (parts.length < 2) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return null;
+    return h * 60 + m;
+  }
+
+  /// Whether the schedule's start date is today, in which case shift times
+  /// that have already elapsed should be hidden. For future dates every shift
+  /// is still valid, so no filtering is applied.
+  bool get _isToday {
+    final from = parseIsoDate(widget.fromDate);
+    if (from == null) return false;
+    final now = DateTime.now();
+    return from.year == now.year &&
+        from.month == now.month &&
+        from.day == now.day;
+  }
+
+  /// True when [time] has not yet passed (or [fromDate] isn't today).
+  bool _isFutureTime(String time) {
+    if (!_isToday) return true;
+    final mins = _shiftMinutes(time);
+    if (mins == null) return true;
+    final now = DateTime.now();
+    return mins > now.hour * 60 + now.minute;
+  }
+
+  /// Filters out shifts whose time has already passed when [fromDate] is today.
+  List<({int id, String time})> _futureShifts(
+          List<({int id, String time})> shifts) =>
+      shifts.where((s) => _isFutureTime(s.time)).toList();
+
+  /// First pick shift that hasn't elapsed yet, or `null` when none remain.
+  PickShift? _firstFuturePick(List<PickShift> shifts) {
+    for (final s in shifts) {
+      if (_isFutureTime(s.shiftTime)) return s;
+    }
+    return null;
+  }
+
+  /// First drop shift that hasn't elapsed yet, or `null` when none remain.
+  DropShift? _firstFutureDrop(List<DropShift> shifts) {
+    for (final s in shifts) {
+      if (_isFutureTime(s.shiftTime)) return s;
+    }
+    return null;
   }
 
   @override
@@ -486,9 +539,9 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
                 ? _ShiftCard(
                     title: 'Login Timing',
                     subtitle: 'Daily commute to office',
-                    shifts: cached.pickShifts
+                    shifts: _futureShifts(cached.pickShifts
                         .map((s) => (id: s.shiftId, time: s.shiftTime))
-                        .toList(),
+                        .toList()),
                     selectedId: selectedPickShift?.shiftId,
                     onSelect: (id) => setState(() => selectedPickShift =
                         cached.pickShifts
@@ -497,9 +550,9 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
                 : _ShiftCard(
                     title: 'Logout Timing',
                     subtitle: 'Daily commute from office',
-                    shifts: cached.dropShifts
+                    shifts: _futureShifts(cached.dropShifts
                         .map((s) => (id: s.shiftId, time: s.shiftTime))
-                        .toList(),
+                        .toList()),
                     selectedId: selectedDropShift?.shiftId,
                     onSelect: (id) => setState(() => selectedDropShift =
                         cached.dropShifts
@@ -525,7 +578,7 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Apply same timing to others',
+          'Apply same timing to other employees',
           style: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w700,
@@ -618,19 +671,14 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
   }
 
   Widget _buildEmployeePanel() {
-    // Prepend a synthetic "You" entry so self is always visible and toggleable
-    final selfEntry = DrModel(empId: widget.empId, empName: 'You');
-    final drOnly = _searchQuery.isEmpty
+    // The logged-in user is already present in `drList` (matched by empId), so
+    // render it directly — no synthetic "You" entry to avoid a duplicate row.
+    final filtered = _searchQuery.isEmpty
         ? widget.drList
         : widget.drList
-            .where((e) => e.empName.toLowerCase().contains(_searchQuery.toLowerCase()))
+            .where((e) =>
+                e.empName.toLowerCase().contains(_searchQuery.toLowerCase()))
             .toList();
-    final filtered = [
-      if (_searchQuery.isEmpty ||
-          'you'.contains(_searchQuery.toLowerCase()))
-        selfEntry,
-      ...drOnly,
-    ];
 
     return Container(
       margin: const EdgeInsets.only(top: 8),
@@ -837,6 +885,19 @@ class _ShiftCardState extends State<_ShiftCard> {
     super.dispose();
   }
 
+  /// Formats a `HH:mm` (24-hour) shift string into a 12-hour AM/PM label for
+  /// display only. Returns the original string when it can't be parsed.
+  String _formatAmPm(String raw) {
+    final parts = raw.trim().split(':');
+    if (parts.length < 2) return raw;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return raw;
+    final period = h < 12 ? 'AM' : 'PM';
+    final hour12 = h % 12 == 0 ? 12 : h % 12;
+    return '$hour12:${m.toString().padLeft(2, '0')} $period';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -878,7 +939,39 @@ class _ShiftCardState extends State<_ShiftCard> {
           ),
           const SizedBox(height: 20),
           Expanded(
-            child: Scrollbar(
+            child: widget.shifts.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(
+                          Icons.schedule_outlined,
+                          color: _unselected,
+                          size: 40,
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'No shift timings available',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF888888),
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'There are no shift timings for the selected date. Please choose a different date.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFFAAAAAA),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : Scrollbar(
               controller: _scrollController,
               thumbVisibility: true,
               child: GridView.builder(
@@ -903,7 +996,7 @@ class _ShiftCardState extends State<_ShiftCard> {
                       ),
                       alignment: Alignment.center,
                       child: Text(
-                        shift.time,
+                        _formatAmPm(shift.time),
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,

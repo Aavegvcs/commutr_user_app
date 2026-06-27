@@ -9,7 +9,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.example.commutrMain</string>
+	<string>com.user.commutr</string>
 	<key>PROJECT_ID</key>
 	<string>commutrdriverapp-a0ff3</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:337332431930:ios:448929b85c06c4543c9903</string>
+	<string>1:337332431930:ios:b9561e3f7a0926923c9903</string>
 </dict>
 </plist>

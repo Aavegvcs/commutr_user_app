@@ -155,6 +155,46 @@ class ProfileRepository {
     );
   }
 
+  /// `PATCH /Users/status` — deactivates the current user (soft delete).
+  ///
+  /// Sends `{ "userId": <userId>, "isActive": false }`. Returns `true` when the
+  /// server responds with a 2xx status, `false` otherwise. The caller is
+  /// responsible for clearing local session data / navigating on success.
+  Future<bool> deactivateUser() async {
+    final userId = _authStorage.getAuthData()?.data?.user?.userId;
+    if (userId == null || userId.isEmpty) {
+      throw Exception('User ID not found in local storage');
+    }
+
+    final body = <String, dynamic>{
+      'userId': userId,
+      'isActive': false,
+    };
+
+    final url = '${ApiConstants.authBaseUrl}/Users/status';
+    debugPrint('[PROFILE_REPO] deactivateUser → PATCH $url');
+    debugPrint(
+      '[PROFILE_REPO] deactivateUser REQUEST body:\n'
+      '${const JsonEncoder.withIndent('  ').convert(body)}',
+    );
+
+    final response = await _apiClient.dio.patch<dynamic>(
+      url,
+      data: body,
+    );
+
+    debugPrint(
+      '[PROFILE_REPO] deactivateUser ← status=${response.statusCode}',
+    );
+    debugPrint(
+      '[PROFILE_REPO] deactivateUser RESPONSE body: '
+      '${_formatLogJson(response.data)}',
+    );
+
+    final status = response.statusCode ?? 0;
+    return status >= 200 && status < 300;
+  }
+
   /// Fetches `GET /State` and matches [stateName] to its `stateCode`.
   /// Mirrors signup's `_resolveStateCode` (header `x-tenant` = tenantId,
   /// plus `Authorization: Bearer <token>`). Returns `null` on empty name /
@@ -352,6 +392,57 @@ class ProfileRepository {
     }
 
     return AddressChangeResponse.fromJson(json);
+  }
+
+  /// `GET /AddressChanges` — fetches the most recent address-change request for
+  /// [empId] so callers can show its approval status (`actionType`).
+  ///
+  /// Returns the latest [AddressChangeItem] or `null` when there are no
+  /// requests on record / the call fails.
+  Future<AddressChangeItem?> getLatestAddressChange(int empId) async {
+    final query = <String, dynamic>{
+      'searchTerm': '',
+      'empId': empId,
+      'sortColumn': 'createdOn',
+      'sortOrder': 'desc',
+      'page': 1,
+      'pageSize': 1,
+    };
+
+    debugPrint(
+      '[PROFILE_REPO] getLatestAddressChange → GET /AddressChanges '
+      'query=$query',
+    );
+
+    try {
+      final response = await _apiClient.dio.get<dynamic>(
+        '/AddressChanges',
+        queryParameters: query,
+      );
+
+      debugPrint(
+        '[PROFILE_REPO] getLatestAddressChange ← status=${response.statusCode}',
+      );
+
+      final raw = response.data;
+      Map<String, dynamic>? json;
+      if (raw is Map<String, dynamic>) {
+        json = raw;
+      } else if (raw is Map) {
+        json = Map<String, dynamic>.from(raw);
+      } else if (raw is String && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) json = Map<String, dynamic>.from(decoded);
+      }
+
+      if (json == null) return null;
+
+      final parsed = AddressChangeResponse.fromJson(json);
+      return parsed.firstItem;
+    } catch (e) {
+      debugPrint('[PROFILE_REPO] getLatestAddressChange error: $e');
+      return null;
+    }
   }
 
   /// Builds POST body: dialog supplies address/city/state/pin + lat/lng;

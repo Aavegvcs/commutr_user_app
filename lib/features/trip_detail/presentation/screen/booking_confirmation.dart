@@ -172,7 +172,7 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
                     Text(
                       widget.isUpdate
                           ? 'Schedule Updated!'
-                          : 'Booking Confirmed!',
+                          : 'Schedule Confirmed!',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontSize: 28,

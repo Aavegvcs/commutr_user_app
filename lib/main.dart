@@ -39,11 +39,36 @@ Future<void> main() async {
   await _initLocalNotifications();
   await _requestNotificationPermission();
 
+  FirebaseMessaging.instance.onTokenRefresh.listen(
+    (token) {
+      debugPrint('[FCM] Token refreshed: $token');
+
+      // The token can rotate at any time (app data cleared, reinstall, FCM
+      // server rotation). If the user is already logged in, push the new token
+      // to the backend so notifications keep arriving. When not logged in the
+      // next verifyOtp() will send the current token anyway.
+      // TODO: if a session exists, call your "update device token" endpoint
+      // here via the DI'd ApiClient, e.g.
+      //   if (authLocalStorage.isLoggedIn) deviceRepository.updateFcmToken(token);
+    },
+    onError: (error) {
+      debugPrint('[FCM] Token refresh error: $error');
+    },
+  );
+
   // Handle FCM messages received while the app is in the foreground.
+  //
+  // Android: the OS does NOT show a banner for data/notification messages while
+  // the app is foregrounded, so we render one ourselves via local
+  // notifications.
+  // iOS: setForegroundNotificationPresentationOptions (below) tells the system
+  // to present the banner itself, so we must NOT also show a local
+  // notification here or it would appear twice.
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     final notification = message.notification;
-    final android = message.notification?.android;
-    if (notification != null && android != null) {
+    if (notification == null) return;
+
+    if (Platform.isAndroid) {
       flutterLocalNotificationsPlugin.show(
         id: notification.hashCode,
         title: notification.title,

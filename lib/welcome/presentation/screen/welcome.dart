@@ -566,8 +566,10 @@ class _WelcomeState extends State<_WelcomeView> {
 
     try {
       /// Request contacts permission
-      final hasPermission =
-          await FlutterContacts.requestPermission(readonly: true);
+      final permissionStatus =
+          await FlutterContacts.permissions.request(PermissionType.read);
+      final hasPermission = permissionStatus == PermissionStatus.granted ||
+          permissionStatus == PermissionStatus.limited;
 
       if (!hasPermission) {
         if (mounted) {
@@ -584,7 +586,7 @@ class _WelcomeState extends State<_WelcomeView> {
       Contact? pickedContact;
 
       try {
-        pickedContact = await FlutterContacts.openExternalPick();
+        pickedContact = await FlutterContacts.native.showPicker();
       } catch (e) {
         debugPrint('openExternalPick error: $e');
 
@@ -599,17 +601,18 @@ class _WelcomeState extends State<_WelcomeView> {
         return;
       }
 
-      if (pickedContact == null || !mounted) return;
+      final pickedContactId = pickedContact?.id;
+      if (pickedContactId == null || pickedContactId.isEmpty || !mounted) {
+        return;
+      }
 
       /// Reload full contact safely
       Contact? fullContact;
 
       try {
-        fullContact = await FlutterContacts.getContact(
-          pickedContact.id,
-          withProperties: true,
-          withPhoto: false,
-          withThumbnail: false,
+        fullContact = await FlutterContacts.get(
+          pickedContactId,
+          properties: {ContactProperty.phone},
         );
       } catch (e) {
         debugPrint('getContact error: $e');
@@ -854,11 +857,16 @@ class _WelcomeState extends State<_WelcomeView> {
       return;
     }
 
-    final uri = Uri(scheme: 'tel', path: virtualNumber);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-      return;
+    final sanitized = virtualNumber.replaceAll(RegExp(r'[^\d+]'), '');
+    final uri = Uri(scheme: 'tel', path: sanitized);
+    // Attempt directly — canLaunchUrl is unreliable for tel: on iOS.
+    var launched = false;
+    try {
+      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      launched = false;
     }
+    if (launched) return;
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Unable to start call')),
@@ -1233,7 +1241,8 @@ class _WelcomeState extends State<_WelcomeView> {
         context: context,
         barrierDismissible: true,
         barrierColor: Colors.black.withValues(alpha: 0.5),
-        builder: (_) => _ReachedHomeResultDialog(message: msg, success: success),
+        builder: (_) =>
+            _ReachedHomeResultDialog(message: msg, success: success),
       );
     }
 
@@ -1670,8 +1679,18 @@ class _WelcomeState extends State<_WelcomeView> {
     final dt = DateTime.tryParse(raw);
     if (dt == null) return null;
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final day = dt.day.toString().padLeft(2, '0');
     return '$day ${months[dt.month - 1]} ${dt.year}';
@@ -2249,8 +2268,12 @@ class _WelcomeState extends State<_WelcomeView> {
 
     final shiftTime =
         _formatShiftTime(apiItem.shiftTime) ?? orDash(apiItem.shiftTime);
-    final pickTime =
-        _formatShiftTime(apiItem.pickTime) ?? orDash(apiItem.pickTime);
+    // The per-passenger time is a boarding time. It only makes sense on the
+    // matching trip type: a pickup time for login trips, a drop time for
+    // logout trips. We never show a drop time on a login card or a pickup
+    // time on a logout card.
+    final stopTime = _formatShiftTime(apiItem.pickTime);
+    final stopTimeLabel = isLogin ? 'Pickup' : 'Drop';
     final vehicle = orDash(apiItem.vehicleRegistrationNo);
     final tripTypeLabel = isLogin ? 'Login (Pickup)' : 'Logout (Drop)';
 
@@ -2298,7 +2321,9 @@ class _WelcomeState extends State<_WelcomeView> {
           runSpacing: 8,
           children: [
             _tripHistoryDetailChip(Icons.event_outlined, 'Date', dateLabel),
-            _tripHistoryDetailChip(Icons.alarm_on_outlined, 'Pickup', pickTime),
+            if (stopTime != null)
+              _tripHistoryDetailChip(
+                  Icons.alarm_on_outlined, stopTimeLabel, stopTime),
             _tripHistoryDetailChip(Icons.schedule_outlined, 'Shift', shiftTime),
             _tripHistoryDetailChip(
                 Icons.directions_car_outlined, 'Vehicle', vehicle),
@@ -2550,11 +2575,17 @@ class _WelcomeState extends State<_WelcomeView> {
                         Scaffold.of(scaffoldContext)
                             .openDrawer(); // ← use scaffoldContext
                       },
-                      child:
-                          const Icon(Icons.menu, color: Colors.white, size: 26),
+                      customBorder: const CircleBorder(),
+                      child: Padding(
+                        // ≥12px tap area on all sides of the menu icon
+                        padding: EdgeInsets.all(12),
+                        child: Transform.translate(
+                            offset: Offset(-12.0, 0.0),
+                            child: Icon(Icons.menu,
+                                color: Colors.white, size: 26)),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2685,17 +2716,17 @@ class _WelcomeState extends State<_WelcomeView> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: Center(
-                            child: Text(
-                              'Schedules',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF222222),
-                              ),
-                            ),
-                          ),
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          // child: Center(
+                          //   child: Text(
+                          //     'Schedules',
+                          //     style: TextStyle(
+                          //       fontSize: 18,
+                          //       fontWeight: FontWeight.w600,
+                          //       color: Color(0xFF222222),
+                          //     ),
+                          //   ),
+                          // ),
                         ),
                         _buildHomeTripAndScheduleBody(
                           context,
@@ -3046,7 +3077,10 @@ class _WelcomeState extends State<_WelcomeView> {
       if (_tripExpanded.contains(key)) {
         _tripExpanded.remove(key);
       } else {
-        _tripExpanded.add(key);
+        // Only one active card open at a time.
+        _tripExpanded
+          ..clear()
+          ..add(key);
       }
     });
   }
@@ -3056,7 +3090,10 @@ class _WelcomeState extends State<_WelcomeView> {
       if (_scheduleExpanded.contains(key)) {
         _scheduleExpanded.remove(key);
       } else {
-        _scheduleExpanded.add(key);
+        // Only one schedule card open at a time.
+        _scheduleExpanded
+          ..clear()
+          ..add(key);
       }
     });
   }
@@ -3286,7 +3323,14 @@ class _WelcomeState extends State<_WelcomeView> {
   }) {
     final widgets = <Widget>[];
 
-    for (final group in groups) {
+    // Counter that is unique across every group so each schedule card gets its
+    // own expansion key. Using only the per-group index `i` caused collisions
+    // when two date groups shared the same (or null) `dateIn` label, which made
+    // all matching Login (or Logout) cards expand together.
+    var cardIndex = 0;
+
+    for (var g = 0; g < groups.length; g++) {
+      final group = groups[g];
       // Find the visible cards in this group first; if there are none we
       // skip the heading too (cleaner UX than a dangling date label).
       final groupCards = <Widget>[];
@@ -3298,7 +3342,8 @@ class _WelcomeState extends State<_WelcomeView> {
           if (loginIso != null && activeTripKeys.contains(activeKey)) {
             // Already shown as an active trip — skip this schedule card.
           } else {
-            final key = '${group.dateIn ?? "_"}_login_$i';
+            final key = '${group.dateIn ?? "_"}_${g}_login_${i}_$cardIndex';
+            cardIndex++;
             groupCards.add(_buildScheduleCard(
               type: 'login',
               label: 'Login',
@@ -3317,7 +3362,8 @@ class _WelcomeState extends State<_WelcomeView> {
           if (logoutIso != null && activeTripKeys.contains(activeKey)) {
             // Already shown as an active trip — skip this schedule card.
           } else {
-            final key = '${group.dateIn ?? "_"}_logout_$i';
+            final key = '${group.dateIn ?? "_"}_${g}_logout_${i}_$cardIndex';
+            cardIndex++;
             groupCards.add(_buildScheduleCard(
               type: 'logout',
               label: 'Logout',
@@ -3949,9 +3995,7 @@ class _WelcomeState extends State<_WelcomeView> {
         appControlState.settings.boardDebaordEnabledForUser;
     final bool showSafeHomeReachButton = item.reachedHomeReq == 1 &&
         item.isReached != 1 &&
-        (boardDeboardEnabled
-            ? (item.isBoarded && item.isDeBoarded)
-            : true);
+        (boardDeboardEnabled ? (item.isBoarded && item.isDeBoarded) : true);
 
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
     final Color trackBg = isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
@@ -4195,8 +4239,10 @@ class _WelcomeState extends State<_WelcomeView> {
                             const SizedBox(height: 4),
                             Text(
                               isLogin
-                                  ? plannedPickup
-                                  : (_formatShiftTime(item.pickShift) ??
+                                  // ? plannedPickup
+                                  ? (_formatShiftTime(item.pickTime) ??
+                                      '--:--')
+                                  : (_formatShiftTime(item.dropShift) ??
                                       '--:--'),
                               style: const TextStyle(
                                 fontSize: 15,
@@ -4209,7 +4255,7 @@ class _WelcomeState extends State<_WelcomeView> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Expanded(
+                    !isLogin ? Expanded(
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 10),
@@ -4221,18 +4267,18 @@ class _WelcomeState extends State<_WelcomeView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              isLogin ? 'Drop Time' : 'Pickup Time',
+                            !isLogin ? Text(
+                              isLogin ? 'Pickup Time' : 'Drop Time',
                               style: const TextStyle(
                                 fontSize: 10,
                                 color: Color(0xff6B7280),
                                 fontWeight: FontWeight.w600,
                               ),
-                            ),
+                            ):SizedBox(),
                             const SizedBox(height: 4),
-                            Text(
+                            !isLogin ? Text(
                               isLogin
-                                  ? (_formatShiftTime(item.pickShift) ??
+                                  ? (_formatShiftTime(item.dropShift) ??
                                       '--:--')
                                   : plannedPickup,
                               style: const TextStyle(
@@ -4240,11 +4286,11 @@ class _WelcomeState extends State<_WelcomeView> {
                                 fontWeight: FontWeight.w700,
                                 color: Color(0xFF1A1A1A),
                               ),
-                            ),
+                            ): SizedBox(),
                           ],
                         ),
                       ),
-                    ),
+                    ):SizedBox(),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -4302,8 +4348,8 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ),
                 ),
-              ] else if (!isScheduled && isPrinted) ...[
-                // ─── Printed: Planned Pickup only ────────────────────────
+              ] else if (!isScheduled && isPrinted && isLogin) ...[
+                // ─── Printed (Login only): Planned Pickup only ───────────
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -4342,7 +4388,7 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ],
                 ),
-              ] else if (!isScheduled && !isPrinted) ...[
+              ] else if (!isScheduled && (!isPrinted || !isLogin)) ...[
                 // ─── Non-completed: Planned Pickup + Vehicle Info ─────────
                 const SizedBox(height: 16),
                 Row(
@@ -4732,24 +4778,30 @@ class _WelcomeState extends State<_WelcomeView> {
         value: context.read<SosBloc>(),
         child: BlocListener<SosBloc, SosState>(
           listener: (_, state) {
-            if (state is SosSuccess ||
-                state is SosError ||
-                state is SosUnauthorized) {
+            if (state is SosSuccess) {
               Navigator.of(dialogContext).pop();
-              final msg = state is SosSuccess
-                  ? 'SOS alert triggered successfully.'
-                  : state is SosError
-                      ? state.message
-                      : (state as SosUnauthorized).message;
-              ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(SnackBar(
-                  content: Text(msg),
-                  backgroundColor: state is SosSuccess
-                      ? const Color(0xFF1A6B3C)
-                      : const Color(0xFFB40D1A),
-                  behavior: SnackBarBehavior.floating,
-                ));
+              showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => const _SosResultDialog(
+                  success: true,
+                  message: 'SOS alert triggered successfully. Our safety team '
+                      'has been notified and your live location is being shared.',
+                ),
+              );
+            } else if (state is SosError || state is SosUnauthorized) {
+              Navigator.of(dialogContext).pop();
+              final msg = state is SosError
+                  ? state.message
+                  : (state as SosUnauthorized).message;
+              showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => _SosResultDialog(
+                  success: false,
+                  message: msg,
+                ),
+              );
             }
           },
           child: BlocBuilder<SosBloc, SosState>(
@@ -6390,7 +6442,7 @@ class _DrawerHeader extends StatelessWidget {
                   final fullName =
                       state is ProfileLoaded ? state.profile.fullName : '';
                   final empId = state is ProfileLoaded
-                      ? (state.profile.empId?.toString() ?? '')
+                      ? (state.profile.employeeId?.toString() ?? '')
                       : '';
                   final office = state is ProfileLoaded
                       ? (state.profile.locationName?.trim() ?? '')
@@ -6409,7 +6461,7 @@ class _DrawerHeader extends StatelessWidget {
                       const SizedBox(height: 2),
                       if (empId.isNotEmpty)
                         Text(
-                          'EMP ID: $empId',
+                          'Emp Id: $empId',
                           style: const TextStyle(
                               fontSize: 13, color: Color(0xFF555555)),
                         ),
@@ -6778,119 +6830,119 @@ class _RateAppDialogState extends State<_RateAppDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-            const Text(
-              'How was your ride?',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF181C1B),
+              const Text(
+                'How was your ride?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF181C1B),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Your feedback helps us keep the flow smooth.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: Color(0xFF888888),
-                fontWeight: FontWeight.w400,
+              const SizedBox(height: 8),
+              const Text(
+                'Your feedback helps us keep the flow smooth.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF888888),
+                  fontWeight: FontWeight.w400,
+                ),
               ),
-            ),
-            const SizedBox(height: 28),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(5, (i) {
-                final starIndex = i + 1;
-                return GestureDetector(
-                  onTap: () => setState(() => _rating = starIndex),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Icon(
-                      starIndex <= _rating ? Icons.star : Icons.star_border,
-                      color: starIndex <= _rating
-                          ? _primaryGreen
-                          : const Color(0xFFCCCCCC),
-                      size: 40,
+              const SizedBox(height: 28),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(5, (i) {
+                  final starIndex = i + 1;
+                  return GestureDetector(
+                    onTap: () => setState(() => _rating = starIndex),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Icon(
+                        starIndex <= _rating ? Icons.star : Icons.star_border,
+                        color: starIndex <= _rating
+                            ? _primaryGreen
+                            : const Color(0xFFCCCCCC),
+                        size: 40,
+                      ),
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                _rating > 0 ? _labels[_rating].toUpperCase() : '',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: _primaryGreen,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _remarksController,
+                minLines: 3,
+                maxLines: 5,
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Add Remarks',
+                  hintStyle: const TextStyle(color: Color(0xFF9AA0A6)),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFFB8DEC9)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: _primaryGreen, width: 1.5),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed:
+                      (_rating == 0 || _isSubmitting) ? null : _submitFeedback,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primaryGreen,
+                    disabledBackgroundColor: const Color(0xFFB0C4B8),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(50),
                     ),
                   ),
-                );
-              }),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              _rating > 0 ? _labels[_rating].toUpperCase() : '',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: _primaryGreen,
-                letterSpacing: 1.2,
-              ),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: _remarksController,
-              minLines: 3,
-              maxLines: 5,
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Add Remarks',
-                hintStyle: const TextStyle(color: Color(0xFF9AA0A6)),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFB8DEC9)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide:
-                      const BorderSide(color: _primaryGreen, width: 1.5),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed:
-                    (_rating == 0 || _isSubmitting) ? null : _submitFeedback,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primaryGreen,
-                  disabledBackgroundColor: const Color(0xFFB0C4B8),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(50),
-                  ),
-                ),
-                label: _isSubmitting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Text(
-                            'Submit Feedback',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
+                  label: _isSubmitting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
                           ),
-                          SizedBox(width: 8),
-                          Icon(Icons.send, size: 18),
-                        ],
-                      ),
+                        )
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            Text(
+                              'Submit Feedback',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            Icon(Icons.send, size: 18),
+                          ],
+                        ),
+                ),
               ),
-            ),
-          ],
+            ],
           ),
         ),
       ),
@@ -7093,7 +7145,7 @@ class _SosResultDialog extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             Text(
-              success ? 'SOS Triggered' : 'SOS Failed',
+              success ? 'SOS Triggered' : 'SOS Request Failed',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 22,
@@ -7226,9 +7278,8 @@ class _TripHistoryFilterPageState extends State<_TripHistoryFilterPage> {
   Future<void> _pickDate({required bool isFrom}) async {
     // Trip history is historical: never allow selecting a future date.
     final today = _dateOnly(DateTime.now());
-    var initial = isFrom
-        ? (_fromDate ?? today)
-        : (_toDate ?? _fromDate ?? today);
+    var initial =
+        isFrom ? (_fromDate ?? today) : (_toDate ?? _fromDate ?? today);
     if (initial.isAfter(today)) initial = today;
     final picked = await showDatePicker(
       context: context,
@@ -7799,18 +7850,44 @@ class _HelpDeskCallDialog extends StatelessWidget {
   final String phoneNumber;
 
   Future<void> _makeCall(BuildContext context) async {
-    final uri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(const SnackBar(
-            content: Text('Could not launch the dialer. Please try manually.'),
-            behavior: SnackBarBehavior.floating,
-          ));
+    // Capture the navigator + messenger from the rootmost (still-mounted)
+    // context BEFORE any async gap, so popping the dialog can't leave us
+    // referencing a deactivated element.
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    // Sanitize: keep only digits and a leading '+', so formatted numbers like
+    // "+91 98765 43210" produce a valid tel: URI.
+    final sanitized = phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
+    final uri = Uri(scheme: 'tel', path: sanitized);
+
+    // Attempt the launch directly — canLaunchUrl() is unreliable for tel: on
+    // iOS. Try externalApplication first, then fall back to platformDefault
+    // (some iOS configs reject externalApplication for the tel: scheme).
+    var launched = false;
+    try {
+      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      launched = false;
+    }
+    if (!launched) {
+      try {
+        launched = await launchUrl(uri, mode: LaunchMode.platformDefault);
+      } catch (_) {
+        launched = false;
       }
+    }
+
+    // Close the dialog once the launch attempt is done.
+    if (navigator.canPop()) navigator.pop();
+
+    if (!launched) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('Could not launch the dialer. Please try manually.'),
+          behavior: SnackBarBehavior.floating,
+        ));
     }
   }
 
@@ -7889,10 +7966,7 @@ class _HelpDeskCallDialog extends StatelessWidget {
               children: [
                 Expanded(
                   child: GestureDetector(
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      _makeCall(context);
-                    },
+                    onTap: () => _makeCall(context),
                     child: Container(
                       height: 52,
                       decoration: BoxDecoration(

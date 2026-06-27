@@ -9,16 +9,145 @@ import 'package:flutter/material.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
-class TripSummaryWelcomeScreen extends StatelessWidget {
-  const TripSummaryWelcomeScreen({super.key, required this.item});
+class TripSummaryWelcomeScreen extends StatefulWidget {
+  const TripSummaryWelcomeScreen({
+    super.key,
+    required this.item,
+    this.fromTeamCab = false,
+  });
 
   final TripHomeItem item;
 
+  /// When opened from the Team Cab screen, we additionally fetch and render the
+  /// full cab-tracking details (driver / vehicle / OTP / timings / passengers)
+  /// for the passed [TripHomeItem.tripId] (`dsId`) + [TripHomeItem.empId].
+  final bool fromTeamCab;
+
+  @override
+  State<TripSummaryWelcomeScreen> createState() =>
+      _TripSummaryWelcomeScreenState();
+}
+
+class _TripSummaryWelcomeScreenState extends State<TripSummaryWelcomeScreen> {
+  TripHomeItem get item => widget.item;
+  bool get fromTeamCab => widget.fromTeamCab;
+
+  // Cab-tracking detail fetched when [fromTeamCab] — drives both the new
+  // details section and the enrichment of the top cards (addresses / vehicle /
+  // times), which the team-cab [TripHomeItem] otherwise leaves blank.
+  bool _detailLoading = false;
+  TrackingStatusResponse? _status;
+  CabTrackingData? _cab;
+
+  @override
+  void initState() {
+    super.initState();
+    if (fromTeamCab && item.tripId != null) {
+      _loadTeamCabDetail();
+    }
+  }
+
+  Future<void> _loadTeamCabDetail() async {
+    setState(() => _detailLoading = true);
+    final repo = sl<UserCabTrackingRepo>();
+    final results = await Future.wait([
+      repo
+          .getTrackingStatus(tripId: item.tripId!)
+          .then<TrackingStatusResponse?>((v) => v)
+          .catchError((e) {
+        debugPrint('[TEAM_CAB_DETAIL] getTrackingStatus failed: $e');
+        return null;
+      }),
+      if (item.empId != null)
+        repo
+            .getUserCabTracking(empId: item.empId!, tripId: item.tripId!)
+            .then<CabTrackingData?>((v) => v)
+            .catchError((e) {
+          debugPrint('[TEAM_CAB_DETAIL] getUserCabTracking failed: $e');
+          return null;
+        }),
+    ]);
+
+    if (!mounted) return;
+    setState(() {
+      _detailLoading = false;
+      _status = results[0] as TrackingStatusResponse?;
+      _cab = results.length > 1 ? results[1] as CabTrackingData? : null;
+    });
+  }
+
+  /// The [item] enriched with whatever the cab-tracking APIs returned, so the
+  /// existing top cards (addresses / vehicle / times) show real data instead of
+  /// the blanks the bare team-cab [TripHomeItem] carries.
+  TripHomeItem get _effectiveItem {
+    final status = _status;
+    final cab = _cab;
+    if (status == null && cab == null) return item;
+
+    String? nz(String? a, String? b) {
+      final av = a?.trim();
+      if (av != null && av.isNotEmpty) return av;
+      final bv = b?.trim();
+      return (bv != null && bv.isNotEmpty) ? bv : null;
+    }
+
+    // For login (pick) the user pickup is the planned passenger location; the
+    // office address/latlng come from the status payload.
+    final userPax = _matchedPassenger(status);
+
+    return TripHomeItem(
+      tripId: item.tripId,
+      empId: item.empId,
+      userName: nz(item.userName, userPax?.fullName),
+      tripType: item.tripType,
+      tripStatusName: item.tripStatusName,
+      tripStatusCode: item.tripStatusCode,
+      tripDate: item.tripDate,
+      cancelorNoshow: item.cancelorNoshow,
+      userAddress: nz(item.userAddress, userPax?.address),
+      officeAddress: nz(item.officeAddress, status?.officeAddress),
+      officeLatLng: item.officeLatLng ??
+          ((status?.officeLat != null && status?.officeLng != null)
+              ? '${status!.officeLat},${status.officeLng}'
+              : null),
+      empLatLng: item.empLatLng ??
+          ((userPax?.pickupLat != null && userPax?.pickupLng != null)
+              ? '${userPax!.pickupLat},${userPax.pickupLng}'
+              : null),
+      vehicleInfo: nz(item.vehicleInfo, status?.vehicleNo ??
+          cab?.vehicleRegistrationNo),
+      pickShift: nz(item.pickShift, _formatShiftTime(status?.scheduledStartTime)),
+      pickTime: nz(item.pickTime, _formatShiftTime(userPax?.plannedScheduleTime)),
+      paxCount: item.paxCount ?? status?.totalPax ?? cab?.passengerCount,
+      paxOrder: item.paxOrder ?? userPax?.paxOrder ?? cab?.paxOrder,
+      otp: nz(item.otp, cab?.otp?.toString()),
+    );
+  }
+
+  /// Best-effort match of the logged-in employee within the status passenger
+  /// list (by empId, else by name).
+  TripPassenger? _matchedPassenger(TrackingStatusResponse? status) {
+    if (status == null || status.passengers.isEmpty) return null;
+    for (final p in status.passengers) {
+      if (item.empId != null && p.empId == item.empId) return p;
+    }
+    final name = item.userName?.trim().toLowerCase();
+    if (name != null && name.isNotEmpty) {
+      for (final p in status.passengers) {
+        if (p.fullName.trim().toLowerCase() == name) return p;
+      }
+    }
+    return status.passengers.first;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final cancelOrNoShow = item.cancelorNoshow?.trim();
-    final showMapPreview =
-        cancelOrNoShow != 'Cancelled' && cancelOrNoShow != 'Noshow';
+    final renderItem = fromTeamCab ? _effectiveItem : item;
+    final cancelOrNoShow = renderItem.cancelorNoshow?.trim();
+    // Cancelled / no-show trips never travelled, so there is no actual GPS
+    // trail. We still show the map with the *planned* route (drawn dashed).
+    final plannedOnly =
+        cancelOrNoShow == 'Cancelled' || cancelOrNoShow == 'Noshow';
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2F1),
       body: SafeArea(
@@ -53,15 +182,26 @@ class TripSummaryWelcomeScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   children: [
-                    if (showMapPreview) ...[
-                      _MapCard(item: item),
+                    _MapCard(item: renderItem, plannedOnly: plannedOnly),
+                    const SizedBox(height: 16),
+                    _TripDetailCard(item: renderItem),
+                    if (fromTeamCab) ...[
+                      // Team-cab summary: show only the route map, trip
+                      // addresses and the passenger list — nothing else.
+                      if (item.tripId != null) ...[
+                        const SizedBox(height: 16),
+                        _TeamCabPassengersCard(
+                          loading: _detailLoading,
+                          status: _status,
+                          isLogin: renderItem.isLogin,
+                        ),
+                      ],
+                    ] else ...[
                       const SizedBox(height: 16),
+                      _VehicleDetailCard(item: renderItem),
+                      const SizedBox(height: 16),
+                      _PickupDropRow(item: renderItem),
                     ],
-                    _TripDetailCard(item: item),
-                    const SizedBox(height: 16),
-                    _VehicleDetailCard(item: item),
-                    const SizedBox(height: 16),
-                    _PickupDropRow(item: item),
                     const SizedBox(height: 24),
                   ],
                 ),
@@ -78,16 +218,48 @@ String? _formatShiftTime(String? raw) {
   if (raw == null) return null;
   final trimmed = raw.trim();
   if (trimmed.isEmpty) return null;
+  // Full ISO date-time (e.g. "2026-06-27T12:40:27") → keep just the time.
+  final dt = DateTime.tryParse(trimmed);
+  if (dt != null && trimmed.contains('T')) {
+    return _formatTime12(dt.hour, dt.minute);
+  }
   final parts = trimmed.split(':');
   if (parts.length < 2) return null;
   final h = int.tryParse(parts[0]);
   final m = int.tryParse(parts[1]);
   if (h == null || m == null) return null;
+  return _formatTime12(h, m);
+}
+
+String _formatTime12(int h, int m) {
   final period = h >= 12 ? 'PM' : 'AM';
   var hour12 = h % 12;
   if (hour12 == 0) hour12 = 12;
   final mm = m.toString().padLeft(2, '0');
   return '$hour12:$mm $period';
+}
+
+const List<String> _kMonthsShort = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// Formats an ISO / `HH:mm:ss` string to Indian-local `dd MMM yyyy, h:mm AM/PM`
+/// (date dropped when the source has no date component). Returns null when the
+/// input is null/blank/unparseable.
+String? _formatIndianDateTime(String? raw, {bool dateOnly = false}) {
+  final trimmed = raw?.trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+
+  final dt = DateTime.tryParse(trimmed);
+  if (dt != null) {
+    final date =
+        '${dt.day.toString().padLeft(2, '0')} ${_kMonthsShort[dt.month - 1]} ${dt.year}';
+    if (dateOnly || !trimmed.contains('T')) return date;
+    return '$date, ${_formatTime12(dt.hour, dt.minute)}';
+  }
+  // Plain HH:mm[:ss].
+  return _formatShiftTime(trimmed);
 }
 
 String? _plannedPickupLabel(TripHomeItem item) {
@@ -116,9 +288,13 @@ String? _plannedPickupLabel(TripHomeItem item) {
 // ─── Map Card ────────────────────────────────────────────────────────────────
 
 class _MapCard extends StatelessWidget {
-  const _MapCard({required this.item});
+  const _MapCard({required this.item, this.plannedOnly = false});
 
   final TripHomeItem item;
+
+  /// When true (cancelled / no-show), only the planned route is drawn (dashed)
+  /// and a "PLANNED ROUTE" badge is shown instead of "TRIP COMPLETED".
+  final bool plannedOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -152,13 +328,13 @@ class _MapCard extends StatelessWidget {
               width: double.infinity,
               child: Stack(
                 children: [
-                  _TripRouteMap(item: item),
+                  _TripRouteMap(item: item, plannedOnly: plannedOnly),
                   // Transparent tap layer above the (non-interactive) preview
                   // map so the whole area opens the full-screen route modal.
                   Positioned.fill(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => _showRouteModal(context, item),
+                      onTap: () => _showRouteModal(context, item, plannedOnly),
                     ),
                   ),
                   Positioned(
@@ -186,7 +362,7 @@ class _MapCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (item.isCompleted)
+                  if (plannedOnly)
                     Positioned(
                       bottom: 14,
                       left: 14,
@@ -196,7 +372,42 @@ class _MapCard extends StatelessWidget {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFB8C4E0).withOpacity(0.88),
+                          color: const Color(0xFFB0B6C2).withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.route,
+                              color: Color(0xFF4A5568),
+                              size: 18,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'PLANNED ROUTE',
+                              style: TextStyle(
+                                color: Color(0xFF4A5568),
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else if (item.isCompleted)
+                    Positioned(
+                      bottom: 14,
+                      left: 14,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFB8C4E0).withValues(alpha: 0.88),
                           borderRadius: BorderRadius.circular(30),
                         ),
                         child: const Row(
@@ -232,30 +443,36 @@ class _MapCard extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      timeLabel,
-                      style: const TextStyle(
-                        color: Color(0xFF9E9E9E),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        timeLabel,
+                        style: const TextStyle(
+                          color: Color(0xFF9E9E9E),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                        ),
                       ),
-                    ),
-                    Text(
-                      shiftTime,
-                      style: const TextStyle(
-                        color: Color(0xFF1A1A1A),
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
+                      Text(
+                        shiftTime,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF1A1A1A),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-                if (seqLabel != null)
+                if (seqLabel != null) ...[
+                  const SizedBox(width: 8),
                   Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(
                         Icons.accessible_forward,
@@ -273,6 +490,7 @@ class _MapCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                ],
               ],
             ),
           ),
@@ -287,10 +505,18 @@ class _MapCard extends StatelessWidget {
 /// The resolved markers + polyline for a trip route, shared by the inline
 /// preview map and the full-screen modal.
 class _TripRouteData {
-  const _TripRouteData({required this.markers, required this.polylinePoints});
+  const _TripRouteData({
+    required this.markers,
+    required this.polylinePoints,
+    this.isPlanned = false,
+  });
 
   final Set<Marker> markers;
   final List<LatLng> polylinePoints;
+
+  /// True when [polylinePoints] is the planned route (no actual GPS trail),
+  /// so the map should draw it as a dashed line.
+  final bool isPlanned;
 }
 
 /// Decodes an encoded Google polyline string into [LatLng] points.
@@ -332,7 +558,10 @@ Set<Marker> _stopMarkers(List<MapRouteStop> stops) {
 /// 2. `GET /UserApp/GetUserCabTracking` → office + current cab markers, and
 ///    `POST /Tracking/status` → per-passenger planned-pickup markers
 ///    (`plannedLat`/`plannedLng`).
-Future<_TripRouteData> _fetchTripRoute(TripHomeItem item) async {
+Future<_TripRouteData> _fetchTripRoute(
+  TripHomeItem item, {
+  bool plannedOnly = false,
+}) async {
   final tripId = item.tripId;
   final empId = item.empId;
 
@@ -348,6 +577,7 @@ Future<_TripRouteData> _fetchTripRoute(TripHomeItem item) async {
     return _TripRouteData(
       markers: _stopMarkers(routeStops),
       polylinePoints: stopPoints.length >= 2 ? stopPoints : const [],
+      isPlanned: plannedOnly || stopPoints.length >= 2,
     );
   }
 
@@ -383,10 +613,17 @@ Future<_TripRouteData> _fetchTripRoute(TripHomeItem item) async {
   final status = results[1] as TrackingStatusResponse?;
   final cab = results.length > 2 ? results[2] as CabTrackingData? : null;
 
-  // ── Polyline: decode actualRoutePolyline (fallback planned → stops) ──
-  final decoded = _decodeRoutePolyline(
-    gpsRoute?.actualRoutePolyline ?? gpsRoute?.plannedRoutePolyline,
-  );
+  // ── Polyline ──
+  // For cancelled / no-show trips there is no actual GPS trail, so prefer the
+  // planned route. Otherwise prefer the actual route, falling back to planned.
+  final encoded = plannedOnly
+      ? (gpsRoute?.plannedRoutePolyline ?? gpsRoute?.actualRoutePolyline)
+      : (gpsRoute?.actualRoutePolyline ?? gpsRoute?.plannedRoutePolyline);
+  final decoded = _decodeRoutePolyline(encoded);
+  // Whether what we're drawing is planned (dashed) rather than actually driven.
+  final usedActual =
+      !plannedOnly && (gpsRoute?.actualRoutePolyline?.trim().isNotEmpty == true);
+  final isPlanned = !usedActual;
   final polylinePoints = decoded.isNotEmpty
       ? decoded
       : (stopPoints.length >= 2 ? stopPoints : <LatLng>[]);
@@ -445,27 +682,40 @@ Future<_TripRouteData> _fetchTripRoute(TripHomeItem item) async {
   return _TripRouteData(
     markers: finalMarkers,
     polylinePoints: polylinePoints,
+    isPlanned: isPlanned,
   );
 }
 
 /// Opens the full-screen route map modal for [item].
-void _showRouteModal(BuildContext context, TripHomeItem item) {
+void _showRouteModal(
+  BuildContext context,
+  TripHomeItem item,
+  bool plannedOnly,
+) {
   showDialog<void>(
     context: context,
     barrierColor: Colors.black54,
-    builder: (_) => _TripRouteModal(item: item),
+    builder: (_) => _TripRouteModal(item: item, plannedOnly: plannedOnly),
   );
 }
 
 // ─── Trip Route Google Map ────────────────────────────────────────────────────
 
 class _TripRouteMap extends StatefulWidget {
-  const _TripRouteMap({required this.item, this.interactive = false});
+  const _TripRouteMap({
+    required this.item,
+    this.interactive = false,
+    this.plannedOnly = false,
+  });
 
   final TripHomeItem item;
 
   /// When true, map gestures + zoom controls are enabled (used in the modal).
   final bool interactive;
+
+  /// When true (cancelled / no-show), only the planned route is fetched and
+  /// drawn dashed.
+  final bool plannedOnly;
 
   @override
   State<_TripRouteMap> createState() => _TripRouteMapState();
@@ -529,7 +779,10 @@ class _TripRouteMapState extends State<_TripRouteMap> {
       });
     }
 
-    final data = await _fetchTripRoute(widget.item);
+    final data = await _fetchTripRoute(
+      widget.item,
+      plannedOnly: widget.plannedOnly,
+    );
 
     if (!mounted) return;
 
@@ -546,9 +799,15 @@ class _TripRouteMapState extends State<_TripRouteMap> {
         _polylines = {
           Polyline(
             polylineId: const PolylineId('trip_route'),
-            color: const Color(0xFF1A3A8F),
+            // Planned route → muted dashed line; actual driven route → solid.
+            color: data.isPlanned
+                ? const Color(0xFF1A3A8F).withValues(alpha: 0.6)
+                : const Color(0xFF1A3A8F),
             width: 3,
             points: data.polylinePoints,
+            patterns: data.isPlanned
+                ? [PatternItem.dash(16), PatternItem.gap(8)]
+                : const [],
           ),
         };
       }
@@ -613,9 +872,10 @@ class _TripRouteMapState extends State<_TripRouteMap> {
 // ─── Full-screen Route Modal ──────────────────────────────────────────────────
 
 class _TripRouteModal extends StatelessWidget {
-  const _TripRouteModal({required this.item});
+  const _TripRouteModal({required this.item, this.plannedOnly = false});
 
   final TripHomeItem item;
+  final bool plannedOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -635,7 +895,11 @@ class _TripRouteModal extends StatelessWidget {
         child: Stack(
           children: [
             Positioned.fill(
-              child: _TripRouteMap(item: item, interactive: true),
+              child: _TripRouteMap(
+                item: item,
+                interactive: true,
+                plannedOnly: plannedOnly,
+              ),
             ),
             Positioned(
               top: 12,
@@ -677,9 +941,9 @@ class _TripRouteModal extends StatelessWidget {
                     ),
                   ],
                 ),
-                child: const Text(
-                  'Trip Route',
-                  style: TextStyle(
+                child: Text(
+                  plannedOnly ? 'Planned Route' : 'Trip Route',
+                  style: const TextStyle(
                     color: Color(0xFF004128),
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
@@ -902,19 +1166,227 @@ class _PickupDropRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLogin = item.isLogin;
-    final plannedPickup = _plannedPickupLabel(item) ?? '--:--';
+    final plannedStop = _plannedPickupLabel(item);
     final shiftTime = _formatShiftTime(item.pickShift) ?? '--:--';
-    final pickupTime = isLogin ? plannedPickup : shiftTime;
-    final dropTime = isLogin ? shiftTime : plannedPickup;
-    final pickupLabel = isLogin ? 'Pickup' : 'Drop Time';
-    final dropLabel = isLogin ? 'Drop Timing' : 'Pickup Time';
+    final shiftLabel = isLogin ? 'Login Shift' : 'Logout Shift';
+    // Pickup time for login trips, drop time for logout trips. Only show the
+    // card when a real value exists — hide it entirely when null/empty.
+    final stopLabel = isLogin ? 'Pickup Time' : 'Drop Time';
+    final hasStopTime = plannedStop != null && plannedStop.trim().isNotEmpty;
 
     return Row(
       children: [
-        Expanded(child: _TimeCard(label: pickupLabel, time: pickupTime)),
-        const SizedBox(width: 14),
-        Expanded(child: _TimeCard(label: dropLabel, time: dropTime)),
+        if (hasStopTime) ...[
+          Expanded(child: _TimeCard(label: stopLabel, time: plannedStop)),
+          const SizedBox(width: 14),
+        ],
+        Expanded(child: _TimeCard(label: shiftLabel, time: shiftTime)),
       ],
+    );
+  }
+}
+
+// ─── Team Cab Passengers Card ──────────────────────────────────────────────────
+
+/// Renders only the passenger list for a team-cab trip from the already-fetched
+/// `POST /Tracking/status` data. Status labels adapt to Login (pickup) vs Logout
+/// (drop). Hidden entirely when there are no passengers.
+class _TeamCabPassengersCard extends StatelessWidget {
+  const _TeamCabPassengersCard({
+    required this.loading,
+    required this.status,
+    required this.isLogin,
+  });
+
+  final bool loading;
+  final TrackingStatusResponse? status;
+  final bool isLogin;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return Container(
+        decoration: _cardDecoration(),
+        padding: const EdgeInsets.symmetric(vertical: 32),
+        child: const Center(
+          child: SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.5,
+              color: Color(0xFF1B5E3B),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final passengers = status?.passengers ?? const <TripPassenger>[];
+    if (passengers.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: _cardDecoration(),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'PASSENGERS (${passengers.length})',
+            style: const TextStyle(
+              color: Color(0xFF596064),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (var i = 0; i < passengers.length; i++)
+            _PassengerTile(
+              pax: passengers[i],
+              isLogin: isLogin,
+              showDivider: i != passengers.length - 1,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+BoxDecoration _cardDecoration() => BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: const Color(0xFFE8E8E8), width: 1),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 10,
+          offset: const Offset(0, 3),
+        ),
+      ],
+    );
+
+class _PassengerTile extends StatelessWidget {
+  const _PassengerTile({
+    required this.pax,
+    required this.isLogin,
+    required this.showDivider,
+  });
+
+  final TripPassenger pax;
+  final bool isLogin;
+  final bool showDivider;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = pax.fullName.trim().isEmpty ? 'Passenger' : pax.fullName;
+    final order = pax.paxOrder;
+    final address = pax.address?.trim();
+
+    // For login trips the relevant time is sign-in (pickup); for logout it's
+    // sign-out / reached-home (drop). Shown in Indian-local date-time format.
+    final timeRaw = isLogin
+        ? pax.empSigninTime
+        : (pax.empSignOutTime ?? pax.reachedHomeTime);
+    final time = _formatIndianDateTime(timeRaw);
+
+    final String statusText;
+    final Color statusColor;
+    if (pax.isNoShow) {
+      statusText = 'No Show';
+      statusColor = const Color(0xFFDC2626);
+    } else if (isLogin) {
+      statusText = pax.isBoarded ? 'Boarded' : 'Not Boarded';
+      statusColor = pax.isBoarded
+          ? const Color(0xFF1A6B3C)
+          : const Color(0xFF7C3AED);
+    } else {
+      statusText = pax.isDropped ? 'Dropped' : 'En-Route';
+      statusColor = pax.isDropped
+          ? const Color(0xFF1A6B3C)
+          : const Color(0xFF1D4ED8);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: const Color(0xFF1B5E3B).withValues(alpha: 0.12),
+                child: Text(
+                  order != null ? '$order' : '•',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1B5E3B),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1A1A1A),
+                      ),
+                    ),
+                    if (address != null && address.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        address,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
+                    if (time != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '${isLogin ? 'Pickup' : 'Drop'}: $time',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  statusText,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: statusColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (showDivider) ...[
+            const SizedBox(height: 10),
+            const Divider(height: 1, color: Color(0xFFEFEFEF)),
+          ],
+        ],
+      ),
     );
   }
 }

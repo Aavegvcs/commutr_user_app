@@ -1,12 +1,14 @@
 export 'package:commutr_main/profile/presentation/profile_user_data.dart';
 
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/location_data.dart';
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/pin_map_screen.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/bloc/profile_event.dart';
 import 'package:commutr_main/profile/bloc/profile_state.dart';
+import 'package:commutr_main/profile/data/repository/profile_repository.dart';
 import 'package:commutr_main/profile/presentation/profile_user_data.dart';
 import 'package:commutr_main/profile/presentation/screen/edit_profile.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -275,16 +278,20 @@ class _ProfileViewState extends State<_ProfileView> {
                                         fontWeight: FontWeight.w400,
                                       ),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'ID: ${userData.empId}',
-                                      style: TextStyle(
-                                        color: Colors.white.withValues(alpha: 0.8),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w400,
-                                        letterSpacing: 0.5,
+                                    if (userData.employeeId != null &&
+                                        userData.employeeId!.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Emp Id: ${userData.employeeId}',
+                                        style: TextStyle(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.8),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w400,
+                                          letterSpacing: 0.5,
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -376,11 +383,43 @@ class _ProfileViewState extends State<_ProfileView> {
                         //
                         // const SizedBox(height: 10),
 
+                        // Terms of Service
+                        _buildNavCard(
+                          icon: Icons.description_outlined,
+                          label: 'Terms of Service',
+                          onTap: _openTermsOfService,
+                        ),
+
+                        const SizedBox(height: 10),
+
                         // Privacy Policy
                         _buildNavCard(
                           icon: Icons.security_outlined,
                           label: 'Privacy Policy',
-                          onTap: () {},
+                          onTap: _openPrivacyPolicy,
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        // ACCOUNT SETTINGS heading
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'ACCOUNT SETTINGS',
+                            style: TextStyle(
+                              color: Colors.grey.shade500,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        // Delete Account
+                        _buildDeleteAccountCard(
+                          onTap: _showDeleteAccountDialog,
                         ),
 
                         const SizedBox(height: 20),
@@ -1097,6 +1136,347 @@ class _ProfileViewState extends State<_ProfileView> {
         ],
       ),
     );
+  }
+
+  Widget _buildDeleteAccountCard({required VoidCallback onTap}) {
+    const deleteRed = Color(0xFFBA1A1A);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF0EE),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.delete_outline,
+                color: deleteRed,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Text(
+                'Delete Account',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: deleteRed,
+                ),
+              ),
+            ),
+            Icon(
+              Icons.chevron_right,
+              color: Colors.grey.shade500,
+              size: 24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDeleteAccountDialog() {
+    const deleteRed = Color(0xFFBA1A1A);
+    bool isDeleting = false;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> onConfirmDelete() async {
+              setDialogState(() => isDeleting = true);
+              try {
+                final success =
+                    await sl<ProfileRepository>().deactivateUser();
+                if (!dialogContext.mounted) return;
+
+                if (success) {
+                  // API succeeded → clear local session (existing logout flow)
+                  // and route the user back to the login screen.
+                  clearBearerTokenFromApiClients();
+                  await sl<AuthLocalStorage>().clearAuthData();
+                  if (!dialogContext.mounted) return;
+                  Navigator.of(dialogContext).pop(); // close confirm dialog
+                  _showResultDialog(
+                    success: true,
+                    message: 'User Deleted Successfully',
+                  );
+                } else {
+                  setDialogState(() => isDeleting = false);
+                  Navigator.of(dialogContext).pop();
+                  _showResultDialog(
+                    success: false,
+                    message: 'Failed to delete account. Please try again.',
+                  );
+                }
+              } catch (e) {
+                if (!dialogContext.mounted) return;
+                setDialogState(() => isDeleting = false);
+                Navigator.of(dialogContext).pop();
+                _showResultDialog(
+                  success: false,
+                  message: 'Failed to delete account. Please try again.',
+                );
+              }
+            }
+
+            return Dialog(
+              backgroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFFF0EE),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.delete_outline,
+                          color: deleteRed,
+                          size: 30,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Delete Account',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xff181C1B),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Are you sure you want to delete your account? '
+                      'This action is permanent and cannot be undone.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Color(0xFF888888),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _primaryGreen,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(50),
+                              ),
+                            ),
+                            onPressed: isDeleting
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: deleteRed,
+                              side: const BorderSide(
+                                color: Color(0xFFFFCCCC),
+                                width: 1.5,
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(50),
+                              ),
+                            ),
+                            onPressed: isDeleting ? null : onConfirmDelete,
+                            child: isDeleting
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: deleteRed,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Delete Account',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Shows the post-delete result popup. On success it routes the user to the
+  /// login screen when the popup is dismissed; on error it simply closes.
+  void _showResultDialog({
+    required bool success,
+    required String message,
+  }) {
+    if (!mounted) return;
+    const deleteRed = Color(0xFFBA1A1A);
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (resultContext) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: success
+                      ? const Color(0xFFE8F5EE)
+                      : const Color(0xFFFFF0EE),
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Icon(
+                    success ? Icons.check_circle_outline : Icons.error_outline,
+                    color: success ? _primaryGreen : deleteRed,
+                    size: 32,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                success ? 'Success' : 'Error',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xff181C1B),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Color(0xFF888888),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 28),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primaryGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(50),
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.of(resultContext).pop();
+                    if (success) {
+                      Navigator.of(context, rootNavigator: true)
+                          .pushAndRemoveUntil(
+                        MaterialPageRoute(
+                          builder: (_) => const MobileNoVerification(),
+                        ),
+                        (route) => false,
+                      );
+                    }
+                  },
+                  child: const Text(
+                    'OK',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openTermsOfService() async {
+    final uri = Uri.parse('https://www.aaveg.com/Terms_of_services');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open Terms of Service'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    final uri = Uri.parse('https://www.aaveg.com/privacy-policy');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open Privacy Policy'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Widget _buildNavCard({

@@ -19,6 +19,13 @@ class AddressChangeItem {
   final String? address;
   final String? effectivedate;
 
+  /// Approval state of the address-change request:
+  /// `'A'` approved, `'R'` rejected, `null`/other → under review.
+  final String? actionType;
+
+  /// Remark provided by the approver when a request is rejected.
+  final String? rejectionRemark;
+
   const AddressChangeItem({
     this.profileUpdateId,
     this.id,
@@ -31,6 +38,8 @@ class AddressChangeItem {
     this.stateCode,
     this.address,
     this.effectivedate,
+    this.actionType,
+    this.rejectionRemark,
   });
 
   factory AddressChangeItem.fromJson(Map<String, dynamic> json) {
@@ -47,6 +56,9 @@ class AddressChangeItem {
       stateCode: _readInt(data, ['stateCode', 'StateCode']),
       address: _readString(data, ['address', 'Address']),
       effectivedate: _readString(data, ['effectivedate', 'effectiveDate']),
+      actionType: _readString(data, ['actionType', 'ActionType']),
+      rejectionRemark:
+          _readString(data, ['rejection_Remark', 'rejectionRemark']),
     );
   }
 }

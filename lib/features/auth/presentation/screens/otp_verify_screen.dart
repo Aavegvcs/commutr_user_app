@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:otp_autofill/otp_autofill.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../bloc/auth_bloc.dart';
 import '../../bloc/auth_event.dart';
@@ -222,6 +225,11 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
     } else if (value.isEmpty && index > 0) {
       _focusNodes[index - 1].requestFocus();
     }
+
+    // iOS only: dismiss the keyboard once all OTP fields are filled.
+    if (Platform.isIOS && _enteredOtp.length == _otpLength) {
+      FocusScope.of(context).unfocus();
+    }
   }
 
   String get _enteredOtp => _controllers.map((c) => c.text).join();
@@ -238,6 +246,32 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
     await _stopUserConsentListener();
     _startUserConsentListener();
     _authBloc.add(RequestOtpEvent(widget.otp));
+  }
+
+  Future<void> _openTermsOfService() async {
+    final uri = Uri.parse('https://www.aaveg.com/Terms_of_services');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open Terms of Service'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    final uri = Uri.parse('https://www.aaveg.com/privacy-policy');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open Privacy Policy'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   void _onManualVerifyPressed() {
@@ -479,25 +513,30 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
                     child: Center(
                       child: RichText(
                         textAlign: TextAlign.center,
-                        text: const TextSpan(
-                          style: TextStyle(
+                        text: TextSpan(
+                          style: const TextStyle(
                               color: Color(0xFF888888), fontSize: 13),
                           children: [
-                            TextSpan(text: 'By continuing, you agree to our '),
+                            const TextSpan(
+                                text: 'By continuing, you agree to our '),
                             TextSpan(
                               text: 'Terms of Service',
-                              style: TextStyle(
+                              recognizer: TapGestureRecognizer()
+                                ..onTap = _openTermsOfService,
+                              style: const TextStyle(
                                   color: Colors.black87,
                                   fontWeight: FontWeight.w500),
                             ),
-                            TextSpan(text: '  and\n'),
+                            const TextSpan(text: '  and\n'),
                             TextSpan(
                               text: 'Privacy Policy',
-                              style: TextStyle(
+                              recognizer: TapGestureRecognizer()
+                                ..onTap = _openPrivacyPolicy,
+                              style: const TextStyle(
                                   color: Colors.black87,
                                   fontWeight: FontWeight.w500),
                             ),
-                            TextSpan(text: '.'),
+                            const TextSpan(text: '.'),
                           ],
                         ),
                       ),

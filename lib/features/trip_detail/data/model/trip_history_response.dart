@@ -100,6 +100,7 @@ class TripHistoryTrip {
   final String? vehicleRegistrationNo;
   final String? tripStatus;
   final String? loginShift;
+  final String? logoutShift;
   final List<TripHistoryPassenger> passengers;
 
   const TripHistoryTrip({
@@ -111,8 +112,20 @@ class TripHistoryTrip {
     this.vehicleRegistrationNo,
     this.tripStatus,
     this.loginShift,
+    this.logoutShift,
     this.passengers = const [],
   });
+
+  static String? _clean(String? raw) {
+    final s = raw?.trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  /// Shift time for a given trip type — `LoginShift` for PICK trips,
+  /// `LogoutShift` for DROP trips. Never crosses over: a login trip must not
+  /// surface the logout shift, and vice versa.
+  String? shiftTimeFor({required bool isPick}) =>
+      _clean(isPick ? loginShift : logoutShift);
 
   factory TripHistoryTrip.fromJson(Map<String, dynamic> json) {
     final rawB = json['B'];
@@ -136,6 +149,7 @@ class TripHistoryTrip {
       vehicleRegistrationNo: json['Vehicle_Registration_No']?.toString(),
       tripStatus: json['TripStatus']?.toString(),
       loginShift: json['LoginShift']?.toString(),
+      logoutShift: json['LogoutShift']?.toString(),
       passengers: passengers,
     );
   }
@@ -411,12 +425,13 @@ class TripHistoryItem {
     for (final trip in trips) {
       for (final pax in trip.passengers) {
         if (pax.empId != empId) continue;
+        final isPick = isPickTripType(pax.tripType);
         items.add(
           TripHistoryItem(
             tripId: trip.tripId,
             empId: pax.empId,
             tripDate: trip.tripDate,
-            shiftTime: trip.loginShift,
+            shiftTime: trip.shiftTimeFor(isPick: isPick),
             tripType: pax.tripType,
             tripStatus: trip.tripStatus,
             pickTime: pax.pickTime,

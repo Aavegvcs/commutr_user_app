@@ -51,7 +51,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCaA9VRh8L_SfLZR6aOwUBgPlZXTXz4wGM',
-    appId: '1:337332431930:android:cca7a9c4cbc20e173c9903',
+    appId: '1:337332431930:android:a44c1450389354a43c9903',
     messagingSenderId: '337332431930',
     projectId: 'commutrdriverapp-a0ff3',
     storageBucket: 'commutrdriverapp-a0ff3.firebasestorage.app',
@@ -65,16 +65,14 @@ class DefaultFirebaseOptions {
     storageBucket: 'commutrdriverapp-a0ff3.firebasestorage.app',
     iosBundleId: 'com.user.commutr',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBzeCBNafx5fFd23qVDHIEE56DHiLb_gLQ',
-    appId: '1:337332431930:ios:448929b85c06c4543c9903',
+    appId: '1:337332431930:ios:b9561e3f7a0926923c9903',
     messagingSenderId: '337332431930',
     projectId: 'commutrdriverapp-a0ff3',
     storageBucket: 'commutrdriverapp-a0ff3.firebasestorage.app',
-    iosBundleId: 'com.example.commutrMain',
+    iosBundleId: 'com.user.commutr',
   );
-
   static const FirebaseOptions windows = FirebaseOptions(
     apiKey: 'AIzaSyA1QbyZQgpBBerwnjjkWEyiVW9BbuPJ4SA',
     appId: '1:337332431930:web:c8cd5a26041cc4e73c9903',

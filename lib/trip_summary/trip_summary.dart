@@ -112,7 +112,14 @@ class TripSummaryScreen extends StatelessWidget {
                 child: Column(
                   children: [
                     // Map Card
-                    _MapCard(tripItem: tripItem, status: _statusLabel(), statusColor: _statusColor()),
+                    _MapCard(
+                      tripItem: tripItem,
+                      status: _statusLabel(),
+                      statusColor: _statusColor(),
+                      // Cancelled / no-show trips never travelled — show the
+                      // planned route drawn dashed.
+                      plannedOnly: tripItem.isCancelled || tripItem.isNoShow,
+                    ),
                     const SizedBox(height: 16),
 
                     // Trip Detail Card
@@ -137,6 +144,7 @@ class TripSummaryScreen extends StatelessWidget {
                     // Pickup & Drop Row
                     _PickupDropRow(
                       pickTime: _formatTime(tripItem.pickTime),
+                      hasPickTime: (tripItem.pickTime?.trim().isNotEmpty) == true,
                       shiftTime: _formatTime(tripItem.shiftTime),
                       isLogin: tripItem.isLogin,
                     ),
@@ -159,11 +167,16 @@ class _MapCard extends StatelessWidget {
     required this.tripItem,
     required this.status,
     required this.statusColor,
+    this.plannedOnly = false,
   });
 
   final TripHistoryItem tripItem;
   final String status;
   final Color statusColor;
+
+  /// When true (cancelled / no-show), the route is drawn dashed and labelled
+  /// "Planned Route".
+  final bool plannedOnly;
 
   void _openMapModal(BuildContext context) {
     showDialog<void>(
@@ -181,7 +194,12 @@ class _MapCard extends StatelessWidget {
             height: MediaQuery.of(ctx).size.height * 0.8,
             child: Stack(
               children: [
-                Positioned.fill(child: _TripRouteMap(tripItem: tripItem)),
+                Positioned.fill(
+                  child: _TripRouteMap(
+                    tripItem: tripItem,
+                    plannedOnly: plannedOnly,
+                  ),
+                ),
                 Positioned(
                   top: 12,
                   right: 12,
@@ -230,7 +248,7 @@ class _MapCard extends StatelessWidget {
               width: double.infinity,
               child: Stack(
                 children: [
-                  _TripRouteMap(tripItem: tripItem),
+                  _TripRouteMap(tripItem: tripItem, plannedOnly: plannedOnly),
                   // Tap anywhere on the preview to open the full-screen map.
                   Positioned.fill(
                     child: Material(
@@ -258,14 +276,18 @@ class _MapCard extends StatelessWidget {
                           ),
                         ],
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.fullscreen, color: Color(0xFF1B5E3B), size: 16),
-                          SizedBox(width: 4),
+                          Icon(
+                            plannedOnly ? Icons.route : Icons.fullscreen,
+                            color: const Color(0xFF1B5E3B),
+                            size: 16,
+                          ),
+                          const SizedBox(width: 4),
                           Text(
-                            'View Map',
-                            style: TextStyle(
+                            plannedOnly ? 'Planned Route' : 'View Map',
+                            style: const TextStyle(
                               color: Color(0xFF1B5E3B),
                               fontWeight: FontWeight.w700,
                               fontSize: 12,
@@ -321,9 +343,13 @@ class _MapCard extends StatelessWidget {
 // ─── Trip Route Google Map ────────────────────────────────────────────────────
 
 class _TripRouteMap extends StatefulWidget {
-  const _TripRouteMap({required this.tripItem});
+  const _TripRouteMap({required this.tripItem, this.plannedOnly = false});
 
   final TripHistoryItem tripItem;
+
+  /// When true (cancelled / no-show), the route is drawn dashed to signal it
+  /// was planned but never travelled.
+  final bool plannedOnly;
 
   @override
   State<_TripRouteMap> createState() => _TripRouteMapState();
@@ -425,9 +451,15 @@ class _TripRouteMapState extends State<_TripRouteMap> {
       _polylines = {
         Polyline(
           polylineId: const PolylineId('trip_route'),
-          color: const Color(0xFF1A3A8F),
+          // Planned (cancelled / no-show) → muted dashed; travelled → solid.
+          color: widget.plannedOnly
+              ? const Color(0xFF1A3A8F).withValues(alpha: 0.6)
+              : const Color(0xFF1A3A8F),
           width: 3,
           points: polylinePoints,
+          patterns: widget.plannedOnly
+              ? [PatternItem.dash(16), PatternItem.gap(8)]
+              : const [],
         ),
       };
     });
@@ -741,20 +773,33 @@ class _VehicleDetailCard extends StatelessWidget {
 class _PickupDropRow extends StatelessWidget {
   const _PickupDropRow({
     required this.pickTime,
+    required this.hasPickTime,
     required this.shiftTime,
     required this.isLogin,
   });
 
   final String pickTime;
+
+  /// Whether a real pickup/drop time exists. When false, the time card is
+  /// hidden entirely instead of showing a placeholder.
+  final bool hasPickTime;
   final String shiftTime;
   final bool isLogin;
 
   @override
   Widget build(BuildContext context) {
+    // The boarding time only applies to its own trip type: a pickup time for
+    // login trips, a drop time for logout trips. We never show a drop time on
+    // a login card or a pickup time on a logout card.
+    final stopTimeLabel = isLogin ? 'Pickup Time' : 'Drop Time';
+
     return Row(
       children: [
-        Expanded(child: _TimeCard(label: 'Pickup Time', time: pickTime)),
-        const SizedBox(width: 14),
+        // Hide the pickup/drop time card when there's no value for it.
+        if (hasPickTime) ...[
+          Expanded(child: _TimeCard(label: stopTimeLabel, time: pickTime)),
+          const SizedBox(width: 14),
+        ],
         Expanded(
           child: _TimeCard(
             label: isLogin ? 'Login Shift' : 'Logout Shift',

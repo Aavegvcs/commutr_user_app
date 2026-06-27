@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:commutr_main/features/auth/presentation/screens/pin_map/location_data.dart';
@@ -51,6 +52,12 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   GoogleMapController? _mapPreviewController;
   bool _isSavingProfile = false;
 
+  // Latest address-change request status (drives the info banner).
+  String? _addressChangeActionType;
+  String? _addressChangeRejectionRemark;
+  bool _hasAddressChangeRequest = false;
+  bool _loadingAddressChange = false;
+
   // Mobile OTP state
   final TextEditingController _otpController = TextEditingController();
   bool _showOtpField = false;
@@ -88,6 +95,121 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     _stateController = TextEditingController(text: widget.initialData.state);
     _pincodeController =
         TextEditingController(text: widget.initialData.pincode);
+    _fetchAddressChangeStatus();
+  }
+
+  /// Loads the latest address-change request for the current employee so the
+  /// Location Details section / edit popup can show its approval status.
+  Future<void> _fetchAddressChangeStatus() async {
+    final empId = widget.initialData.empId;
+    if (empId == null) return;
+    setState(() => _loadingAddressChange = true);
+    try {
+      final item = await sl<ProfileRepository>().getLatestAddressChange(empId);
+      if (!mounted) return;
+      setState(() {
+        _hasAddressChangeRequest = item != null;
+        _addressChangeActionType = item?.actionType;
+        _addressChangeRejectionRemark = item?.rejectionRemark;
+      });
+    } catch (_) {
+      // Non-fatal: simply skip showing the status banner.
+    } finally {
+      if (mounted) setState(() => _loadingAddressChange = false);
+    }
+  }
+
+  /// Human-readable status text for the latest address-change `actionType`.
+  String _addressChangeStatusText(String? actionType) {
+    switch (actionType) {
+      case 'A':
+        return 'Your request to change the location address has been approved.';
+      case 'R':
+        return 'Your request to change the location address has been rejected.';
+      default:
+        return 'Your request to change the location address is under review.';
+    }
+  }
+
+  Color _addressChangeStatusColor(String? actionType) {
+    switch (actionType) {
+      case 'A':
+        return _primaryGreen;
+      case 'R':
+        return const Color(0xFFB71C1C);
+      default:
+        return const Color(0xFFB26A00); // amber/under-review
+    }
+  }
+
+  IconData _addressChangeStatusIcon(String? actionType) {
+    switch (actionType) {
+      case 'A':
+        return Icons.check_circle_outline;
+      case 'R':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.hourglass_top_outlined;
+    }
+  }
+
+  /// Banner widget shown in both the Location Details section and the edit
+  /// dialog. Returns an empty widget when there is no request on record.
+  Widget _buildAddressChangeStatusBanner() {
+    if (_loadingAddressChange) {
+      return const SizedBox.shrink();
+    }
+    if (!_hasAddressChangeRequest) {
+      return const SizedBox.shrink();
+    }
+    final color = _addressChangeStatusColor(_addressChangeActionType);
+    final remark = _addressChangeRejectionRemark?.trim() ?? '';
+    final showRemark = _addressChangeActionType == 'R' && remark.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(_addressChangeStatusIcon(_addressChangeActionType),
+              color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _addressChangeStatusText(_addressChangeActionType),
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    height: 1.3,
+                  ),
+                ),
+                if (showRemark) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Reason: $remark',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _applyFromData(ProfileUserData data) {
@@ -764,6 +886,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               ),
               const SizedBox(height: 12),
 
+              // Latest address-change request status (approved / rejected /
+              // under review) based on the AddressChanges API `actionType`.
+              _buildAddressChangeStatusBanner(),
+
               // // Map preview (tappable to open dialog)
               // GestureDetector(
               //   onTap: _openLocationDialog,
@@ -1174,6 +1300,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                     ),
                     const SizedBox(height: 12),
 
+                    // ── Address-change request status ───────────────
+                    _buildAddressChangeStatusBanner(),
+
                     // ── Map preview ─────────────────────────────────
                     InkWell(
                       splashColor: Colors.transparent,
@@ -1553,6 +1682,8 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         if (dialogContext.mounted) {
           Navigator.of(dialogContext).pop();
         }
+        // Refresh the status banner — a new request is now under review.
+        unawaited(_fetchAddressChangeStatus());
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(result.message),
@@ -1882,12 +2013,14 @@ void showAddressChangeDialog(BuildContext context) {
   String initCity = '';
   String initState = '';
   String initPin = '';
+  int? empId;
   if (state is ProfileLoaded) {
     final d = ProfileUserData.fromApiResponse(state.profile);
     initAddr = d.address;
     initCity = d.city;
     initState = d.state;
     initPin = d.pincode;
+    empId = state.profile.empId;
   }
 
   final addrCtrl = TextEditingController(text: initAddr);
@@ -1899,8 +2032,101 @@ void showAddressChangeDialog(BuildContext context) {
   bool isGeocoding = false;
   bool isSaving = false;
 
+  // Latest address-change request status (drives the info banner).
+  bool hasAddressChangeRequest = false;
+  bool addressChangeStatusLoaded = false;
+  String? addressChangeActionType;
+  String? addressChangeRejectionRemark;
+
   const Color primaryGreen = Color(0xFF1A6B4A);
   const Color bgColor = Colors.white;
+
+  String addressChangeStatusText(String? actionType) {
+    switch (actionType) {
+      case 'A':
+        return 'Your request to change the location address has been approved.';
+      case 'R':
+        return 'Your request to change the location address has been rejected.';
+      default:
+        return 'Your request to change the location address is under review.';
+    }
+  }
+
+  Color addressChangeStatusColor(String? actionType) {
+    switch (actionType) {
+      case 'A':
+        return primaryGreen;
+      case 'R':
+        return const Color(0xFFB71C1C);
+      default:
+        return const Color(0xFFB26A00);
+    }
+  }
+
+  IconData addressChangeStatusIcon(String? actionType) {
+    switch (actionType) {
+      case 'A':
+        return Icons.check_circle_outline;
+      case 'R':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.hourglass_top_outlined;
+    }
+  }
+
+  Widget buildAddressChangeStatusBanner() {
+    if (!addressChangeStatusLoaded || !hasAddressChangeRequest) {
+      return const SizedBox.shrink();
+    }
+    final color = addressChangeStatusColor(addressChangeActionType);
+    final remark = addressChangeRejectionRemark?.trim() ?? '';
+    final showRemark = addressChangeActionType == 'R' && remark.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(addressChangeStatusIcon(addressChangeActionType),
+              color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  addressChangeStatusText(addressChangeActionType),
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    height: 1.3,
+                  ),
+                ),
+                if (showRemark) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Reason: $remark',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget buildTextField({
     required TextEditingController controller,
@@ -2093,7 +2319,7 @@ void showAddressChangeDialog(BuildContext context) {
                     ),
                     const SizedBox(height: 26),
                     const Text(
-                      'Address updated successfully!',
+                      'Address change submitted for approval!',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 18,
@@ -2217,6 +2443,21 @@ void showAddressChangeDialog(BuildContext context) {
     builder: (dialogCtx) {
       return StatefulBuilder(
         builder: (ctx, setDialogState) {
+          // Fetch latest address-change status once on first open.
+          if (!addressChangeStatusLoaded && empId != null) {
+            addressChangeStatusLoaded = true;
+            sl<ProfileRepository>()
+                .getLatestAddressChange(empId)
+                .then((item) {
+              if (!ctx.mounted) return;
+              setDialogState(() {
+                hasAddressChangeRequest = item != null;
+                addressChangeActionType = item?.actionType;
+                addressChangeRejectionRemark = item?.rejectionRemark;
+              });
+            }).catchError((_) {});
+          }
+
           // Geocode address on first open when no pin exists
           if (dialogPinnedLocation == null && !isGeocoding) {
             final query = [
@@ -2324,6 +2565,9 @@ void showAddressChangeDialog(BuildContext context) {
                     ],
                   ),
                   const SizedBox(height: 12),
+
+                  // Address-change request status banner
+                  buildAddressChangeStatusBanner(),
 
                   // Map preview
                   InkWell(

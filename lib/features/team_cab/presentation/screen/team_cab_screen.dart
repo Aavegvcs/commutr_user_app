@@ -3,12 +3,14 @@ import 'package:commutr_main/features/team_cab/bloc/team_cab_bloc.dart';
 import 'package:commutr_main/features/team_cab/bloc/team_cab_event.dart';
 import 'package:commutr_main/features/team_cab/bloc/team_cab_state.dart';
 import 'package:commutr_main/features/team_cab/data/model/team_tracking_panel_response.dart';
+import 'package:commutr_main/features/trip_detail/data/model/trip_home_response.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
+import 'package:commutr_main/trip_summary/trip_summary_welcome.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -225,15 +227,15 @@ class _FilterBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       child: Row(
         children: [
-          const Text(
-            'Date',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF6B7280),
-              fontFamily: 'Manrope',
-            ),
-          ),
+          // const Text(
+          //   'Date',
+          //   style: TextStyle(
+          //     fontSize: 13,
+          //     fontWeight: FontWeight.w600,
+          //     color: Color(0xFF6B7280),
+          //     fontFamily: 'Manrope',
+          //   ),
+          // ),
           const Spacer(),
           InkWell(
             borderRadius: BorderRadius.circular(10),
@@ -327,35 +329,35 @@ class _HeaderBar extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
-          const Icon(Icons.groups_rounded,
-              size: 20, color: TeamCabScreen._primary),
-          const SizedBox(width: 8),
-          Text(
-            _formatDateLong(date),
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF374151),
-              fontFamily: 'Manrope',
-            ),
-          ),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: TeamCabScreen._primary.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              '$count ${count == 1 ? 'trip' : 'trips'}',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: TeamCabScreen._primary,
-                fontFamily: 'Manrope',
-              ),
-            ),
-          ),
+          // const Icon(Icons.groups_rounded,
+          //     size: 20, color: TeamCabScreen._primary),
+          // const SizedBox(width: 8),
+          // Text(
+          //   _formatDateLong(date),
+          //   style: const TextStyle(
+          //     fontSize: 14,
+          //     fontWeight: FontWeight.w600,
+          //     color: Color(0xFF374151),
+          //     fontFamily: 'Manrope',
+          //   ),
+          // ),
+          // const Spacer(),
+          // Container(
+          //   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          //   decoration: BoxDecoration(
+          //     color: TeamCabScreen._primary.withOpacity(0.10),
+          //     borderRadius: BorderRadius.circular(20),
+          //   ),
+          //   child: Text(
+          //     '$count ${count == 1 ? 'trip' : 'trips'}',
+          //     style: const TextStyle(
+          //       fontSize: 12,
+          //       fontWeight: FontWeight.w700,
+          //       color: TeamCabScreen._primary,
+          //       fontFamily: 'Manrope',
+          //     ),
+          //   ),
+          // ),
         ],
       ),
     );
@@ -374,11 +376,59 @@ class _TripCard extends StatelessWidget {
   /// Matching is done on the status name, normalised so spacing/hyphen/case
   /// variants ("En Route", "en-route", "Not Boarded"…) all resolve correctly.
   bool get _canTrack {
-    final normalised = trip.tripStatusName
-        .toLowerCase()
-        .replaceAll(RegExp(r'[\s_-]+'), '');
     const trackableStatuses = {'boarded', 'notboarded', 'enroute'};
-    return trackableStatuses.contains(normalised);
+    return trackableStatuses.contains(_normalisedStatus);
+  }
+
+  /// Finished trips (Cancelled / Trip-Completed / No-Show) no longer track
+  /// live — instead we offer a Trip Summary view.
+  bool get _canShowSummary {
+    const summaryStatuses = {'cancelled', 'tripcompleted', 'noshow'};
+    return summaryStatuses.contains(_normalisedStatus);
+  }
+
+  /// Status name normalised so spacing/hyphen/case variants ("En Route",
+  /// "Trip-Completed", "No Show"…) all resolve to a single comparable token.
+  String get _normalisedStatus => trip.tripStatusName
+      .toLowerCase()
+      .replaceAll(RegExp(r'[\s_-]+'), '');
+
+  /// Adapts the team-cab trip into the [TripHomeItem] the trip-summary screen
+  /// expects. Only the fields the summary needs to fetch & render the route
+  /// (trip/emp ids, type, name, date, status) are populated.
+  TripHomeItem _toTripHomeItem() {
+    final dsDate = trip.dsDate;
+    return TripHomeItem(
+      tripId: trip.dsId,
+      empId: trip.empId,
+      userName: trip.fullName,
+      tripType: _isPickup ? '1' : '2',
+      tripStatusName: trip.tripStatusName,
+      tripStatusCode: trip.tripStatusCode,
+      tripDate: dsDate == null
+          ? null
+          : '${dsDate.year.toString().padLeft(4, '0')}-'
+              '${dsDate.month.toString().padLeft(2, '0')}-'
+              '${dsDate.day.toString().padLeft(2, '0')}',
+      // Drives the planned-only (dashed) route for cancelled / no-show trips.
+      cancelorNoshow: _normalisedStatus == 'cancelled'
+          ? 'Cancelled'
+          : _normalisedStatus == 'noshow'
+              ? 'Noshow'
+              : null,
+    );
+  }
+
+  void _openTripSummary(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TripSummaryWelcomeScreen(
+          item: _toTripHomeItem(),
+          fromTeamCab: true,
+        ),
+      ),
+    );
   }
 
   void _openLiveTracking(BuildContext context) {
@@ -459,7 +509,7 @@ class _TripCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Trip #${trip.dsId}  •  Emp ${trip.empId}',
+                        'Trip Id ${trip.dsId}',
                         style: const TextStyle(
                           fontSize: 12,
                           color: Color(0xFF6B7280),
@@ -518,6 +568,33 @@ class _TripCard extends StatelessWidget {
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ] else if (_canShowSummary) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _openTripSummary(context),
+                  icon: const Icon(Icons.receipt_long_rounded, size: 18),
+                  label: const Text(
+                    'Trip Summary',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'Manrope',
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: TeamCabScreen._primary,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    elevation: 0,
+                    side: const BorderSide(color: TeamCabScreen._primary),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),

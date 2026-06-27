@@ -71,34 +71,60 @@ class AuthRepository {
     }
   }
 
-  /// Returns the FCM token, or an empty string if it can't be obtained.
+  /// The last FCM token we successfully obtained. Used as a fallback when a
+  /// later fetch fails (e.g. APNS delayed on a cold start), so we still send a
+  /// usable token to the backend instead of an empty string.
+  static String? _cachedFcmToken;
+
+  /// Returns the FCM token, or an empty string if it genuinely can't be
+  /// obtained.
   ///
-  /// On iOS, `getToken()` throws `apns-token-not-set` if the APNS token hasn't
-  /// arrived yet (always the case on the simulator, and possible early in app
-  /// launch on a device). We wait for the APNS token first and swallow any
-  /// failure so OTP verification is never blocked by push setup.
+  /// On iOS, FCM is layered on APNS: `getToken()` throws `apns-token-not-set`
+  /// until the APNS token has been delivered to the device (never on the
+  /// simulator, and possibly a beat late on a real device cold start). We wait
+  /// for the APNS token first, and only then ask for the FCM token. Failures
+  /// are swallowed so OTP verification is never blocked by push setup, and we
+  /// fall back to the last known token if we have one.
   Future<String> _getFcmToken() async {
     try {
       if (Platform.isIOS) {
-        // On a real device the APNS token can be null for a moment right after
-        // launch while iOS registers with APNS; retry briefly. On the simulator
-        // it stays null (no push support), so we give up and skip the FCM token.
-        var apnsToken = await FirebaseMessaging.instance.getAPNSToken();
-        for (var i = 0; apnsToken == null && i < 3; i++) {
-          await Future.delayed(const Duration(seconds: 1));
-          apnsToken = await FirebaseMessaging.instance.getAPNSToken();
-        }
+        final apnsToken = await _waitForApnsToken();
         if (apnsToken == null) {
-          // No APNS token (e.g. simulator) — skip FCM token rather than throw.
-          return '';
+          // APNS never arrived. getToken() would throw apns-token-not-set, so
+          // don't even try — return the cached token if we have one.
+          debugPrint('[FCM] APNS token unavailable; using cached token.');
+          return _cachedFcmToken ?? '';
         }
       }
-      return await FirebaseMessaging.instance.getToken() ?? '';
+
+      final fcmToken = await FirebaseMessaging.instance.getToken();
+      debugPrint('[FCM] FCM Token: $fcmToken');
+
+      if (fcmToken != null && fcmToken.isNotEmpty) {
+        _cachedFcmToken = fcmToken;
+        return fcmToken;
+      }
+      return _cachedFcmToken ?? '';
     } catch (e) {
-      debugPrint('[AuthRepository] FCM token unavailable: $e');
-      return '';
+      debugPrint('[FCM] Error getting token: $e');
+      return _cachedFcmToken ?? '';
     }
   }
+
+  /// Polls for the iOS APNS token with a bounded back-off (~10s total). Returns
+  /// the token, or null if it never arrives within the window.
+  Future<String?> _waitForApnsToken() async {
+    for (int i = 0; i < 10; i++) {
+      final apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+      debugPrint('[FCM] APNS token attempt ${i + 1}: $apnsToken');
+      if (apnsToken != null && apnsToken.isNotEmpty) {
+        return apnsToken;
+      }
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    return null;
+  }
+
 
   Future<({OtpVerifyResponse? data, Failure? failure})> verifyOtp(
       String contact, String otp) async {
