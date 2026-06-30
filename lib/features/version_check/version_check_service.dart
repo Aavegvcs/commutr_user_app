@@ -11,12 +11,16 @@ import 'data/repository/version_check_repository.dart';
 const String _playStoreUrl =
     'https://play.google.com/store/apps/details?id=com.user.asnd.commutr&pcampaignid=web_share';
 
+/// App Store listing for the Commutr user app.
+const String _appStoreUrl =
+    'https://apps.apple.com/in/app/commutr-asnd/id6779981087';
+
 /// `appType` for the Commutr user app.
-const int _appType = 1;
+const int _appType = 2;
 
 /// `platform` values expected by the API (1 = iOS, 2 = Android).
-const int _platformIos = 1;
-const int _platformAndroid = 2;
+const int _platformIos = 2;
+const int _platformAndroid = 1;
 
 /// Runs the version check on app open and, when a force update is required,
 /// shows a blocking dialog that sends the user to the store.
@@ -69,7 +73,7 @@ abstract final class VersionCheckService {
   }
 
   static Future<void> _openStore() async {
-    final uri = Uri.parse(_playStoreUrl);
+    final uri = Uri.parse(Platform.isIOS ? _appStoreUrl : _playStoreUrl);
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 }

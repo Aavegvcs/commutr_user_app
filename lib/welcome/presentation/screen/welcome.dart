@@ -3238,6 +3238,42 @@ class _WelcomeState extends State<_WelcomeView> {
   /// The full address is broken into a primary segment (first comma chunk)
   /// and a secondary segment (the remainder) so we keep the same two-line
   /// visual rhythm the design uses, while still showing real backend data.
+  // Full-width "Vehicle Info." box matching the active-card style. Used by the
+  // Completed / Cancelled / No-show branches where no other info box is shown.
+  Widget _buildVehicleInfoBox(String vehicleLabel) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE8E8E8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Vehicle Info.',
+            style: TextStyle(
+              fontSize: 10,
+              color: Color(0xff6B7280),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            vehicleLabel,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1A1A1A),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAddressBlock({
     required String label,
     required String? address,
@@ -3985,15 +4021,17 @@ class _WelcomeState extends State<_WelcomeView> {
         (item.tripStatusName ?? '').trim().toLowerCase() == 'printed';
 
     // ─── Safe Home Reach button ──────────────────────────────────────────
-    // Shown only when the backend requests it (ReachedHomeReq == 1) and the
-    // user has not already reached home (IsReached != 1):
+    // Shown only when the trip is in the Started (code 3) state, the backend
+    // requests it (ReachedHomeReq == 1) and the user has not already reached
+    // home (IsReached != 1). It must never appear in the Printed state.
     //   - boardDebaordEnabledForUser == false -> show as soon as requested.
     //   - boardDebaordEnabledForUser == true  -> show only after the user has
     //     both boarded and deboarded.
     final appControlState = context.read<AppControlBloc>().state;
     final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
         appControlState.settings.boardDebaordEnabledForUser;
-    final bool showSafeHomeReachButton = item.reachedHomeReq == 1 &&
+    final bool showSafeHomeReachButton = item.isStarted &&
+        item.reachedHomeReq == 1 &&
         item.isReached != 1 &&
         (boardDeboardEnabled ? (item.isBoarded && item.isDeBoarded) : true);
 
@@ -4216,7 +4254,8 @@ class _WelcomeState extends State<_WelcomeView> {
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    Expanded(
+                    // Drop Time box — hidden for completed Logout trips.
+                    isLogin ? Expanded(
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 10),
@@ -4253,8 +4292,8 @@ class _WelcomeState extends State<_WelcomeView> {
                           ],
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
+                    ) : const SizedBox(),
+                    isLogin ? const SizedBox(width: 10) : const SizedBox(),
                     !isLogin ? Expanded(
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -4268,7 +4307,7 @@ class _WelcomeState extends State<_WelcomeView> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             !isLogin ? Text(
-                              isLogin ? 'Pickup Time' : 'Drop Time',
+                              isLogin ? 'Drop Time' : 'Pickup Time',
                               style: const TextStyle(
                                 fontSize: 10,
                                 color: Color(0xff6B7280),
@@ -4293,6 +4332,9 @@ class _WelcomeState extends State<_WelcomeView> {
                     ):SizedBox(),
                   ],
                 ),
+                // ─── Vehicle Info (also shown when Completed) ──────────────
+                const SizedBox(height: 10),
+                _buildVehicleInfoBox(vehicleLabel),
                 const SizedBox(height: 14),
                 // ─── Trip Summary button ──────────────────────────────────
                 GestureDetector(
@@ -4321,7 +4363,47 @@ class _WelcomeState extends State<_WelcomeView> {
                   ),
                 ),
               ] else if (isCancelledOrNoShow) ...[
-                // ─── Cancelled / No-show: only Trip Summary button ────────
+                // ─── Cancelled / No-show: Vehicle Info + Trip Summary ─────
+                // When the trip was Started and the user was a No-show, also
+                // surface the planned pickup time.
+                if ((item.tripStatusName ?? '').trim().toLowerCase() ==
+                        'started' &&
+                    cancelOrNoShow == 'Noshow') ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFE8E8E8)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Planned Pickup',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xff6B7280),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          plannedPickup,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1A1A1A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                _buildVehicleInfoBox(vehicleLabel),
                 const SizedBox(height: 14),
                 GestureDetector(
                   onTap: () => Navigator.push(
@@ -4348,47 +4430,7 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ),
                 ),
-              ] else if (!isScheduled && isPrinted && isLogin) ...[
-                // ─── Printed (Login only): Planned Pickup only ───────────
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFFE8E8E8)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Planned Pickup',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Color(0xff6B7280),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              plannedPickup,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1A1A1A),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ] else if (!isScheduled && (!isPrinted || !isLogin)) ...[
+              ] else if (!isScheduled) ...[
                 // ─── Non-completed: Planned Pickup + Vehicle Info ─────────
                 const SizedBox(height: 16),
                 Row(
@@ -4500,9 +4542,11 @@ class _WelcomeState extends State<_WelcomeView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Boarding OTP',
-                          style: TextStyle(
+                        Text(
+                          item.isBoardedNotDeboarded
+                              ? 'Deboard OTP'
+                              : 'Boarding OTP',
+                          style: const TextStyle(
                             fontSize: 10,
                             color: Color(0xff6B7280),
                             fontWeight: FontWeight.w600,
@@ -4683,9 +4727,11 @@ class _WelcomeState extends State<_WelcomeView> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Boarding OTP',
-                            style: TextStyle(
+                          Text(
+                            item.isBoardedNotDeboarded
+                                ? 'Deboard OTP'
+                                : 'Boarding OTP',
+                            style: const TextStyle(
                               fontSize: 9,
                               color: Color(0xFF282828),
                               fontWeight: FontWeight.w700,

@@ -299,8 +299,9 @@ class _MapCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLogin = item.isLogin;
+    final shiftSource = isLogin ? item.pickShift : item.dropShift;
     final shiftTime =
-        _formatShiftTime(item.pickShift) ?? item.pickShift ?? '--:--';
+        _formatShiftTime(shiftSource) ?? shiftSource ?? '--:--';
     final seqLabel = (item.paxOrder != null && item.paxCount != null)
         ? 'Sequence ${item.paxOrder}/${item.paxCount}'
         : null;
@@ -1167,20 +1168,26 @@ class _PickupDropRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final isLogin = item.isLogin;
     final plannedStop = _plannedPickupLabel(item);
-    final shiftTime = _formatShiftTime(item.pickShift) ?? '--:--';
-    final shiftLabel = isLogin ? 'Login Shift' : 'Logout Shift';
-    // Pickup time for login trips, drop time for logout trips. Only show the
-    // card when a real value exists — hide it entirely when null/empty.
-    final stopLabel = isLogin ? 'Pickup Time' : 'Drop Time';
+    // Login → Login Shift (pickShift); Logout → Drop Time (dropShift), matching
+    // the welcome home card.
+    final shiftTime =
+        _formatShiftTime(isLogin ? item.pickShift : item.dropShift) ?? '--:--';
+    final shiftLabel = isLogin ? 'Login Shift' : 'Drop Time';
+    // The planned-stop value is the passenger pickup time in both cases, so it
+    // is always "Pickup Time". Only show the card when a real value exists.
+    const stopLabel = 'Pickup Time';
     final hasStopTime = plannedStop != null && plannedStop.trim().isNotEmpty;
+    // For a completed Logout trip we hide the Drop Time (shift) card entirely.
+    final hideShiftCard = !isLogin && item.isCompleted;
 
     return Row(
       children: [
         if (hasStopTime) ...[
           Expanded(child: _TimeCard(label: stopLabel, time: plannedStop)),
-          const SizedBox(width: 14),
+          if (!hideShiftCard) const SizedBox(width: 14),
         ],
-        Expanded(child: _TimeCard(label: shiftLabel, time: shiftTime)),
+        if (!hideShiftCard)
+          Expanded(child: _TimeCard(label: shiftLabel, time: shiftTime)),
       ],
     );
   }

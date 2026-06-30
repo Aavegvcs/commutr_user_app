@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../../../../core/network/api_client.dart';
 import '../model/version_check_response.dart';
 
@@ -20,7 +22,7 @@ class VersionCheckRepository {
       '/Auth/version-check',
       queryParameters: {
         'appType': 2,
-        'platform': 1,
+        'platform': Platform.isAndroid ? 1 : 2,
         'currentVersion': currentVersion,
       },
     );
