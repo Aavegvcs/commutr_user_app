@@ -30,6 +30,12 @@ class CommuteTimingScreen extends StatelessWidget {
   /// [useHybrid] is `true`.
   final String selectedDates;
 
+  /// When `true`, the user is scheduling BOTH trips at once: a Login shift and
+  /// a Logout shift are picked here (shared date range + office chosen upstream)
+  /// and submitted in a single create with both `shiftStart` and `shiftEnd` set.
+  /// [isLogIn] is ignored while this is `true`.
+  final bool bookBoth;
+
   const CommuteTimingScreen({
     super.key,
     required this.locCode,
@@ -42,6 +48,7 @@ class CommuteTimingScreen extends StatelessWidget {
     this.drList = const [],
     this.useHybrid = false,
     this.selectedDates = '',
+    this.bookBoth = false,
   });
 
   @override
@@ -65,6 +72,7 @@ class CommuteTimingScreen extends StatelessWidget {
         drList: drList,
         useHybrid: useHybrid,
         selectedDates: selectedDates,
+        bookBoth: bookBoth,
       ),
     );
   }
@@ -81,6 +89,7 @@ class _CommuteTimingView extends StatefulWidget {
   final List<DrModel> drList;
   final bool useHybrid;
   final String selectedDates;
+  final bool bookBoth;
 
   const _CommuteTimingView({
     required this.locCode,
@@ -93,6 +102,7 @@ class _CommuteTimingView extends StatefulWidget {
     required this.drList,
     required this.useHybrid,
     required this.selectedDates,
+    required this.bookBoth,
   });
 
   @override
@@ -162,6 +172,24 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
 
     final preset = widget.flowArgs?.preselectedShiftTime;
 
+    // Both mode: default-select the first future pick AND the first future drop
+    // so the user can immediately proceed (or change either). No flowArgs preset
+    // applies here since "Both" is create-only.
+    if (widget.bookBoth) {
+      final pick = _firstFuturePick(result.pickShifts);
+      final drop = _firstFutureDrop(result.dropShifts);
+      setState(() {
+        if (pick != null) selectedPickShift = pick;
+        if (drop != null) selectedDropShift = drop;
+      });
+      debugPrint(
+        '[COMMUTE_TIMING] pre-selected both '
+        'pick=${pick?.shiftId}/"${pick?.shiftTime}" '
+        'drop=${drop?.shiftId}/"${drop?.shiftTime}"',
+      );
+      return;
+    }
+
     if (widget.isLogIn) {
       PickShift? pick;
       if (preset != null && preset.isNotEmpty) {
@@ -203,10 +231,20 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
   }
 
   void _submitSchedule() {
-    final shiftStart =
-        widget.isLogIn ? (selectedPickShift?.shiftTime ?? '') : "NA";
-    final shiftEnd =
-        widget.isLogIn ? "NA" : (selectedDropShift?.shiftTime ?? '');
+    // In "Both" mode both timings are sent in a single create: shiftStart from
+    // the Login (pick) shift and shiftEnd from the Logout (drop) shift. In the
+    // single-trip flow exactly one timing is set and the other is "NA".
+    final String shiftStart;
+    final String shiftEnd;
+    if (widget.bookBoth) {
+      shiftStart = selectedPickShift?.shiftTime ?? '';
+      shiftEnd = selectedDropShift?.shiftTime ?? '';
+    } else {
+      shiftStart =
+          widget.isLogIn ? (selectedPickShift?.shiftTime ?? '') : "NA";
+      shiftEnd =
+          widget.isLogIn ? "NA" : (selectedDropShift?.shiftTime ?? '');
+    }
 
     // Always include self; append any selected DR emp IDs
     final allIds = <int>{widget.empId, ..._selectedEmpIds};
@@ -364,9 +402,17 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
                     isUpdate: widget.flowArgs?.isEdit == true,
                     successMessage: state.message,
                     selectedDate: widget.fromDate,
-                    selectedTime: widget.isLogIn
+                    selectedTime: widget.bookBoth
+                        ? null
+                        : widget.isLogIn
+                            ? selectedPickShift?.shiftTime
+                            : selectedDropShift?.shiftTime,
+                    loginTime: widget.bookBoth
                         ? selectedPickShift?.shiftTime
-                        : selectedDropShift?.shiftTime,
+                        : null,
+                    logoutTime: widget.bookBoth
+                        ? selectedDropShift?.shiftTime
+                        : null,
                   ),
                 ),
               );
@@ -484,6 +530,9 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
     if (state is ShiftUpdateInProgress) return true;
     if (_cachedShifts == null) return true;
     if (_selectedEmpIds.isEmpty) return true;
+    if (widget.bookBoth) {
+      return selectedPickShift == null || selectedDropShift == null;
+    }
     return widget.isLogIn
         ? selectedPickShift == null
         : selectedDropShift == null;
@@ -533,35 +582,66 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: screenHeight * 0.40,
-            child: widget.isLogIn
-                ? _ShiftCard(
-                    title: 'Login Timing',
-                    subtitle: 'Daily commute to office',
-                    shifts: _futureShifts(cached.pickShifts
-                        .map((s) => (id: s.shiftId, time: s.shiftTime))
-                        .toList()),
-                    selectedId: selectedPickShift?.shiftId,
-                    onSelect: (id) => setState(() => selectedPickShift =
-                        cached.pickShifts
-                            .firstWhere((s) => s.shiftId == id)),
-                  )
-                : _ShiftCard(
-                    title: 'Logout Timing',
-                    subtitle: 'Daily commute from office',
-                    shifts: _futureShifts(cached.dropShifts
-                        .map((s) => (id: s.shiftId, time: s.shiftTime))
-                        .toList()),
-                    selectedId: selectedDropShift?.shiftId,
-                    onSelect: (id) => setState(() => selectedDropShift =
-                        cached.dropShifts
-                            .firstWhere((s) => s.shiftId == id)),
-                  ),
-          ),
+          if (widget.bookBoth) ...[
+            // Both trips: a Login shift card and a Logout shift card, submitted
+            // together as one create with both shiftStart and shiftEnd set.
+            SizedBox(
+              height: screenHeight * 0.22,
+              child: _ShiftCard(
+                title: 'Login Timing',
+                // subtitle: 'Daily commute to office',
+                shifts: _futureShifts(cached.pickShifts
+                    .map((s) => (id: s.shiftId, time: s.shiftTime))
+                    .toList()),
+                selectedId: selectedPickShift?.shiftId,
+                onSelect: (id) => setState(() => selectedPickShift =
+                    cached.pickShifts.firstWhere((s) => s.shiftId == id)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              height: screenHeight * 0.22,
+              child: _ShiftCard(
+                title: 'Logout Timing',
+                // subtitle: 'Daily commute from office',
+                shifts: _futureShifts(cached.dropShifts
+                    .map((s) => (id: s.shiftId, time: s.shiftTime))
+                    .toList()),
+                selectedId: selectedDropShift?.shiftId,
+                onSelect: (id) => setState(() => selectedDropShift =
+                    cached.dropShifts.firstWhere((s) => s.shiftId == id)),
+              ),
+            ),
+          ] else
+            SizedBox(
+              height: screenHeight * 0.32,
+              child: widget.isLogIn
+                  ? _ShiftCard(
+                      title: 'Login Timing',
+                      // subtitle: 'Daily commute to office',
+                      shifts: _futureShifts(cached.pickShifts
+                          .map((s) => (id: s.shiftId, time: s.shiftTime))
+                          .toList()),
+                      selectedId: selectedPickShift?.shiftId,
+                      onSelect: (id) => setState(() => selectedPickShift =
+                          cached.pickShifts
+                              .firstWhere((s) => s.shiftId == id)),
+                    )
+                  : _ShiftCard(
+                      title: 'Logout Timing',
+                      // subtitle: 'Daily commute from office',
+                      shifts: _futureShifts(cached.dropShifts
+                          .map((s) => (id: s.shiftId, time: s.shiftTime))
+                          .toList()),
+                      selectedId: selectedDropShift?.shiftId,
+                      onSelect: (id) => setState(() => selectedDropShift =
+                          cached.dropShifts
+                              .firstWhere((s) => s.shiftId == id)),
+                    ),
+            ),
 
           if (widget.drList.length > 1) ...[
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
             _buildApplyToOthersSection(),
           ],
 
@@ -855,14 +935,14 @@ class _EmployeeRow extends StatelessWidget {
 
 class _ShiftCard extends StatefulWidget {
   final String title;
-  final String subtitle;
+  // final String subtitle;
   final List<({int id, String time})> shifts;
   final int? selectedId;
   final ValueChanged<int> onSelect;
 
   const _ShiftCard({
     required this.title,
-    required this.subtitle,
+    // required this.subtitle,
     required this.shifts,
     required this.selectedId,
     required this.onSelect,
@@ -901,7 +981,7 @@ class _ShiftCardState extends State<_ShiftCard> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(horizontal: 20,vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -928,15 +1008,15 @@ class _ShiftCardState extends State<_ShiftCard> {
               color: Color(0xFF1A1A1A),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            widget.subtitle,
-            style: const TextStyle(
-              fontSize: 13,
-              color: Color(0xFF888888),
-              fontWeight: FontWeight.w400,
-            ),
-          ),
+          // const SizedBox(height: 4),
+          // Text(
+          //   widget.subtitle,
+          //   style: const TextStyle(
+          //     fontSize: 13,
+          //     color: Color(0xFF888888),
+          //     fontWeight: FontWeight.w400,
+          //   ),
+          // ),
           const SizedBox(height: 20),
           Expanded(
             child: widget.shifts.isEmpty
@@ -971,43 +1051,62 @@ class _ShiftCardState extends State<_ShiftCard> {
                       ],
                     ),
                   )
-                : Scrollbar(
-              controller: _scrollController,
-              thumbVisibility: true,
-              child: GridView.builder(
-                controller: _scrollController,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 3.2,
-                ),
-                itemCount: widget.shifts.length,
-                itemBuilder: (context, index) {
-                  final shift = widget.shifts[index];
-                  final isSelected = widget.selectedId == shift.id;
-                  return GestureDetector(
-                    onTap: () => widget.onSelect(shift.id),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      decoration: BoxDecoration(
-                        color: isSelected ? _primaryGreen : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
+                : RawScrollbar(
+                    controller: _scrollController,
+                    thumbVisibility: true,
+                    thumbColor: const Color(0xFF9AA5B1).withValues(alpha: 0.6),
+                    radius: const Radius.circular(12),
+                    thickness: 5,
+                    // Inset the thumb so it floats neatly at the card's edge
+                    // and doesn't overlap the shift tiles.
+                    padding: const EdgeInsets.only(right: 2, top: 4, bottom: 4),
+                    child: GridView.builder(
+                      controller: _scrollController,
+                      // Room on the right so tiles don't sit under the thumb.
+                      padding: const EdgeInsets.only(right: 10),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: 3.2,
                       ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        _formatAmPm(shift.time),
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: isSelected ? Colors.white : _unselected,
-                        ),
-                      ),
+                      itemCount: widget.shifts.length,
+                      itemBuilder: (context, index) {
+                        final shift = widget.shifts[index];
+                        final isSelected = widget.selectedId == shift.id;
+                        return GestureDetector(
+                          onTap: () => widget.onSelect(shift.id),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? _primaryGreen
+                                  : const Color(0xFFFAFAFA),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected
+                                    ? _primaryGreen
+                                    : const Color(0xFFEEEEEE),
+                                width: 1,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              _formatAmPm(shift.time),
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: isSelected
+                                    ? Colors.white
+                                    : const Color(0xFF888888),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
-            ),
+                  ),
           ),
         ],
       ),

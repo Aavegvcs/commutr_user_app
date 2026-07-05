@@ -143,6 +143,8 @@ class TripHomeItem {
   final String? officeLatLng;
   final String? empLatLng;
   final String? cancelorNoshow;
+  final int? deBoardOtp;
+  final int? isCancelTripByUserAfterTat;
   final List<TripHomePax>? passengers;
 
   const TripHomeItem({
@@ -174,6 +176,8 @@ class TripHomeItem {
     this.officeLatLng,
     this.empLatLng,
     this.cancelorNoshow,
+    this.deBoardOtp,
+    this.isCancelTripByUserAfterTat,
     this.passengers,
   });
 
@@ -233,6 +237,9 @@ class TripHomeItem {
       officeLatLng: readString('OfficeLatLng'),
       empLatLng: readString('EmpLatLng'),
       cancelorNoshow: readString('CancelorNoshow'),
+      deBoardOtp: (json['DeBoardOTP'] as num?)?.toInt(),
+      isCancelTripByUserAfterTat:
+          (json['IsCancelTripByUserAfterTAT'] as num?)?.toInt(),
       passengers: passengers,
     );
   }

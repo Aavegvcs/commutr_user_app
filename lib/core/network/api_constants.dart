@@ -5,7 +5,7 @@
 abstract final class ApiConstants {
   ApiConstants._();
 
-   // static const String host = '13.235.144.192';
+  // static const String host = '13.235.144.192';
   // static const String baseHost = 'http://$host';
 
    // static const String authBaseUrl = 'https://dev-auth.commutr.in/api/v1';
@@ -19,8 +19,7 @@ abstract final class ApiConstants {
   static const String chatHubUrl = '$appBasePath/hubs/chat';
 
   /// SignalR route-tracking hub for live cab GPS updates.
-  static const String routeTrackingHubUrl =
-      '$appBasePath/hubs/route-tracking';
+  static const String routeTrackingHubUrl = '$appBasePath/hubs/route-tracking';
 
   /// ETS in-app chat host (scheme + host + port, no trailing slash) — separate
   /// service from the core/auth APIs above.

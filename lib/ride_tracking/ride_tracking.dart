@@ -856,6 +856,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       if (loc == null) continue;
       final id = stop.isOffice ? 'office' : 'pax_${stop.order}';
       final titlePrefix = stop.isOffice ? '' : '${stop.sequenceLabel} · ';
+      final stopTitle = stop.isOffice ? _officeTitleFor(stop) : stop.title;
       final meSuffix = stop.isMe ? ' (You)' : '';
       final isEtaDest = _isEtaDestinationStop(stop);
 
@@ -880,8 +881,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         stopLabel = logoutStatusLabel(st, isCurrentTarget: isCurrent);
       } else {
         hue = markerHueForStop(stop);
-        stopLabel =
-            stop.isOffice ? (stop.subtitle ?? '') : statusLabelForStop(stop);
+        // Office marker shows only its title (empOffice) — no subtitle snippet.
+        stopLabel = stop.isOffice ? '' : statusLabelForStop(stop);
       }
 
       _markers.add(Marker(
@@ -889,7 +890,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         position: loc,
         icon: BitmapDescriptor.defaultMarkerWithHue(hue),
         infoWindow: InfoWindow(
-          title: '$titlePrefix${stop.title}$meSuffix',
+          title: '$titlePrefix$stopTitle$meSuffix',
           snippet: isEtaDest ? _etaMarkerSnippet(stop) : stopLabel,
         ),
       ));
@@ -948,11 +949,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   }
 
   String _etaMarkerSnippet(RideStop stop) {
-    final base = stop.isOffice
-        ? (stop.subtitle?.trim().isNotEmpty == true
-            ? stop.subtitle!.trim()
-            : 'Office')
-        : statusLabelForStop(stop);
+    // Office shows no subtitle (address) — only the ETA. Non-office stops keep
+    // their status label as the snippet base.
+    if (stop.isOffice) return 'ETA ${formatEta(_etaMinutes)}';
+    final base = statusLabelForStop(stop);
     return '$base · ETA ${formatEta(_etaMinutes)}';
   }
 
@@ -985,6 +985,35 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     // Fall back to the personalised timeline's "(You)" stop order.
     return _myStop?.order;
   }
+
+  /// The office name to display, sourced from the logged-in passenger's
+  /// [TripPassenger.empOffice]. Prefers the viewer's own passenger row (matched
+  /// by [widget.empId]); falls back to the first non-empty `empOffice` on the
+  /// trip. Returns null when no passenger carries an office name, so callers can
+  /// preserve their existing fallback (the timeline's office title).
+  String? get _empOfficeName {
+    final status = _latestStatus;
+    if (status == null) return null;
+    final meEmpId = widget.empId;
+    if (meEmpId != null) {
+      for (final p in status.passengers) {
+        if (p.empId == meEmpId) {
+          final name = p.empOffice?.trim();
+          if (name != null && name.isNotEmpty) return name;
+          break;
+        }
+      }
+    }
+    for (final p in status.passengers) {
+      final name = p.empOffice?.trim();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    return null;
+  }
+
+  /// Resolves the label shown for an office [stop], substituting [_empOfficeName]
+  /// when present and preserving the existing [RideStop.title] fallback otherwise.
+  String _officeTitleFor(RideStop stop) => _empOfficeName ?? stop.title;
 
   /// The cab's first/next pending pickup on a LOGIN trip ("pickup1") — the first
   /// stop in route order whose passenger has not yet been picked up. Used to aim
@@ -2237,6 +2266,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                         _TrackingStatusBanner(
                           timeline: _timeline,
                           etaMinutes: _etaMinutes,
+                          officeName: _empOfficeName,
                         ),
                       ],
 
@@ -2257,6 +2287,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                                 showPassengerList: _showPassengerList,
                                 onTogglePassengers: () => setState(() =>
                                     _showPassengerList = !_showPassengerList),
+                                officeName: _empOfficeName,
                               )
                             : const SizedBox.shrink(),
                       ),
@@ -2757,6 +2788,9 @@ class _ExpandedSection extends StatelessWidget {
   final int? etaMinutes;
   final bool showPassengerList;
   final VoidCallback onTogglePassengers;
+  // Office name from the logged-in passenger's `empOffice`; null falls back to
+  // the office stop's own title.
+  final String? officeName;
 
   const _ExpandedSection({
     this.data,
@@ -2769,6 +2803,7 @@ class _ExpandedSection extends StatelessWidget {
     this.etaMinutes,
     required this.showPassengerList,
     required this.onTogglePassengers,
+    this.officeName,
   });
 
   void _openTripGroupChat(BuildContext context) {
@@ -2910,7 +2945,11 @@ class _ExpandedSection extends StatelessWidget {
         // Personalised stop timeline (pickups + office, colour-coded by state).
         if (showPassengerList && stops.isNotEmpty) ...[
           const SizedBox(height: 16),
-          _RouteTimelineView(timeline: fullTimeline, etaMinutes: etaMinutes),
+          _RouteTimelineView(
+            timeline: fullTimeline,
+            etaMinutes: etaMinutes,
+            officeName: officeName,
+          ),
         ],
 
         const SizedBox(height: 12),
@@ -2991,8 +3030,15 @@ class _ExpandedSection extends StatelessWidget {
 class _TrackingStatusBanner extends StatelessWidget {
   final RideTimeline timeline;
   final int? etaMinutes;
+  // Office name from the logged-in passenger's `empOffice`; null falls back to
+  // the office stop's own title.
+  final String? officeName;
 
-  const _TrackingStatusBanner({required this.timeline, this.etaMinutes});
+  const _TrackingStatusBanner({
+    required this.timeline,
+    this.etaMinutes,
+    this.officeName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3053,7 +3099,7 @@ class _TrackingStatusBanner extends StatelessWidget {
             : '$stops stop${stops == 1 ? '' : 's'} before you';
         subtitle = target == null
             ? 'Waiting for cab'
-            : 'Now heading to ${target.isMe ? 'your pickup' : target.title}';
+            : 'Now heading to ${target.isMe ? 'your pickup' : (target.isOffice ? (officeName ?? target.title) : target.title)}';
       }
     }
 
@@ -3182,8 +3228,15 @@ class _TrackingStatusBanner extends StatelessWidget {
 class _RouteTimelineView extends StatelessWidget {
   final RideTimeline timeline;
   final int? etaMinutes;
+  // Office name from the logged-in passenger's `empOffice`; null falls back to
+  // the office stop's own title.
+  final String? officeName;
 
-  const _RouteTimelineView({required this.timeline, this.etaMinutes});
+  const _RouteTimelineView({
+    required this.timeline,
+    this.etaMinutes,
+    this.officeName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3196,6 +3249,7 @@ class _RouteTimelineView extends StatelessWidget {
             isLast: i == stops.length - 1,
             etaMinutes: stops[i].isOffice ? etaMinutes : null,
             isLogout: timeline.isLogout,
+            officeName: officeName,
           ),
       ],
     );
@@ -3207,12 +3261,16 @@ class _TimelineRow extends StatelessWidget {
   final bool isLast;
   final int? etaMinutes;
   final bool isLogout;
+  // Office name from the logged-in passenger's `empOffice`; null falls back to
+  // the office stop's own title.
+  final String? officeName;
 
   const _TimelineRow({
     required this.stop,
     required this.isLast,
     this.etaMinutes,
     this.isLogout = false,
+    this.officeName,
   });
 
   @override
@@ -3220,6 +3278,8 @@ class _TimelineRow extends StatelessWidget {
     final color = colorForStop(stop);
     final done = stop.state == StopState.completed;
     final current = stop.state == StopState.current;
+    final displayTitle =
+        stop.isOffice ? (officeName ?? stop.title) : stop.title;
 
     return IntrinsicHeight(
       child: Row(
@@ -3251,7 +3311,7 @@ class _TimelineRow extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          stop.isMe ? '${stop.title} (You)' : stop.title,
+                          stop.isMe ? '$displayTitle (You)' : displayTitle,
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: (stop.isMe || current)
@@ -3267,17 +3327,15 @@ class _TimelineRow extends StatelessWidget {
                         _StatusPill(stop: stop, color: color),
                     ],
                   ),
-                  if (!stop.isOffice ||
-                      stop.subtitle?.trim().isNotEmpty == true) ...[
+                  // Office shows only its title (empOffice) — never a subtitle.
+                  if (!stop.isOffice) ...[
                     const SizedBox(height: 2),
                     Text(
-                      stop.isOffice
-                          ? stop.subtitle!.trim()
-                          : [
-                              stop.sequenceLabel,
-                              if (stop.subtitle?.trim().isNotEmpty == true)
-                                stop.subtitle!.trim(),
-                            ].join(' · '),
+                      [
+                        stop.sequenceLabel,
+                        if (stop.subtitle?.trim().isNotEmpty == true)
+                          stop.subtitle!.trim(),
+                      ].join(' · '),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

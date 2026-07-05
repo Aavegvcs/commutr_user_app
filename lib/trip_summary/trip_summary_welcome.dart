@@ -114,10 +114,12 @@ class _TripSummaryWelcomeScreenState extends State<TripSummaryWelcomeScreen> {
           ((userPax?.pickupLat != null && userPax?.pickupLng != null)
               ? '${userPax!.pickupLat},${userPax.pickupLng}'
               : null),
-      vehicleInfo: nz(item.vehicleInfo, status?.vehicleNo ??
-          cab?.vehicleRegistrationNo),
-      pickShift: nz(item.pickShift, _formatShiftTime(status?.scheduledStartTime)),
-      pickTime: nz(item.pickTime, _formatShiftTime(userPax?.plannedScheduleTime)),
+      vehicleInfo:
+          nz(item.vehicleInfo, status?.vehicleNo ?? cab?.vehicleRegistrationNo),
+      pickShift:
+          nz(item.pickShift, _formatShiftTime(status?.scheduledStartTime)),
+      pickTime:
+          nz(item.pickTime, _formatShiftTime(userPax?.plannedScheduleTime)),
       paxCount: item.paxCount ?? status?.totalPax ?? cab?.passengerCount,
       paxOrder: item.paxOrder ?? userPax?.paxOrder ?? cab?.paxOrder,
       otp: nz(item.otp, cab?.otp?.toString()),
@@ -240,8 +242,18 @@ String _formatTime12(int h, int m) {
 }
 
 const List<String> _kMonthsShort = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 /// Formats an ISO / `HH:mm:ss` string to Indian-local `dd MMM yyyy, h:mm AM/PM`
@@ -300,8 +312,7 @@ class _MapCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isLogin = item.isLogin;
     final shiftSource = isLogin ? item.pickShift : item.dropShift;
-    final shiftTime =
-        _formatShiftTime(shiftSource) ?? shiftSource ?? '--:--';
+    final shiftTime = _formatShiftTime(shiftSource) ?? shiftSource ?? '--:--';
     final seqLabel = (item.paxOrder != null && item.paxCount != null)
         ? 'Sequence ${item.paxOrder}/${item.paxCount}'
         : null;
@@ -408,7 +419,8 @@ class _MapCard extends StatelessWidget {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFB8C4E0).withValues(alpha: 0.88),
+                          color:
+                              const Color(0xFFB8C4E0).withValues(alpha: 0.88),
                           borderRadius: BorderRadius.circular(30),
                         ),
                         child: const Row(
@@ -590,24 +602,24 @@ Future<_TripRouteData> _fetchTripRoute(
         .getGpsRoute(tripId: tripId)
         .then<GpsRouteResponse?>((v) => v)
         .catchError((e) {
-          debugPrint('[TRIP_SUMMARY] getGpsRoute failed: $e');
-          return null;
-        }),
+      debugPrint('[TRIP_SUMMARY] getGpsRoute failed: $e');
+      return null;
+    }),
     repo
         .getTrackingStatus(tripId: tripId)
         .then<TrackingStatusResponse?>((v) => v)
         .catchError((e) {
-          debugPrint('[TRIP_SUMMARY] getTrackingStatus failed: $e');
-          return null;
-        }),
+      debugPrint('[TRIP_SUMMARY] getTrackingStatus failed: $e');
+      return null;
+    }),
     if (empId != null)
       repo
           .getUserCabTracking(empId: empId, tripId: tripId)
           .then<CabTrackingData?>((v) => v)
           .catchError((e) {
-            debugPrint('[TRIP_SUMMARY] getUserCabTracking failed: $e');
-            return null;
-          }),
+        debugPrint('[TRIP_SUMMARY] getUserCabTracking failed: $e');
+        return null;
+      }),
   ]);
 
   final gpsRoute = results[0] as GpsRouteResponse?;
@@ -622,8 +634,8 @@ Future<_TripRouteData> _fetchTripRoute(
       : (gpsRoute?.actualRoutePolyline ?? gpsRoute?.plannedRoutePolyline);
   final decoded = _decodeRoutePolyline(encoded);
   // Whether what we're drawing is planned (dashed) rather than actually driven.
-  final usedActual =
-      !plannedOnly && (gpsRoute?.actualRoutePolyline?.trim().isNotEmpty == true);
+  final usedActual = !plannedOnly &&
+      (gpsRoute?.actualRoutePolyline?.trim().isNotEmpty == true);
   final isPlanned = !usedActual;
   final polylinePoints = decoded.isNotEmpty
       ? decoded
@@ -677,8 +689,7 @@ Future<_TripRouteData> _fetchTripRoute(
   }
 
   // Fall back to planned route stops when no API markers were produced.
-  final finalMarkers =
-      markers.isNotEmpty ? markers : _stopMarkers(routeStops);
+  final finalMarkers = markers.isNotEmpty ? markers : _stopMarkers(routeStops);
 
   return _TripRouteData(
     markers: finalMarkers,
@@ -836,9 +847,8 @@ class _TripRouteMapState extends State<_TripRouteMap> {
           initialCameraPosition: _camera,
           onMapCreated: (controller) {
             if (!_ctrl.isCompleted) _ctrl.complete(controller);
-            final pts = _polylines.isNotEmpty
-                ? _polylines.first.points
-                : <LatLng>[];
+            final pts =
+                _polylines.isNotEmpty ? _polylines.first.points : <LatLng>[];
             if (pts.length >= 2) _fitCamera(pts);
           },
           markers: _markers,
@@ -1186,8 +1196,8 @@ class _PickupDropRow extends StatelessWidget {
           Expanded(child: _TimeCard(label: stopLabel, time: plannedStop)),
           if (!hideShiftCard) const SizedBox(width: 14),
         ],
-        if (!hideShiftCard)
-          Expanded(child: _TimeCard(label: shiftLabel, time: shiftTime)),
+        // if (!hideShiftCard)
+        //   Expanded(child: _TimeCard(label: shiftLabel, time: shiftTime)),
       ],
     );
   }
@@ -1303,14 +1313,12 @@ class _PassengerTile extends StatelessWidget {
       statusColor = const Color(0xFFDC2626);
     } else if (isLogin) {
       statusText = pax.isBoarded ? 'Boarded' : 'Not Boarded';
-      statusColor = pax.isBoarded
-          ? const Color(0xFF1A6B3C)
-          : const Color(0xFF7C3AED);
+      statusColor =
+          pax.isBoarded ? const Color(0xFF1A6B3C) : const Color(0xFF7C3AED);
     } else {
       statusText = pax.isDropped ? 'Dropped' : 'En-Route';
-      statusColor = pax.isDropped
-          ? const Color(0xFF1A6B3C)
-          : const Color(0xFF1D4ED8);
+      statusColor =
+          pax.isDropped ? const Color(0xFF1A6B3C) : const Color(0xFF1D4ED8);
     }
 
     return Padding(
@@ -1322,7 +1330,8 @@ class _PassengerTile extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 16,
-                backgroundColor: const Color(0xFF1B5E3B).withValues(alpha: 0.12),
+                backgroundColor:
+                    const Color(0xFF1B5E3B).withValues(alpha: 0.12),
                 child: Text(
                   order != null ? '$order' : '•',
                   style: const TextStyle(
@@ -1371,8 +1380,7 @@ class _PassengerTile extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: statusColor.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(8),

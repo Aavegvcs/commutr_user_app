@@ -394,6 +394,7 @@ class _WelcomeState extends State<_WelcomeView> {
         tripDate: tripDateIso,
         tripType: item.isLogin ? 1 : 2,
         tripId: tripId,
+        showNoShowWording: item.isCancelTripByUserAfterTat == 1,
       ),
     ).then((cancelled) {
       if (cancelled == true && context.mounted) {
@@ -2592,7 +2593,7 @@ class _WelcomeState extends State<_WelcomeView> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          'HELLO,',
+                          'HELLO',
                           style: TextStyle(
                             color: Colors.white.withOpacity(0.85),
                             fontSize: 12,
@@ -2802,6 +2803,7 @@ class _WelcomeState extends State<_WelcomeView> {
       final tripCards = _buildTripHomeGroupWidgets(tripState.groups);
       if (tripCards.isNotEmpty) {
         children.add(_buildSubsectionLabel('Active Trips'));
+        // children.add(_buildSubsectionLabel('Yash shorebird patch'));
         children.addAll(tripCards);
         children.add(const SizedBox(height: 16));
       }
@@ -2840,6 +2842,7 @@ class _WelcomeState extends State<_WelcomeView> {
       );
       if (scheduleCards.isNotEmpty) {
         children.add(_buildSubsectionLabel('Scheduled'));
+        // children.add(_buildSubsectionLabel('Yash shorebird patch'));
         children.addAll(scheduleCards);
       }
     }
@@ -3170,6 +3173,78 @@ class _WelcomeState extends State<_WelcomeView> {
       chars.add('—');
     }
     return chars.take(4).toList(growable: false);
+  }
+
+  /// A single OTP display card with a label above a row of digit boxes.
+  Widget _buildOtpField({
+    required String label,
+    required List<String> digits,
+    bool compact = false,
+  }) {
+    Widget digitBox(String digit) => Container(
+          height: 36,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE6F3ED),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            digit,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF002D1C),
+            ),
+          ),
+        );
+
+    // In compact mode (two fields side by side) the boxes flex to share the
+    // halved width; otherwise they keep their fixed 36px size.
+    final Widget digitsRow = compact
+        ? Row(
+            children: [
+              for (var i = 0; i < digits.length; i++) ...[
+                Expanded(child: digitBox(digits[i])),
+                if (i != digits.length - 1) const SizedBox(width: 6),
+              ],
+            ],
+          )
+        : Row(
+            children: digits
+                .map(
+                  (digit) => Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    width: 36,
+                    child: digitBox(digit),
+                  ),
+                )
+                .toList(),
+          );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE8E8E8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10,
+              color: Color(0xff6B7280),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          digitsRow,
+        ],
+      ),
+    );
   }
 
   ({IconData icon, Color color}) _tripStatusStyle(
@@ -4007,7 +4082,11 @@ class _WelcomeState extends State<_WelcomeView> {
         : cancelOrNoShow == 'Noshow'
             ? 'No Show'
             : (isCompleted ? 'Trip Completed' : (item.tripStatusName ?? '—'));
-    final List<String> otpDigits = _otpDigits(item.otp);
+    // Boarding OTP comes from `item.otp`; once the user has boarded (but not
+    // yet deboarded) we show the deboard OTP from `item.deBoardOtp` instead.
+    final List<String> otpDigits = item.isBoardedNotDeboarded
+        ? _otpDigits(item.deBoardOtp?.toString())
+        : _otpDigits(item.otp);
     final plannedPickup = _plannedPickupLabel(item) ?? '--:--';
     final vehicleLabel = (item.vehicleInfo?.trim().isNotEmpty ?? false)
         ? item.vehicleInfo!.trim()
@@ -4033,6 +4112,8 @@ class _WelcomeState extends State<_WelcomeView> {
     final bool showSafeHomeReachButton = item.isStarted &&
         item.reachedHomeReq == 1 &&
         item.isReached != 1 &&
+        item.isBoarded &&
+        item.isDeBoarded &&
         (boardDeboardEnabled ? (item.isBoarded && item.isDeBoarded) : true);
 
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
@@ -4255,81 +4336,92 @@ class _WelcomeState extends State<_WelcomeView> {
                 Row(
                   children: [
                     // Drop Time box — hidden for completed Logout trips.
-                    isLogin ? Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFE8E8E8)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isLogin ? 'Pickup Time' : 'Drop Time',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: Color(0xff6B7280),
-                                fontWeight: FontWeight.w600,
+                    isLogin
+                        ? Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border:
+                                    Border.all(color: const Color(0xFFE8E8E8)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isLogin ? 'Pickup Time' : 'Drop Time',
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      color: Color(0xff6B7280),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    isLogin
+                                        // ? plannedPickup
+                                        ? (_formatShiftTime(item.pickTime) ??
+                                            '--:--')
+                                        : (_formatShiftTime(item.dropShift) ??
+                                            '--:--'),
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF1A1A1A),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              isLogin
-                                  // ? plannedPickup
-                                  ? (_formatShiftTime(item.pickTime) ??
-                                      '--:--')
-                                  : (_formatShiftTime(item.dropShift) ??
-                                      '--:--'),
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1A1A1A),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ) : const SizedBox(),
+                          )
+                        : const SizedBox(),
                     isLogin ? const SizedBox(width: 10) : const SizedBox(),
-                    !isLogin ? Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFE8E8E8)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            !isLogin ? Text(
-                              isLogin ? 'Drop Time' : 'Pickup Time',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: Color(0xff6B7280),
-                                fontWeight: FontWeight.w600,
+                    !isLogin
+                        ? Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border:
+                                    Border.all(color: const Color(0xFFE8E8E8)),
                               ),
-                            ):SizedBox(),
-                            const SizedBox(height: 4),
-                            !isLogin ? Text(
-                              isLogin
-                                  ? (_formatShiftTime(item.dropShift) ??
-                                      '--:--')
-                                  : plannedPickup,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1A1A1A),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  !isLogin
+                                      ? Text(
+                                          isLogin ? 'Drop Time' : 'Pickup Time',
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            color: Color(0xff6B7280),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        )
+                                      : SizedBox(),
+                                  const SizedBox(height: 4),
+                                  !isLogin
+                                      ? Text(
+                                          isLogin
+                                              ? (_formatShiftTime(
+                                                      item.dropShift) ??
+                                                  '--:--')
+                                              : plannedPickup,
+                                          style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF1A1A1A),
+                                          ),
+                                        )
+                                      : SizedBox(),
+                                ],
                               ),
-                            ): SizedBox(),
-                          ],
-                        ),
-                      ),
-                    ):SizedBox(),
+                            ),
+                          )
+                        : SizedBox(),
                   ],
                 ),
                 // ─── Vehicle Info (also shown when Completed) ──────────────
@@ -4371,6 +4463,7 @@ class _WelcomeState extends State<_WelcomeView> {
                     cancelOrNoShow == 'Noshow') ...[
                   const SizedBox(height: 16),
                   Container(
+                    width: double.infinity,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
@@ -4527,91 +4620,108 @@ class _WelcomeState extends State<_WelcomeView> {
                     ),
                   ],
                 ),
-                // ─── Boarding OTP ─────────────────────────────────────────
+                // ─── Boarding / Deboard OTP ───────────────────────────────
+                // When the trip is "Started", show the Boarding OTP together
+                // with the Deboard OTP. In all other (non fully-deboarded)
+                // states, show the single relevant OTP field.
                 if (!isFullyDeboarded) ...[
                   const SizedBox(height: 14),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFFE8E8E8)),
-                    ),
-                    child: Column(
+                  if (item.isStarted)
+                    Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          item.isBoardedNotDeboarded
-                              ? 'Deboard OTP'
-                              : 'Boarding OTP',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            color: Color(0xff6B7280),
-                            fontWeight: FontWeight.w600,
+                        Expanded(
+                          child: _buildOtpField(
+                            label: 'Boarding OTP',
+                            digits: _otpDigits(item.otp),
+                            compact: true,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: otpDigits
-                              .map(
-                                (digit) => Container(
-                                  margin: const EdgeInsets.only(right: 8),
-                                  width: 36,
-                                  height: 36,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFE6F3ED),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: Text(
-                                    digit,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF002D1C),
-                                    ),
-                                  ),
-                                ),
-                              )
-                              .toList(),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _buildOtpField(
+                            label: 'Deboard OTP',
+                            digits: _otpDigits(item.deBoardOtp?.toString()),
+                            compact: true,
+                          ),
                         ),
                       ],
+                    )
+                  else
+                    _buildOtpField(
+                      label: item.isBoardedNotDeboarded
+                          ? 'Deboard OTP'
+                          : 'Boarding OTP',
+                      digits: otpDigits,
                     ),
-                  ),
                 ],
               ],
               if (!isCancelledOrNoShow) const SizedBox(height: 14),
               if (isCancelledOrNoShow)
                 const SizedBox.shrink()
               else if (showSafeHomeReachButton)
-                GestureDetector(
-                  onTap: () => _onSafeHomeReachTap(item),
-                  child: Container(
-                    height: 48,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1A5C38),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.home_outlined,
-                            size: 18, color: Colors.white),
-                        SizedBox(width: 8),
-                        Text(
-                          'Safe Home Reach',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Live Tracking must always be available while the trip is
+                    // "Started" — even when the Safe Home Reach CTA is shown.
+                    if (item.isStarted) ...[
+                      GestureDetector(
+                        onTap: trackVehicleAction,
+                        child: Container(
+                          height: 48,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: trackBg,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.my_location, size: 18, color: trackFg),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Live Tracking',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: trackFg,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    GestureDetector(
+                      onTap: () => _onSafeHomeReachTap(item),
+                      child: Container(
+                        height: 48,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A5C38),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.home_outlined,
+                                size: 18, color: Colors.white),
+                            SizedBox(width: 8),
+                            Text(
+                              'Safe Home Reach',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 )
               else if (isCompleted)
                 const SizedBox.shrink()
@@ -5517,6 +5627,7 @@ class CancelActiveTripDialog extends StatelessWidget {
     required this.tripDate,
     required this.tripType,
     required this.tripId,
+    this.showNoShowWording = false,
   });
 
   final bool isLogin;
@@ -5525,6 +5636,12 @@ class CancelActiveTripDialog extends StatelessWidget {
   final String tripDate;
   final int tripType;
   final int tripId;
+
+  /// When true (driven by `isCancelTripByUserAfterTat == 1`), the primary
+  /// action wording reads "No-Show this Ride" instead of the current
+  /// cancellation wording. All behaviour, callbacks and API calls are
+  /// unchanged.
+  final bool showNoShowWording;
 
   @override
   Widget build(BuildContext context) {
@@ -5537,6 +5654,7 @@ class CancelActiveTripDialog extends StatelessWidget {
         tripDate: tripDate,
         tripType: tripType,
         tripId: tripId,
+        showNoShowWording: showNoShowWording,
       ),
     );
   }
@@ -5550,6 +5668,7 @@ class _CancelActiveTripDialogView extends StatelessWidget {
     required this.tripDate,
     required this.tripType,
     required this.tripId,
+    this.showNoShowWording = false,
   });
 
   final bool isLogin;
@@ -5558,6 +5677,7 @@ class _CancelActiveTripDialogView extends StatelessWidget {
   final String tripDate;
   final int tripType;
   final int tripId;
+  final bool showNoShowWording;
 
   void _showSnackBar(BuildContext context, String message,
       {required bool error}) {
@@ -5703,9 +5823,11 @@ class _CancelActiveTripDialogView extends StatelessWidget {
                                     color: Color(0xFFCC2222),
                                   ),
                                 )
-                              : const Text(
-                                  'Cancel Trip',
-                                  style: TextStyle(
+                              : Text(
+                                  showNoShowWording
+                                      ? 'No-Show this Ride'
+                                      : 'Cancel Trip',
+                                  style: const TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -5873,7 +5995,7 @@ class _CancelRideDialogView extends StatelessWidget {
 
                   // Title
                   Text(
-                    'Cancel trip?',
+                    'Cancel Ride Schedule?',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 22,
@@ -5884,7 +6006,7 @@ class _CancelRideDialogView extends StatelessWidget {
                   const SizedBox(height: 16),
 
                   Text(
-                    'Are you sure you want to cancel this ${isLogin ? "Login" : "Logout"} trip?',
+                    'Are you sure you want to cancel this ${isLogin ? "Login" : "Logout"} schedule?',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 16,
@@ -5939,7 +6061,7 @@ class _CancelRideDialogView extends StatelessWidget {
                                   ),
                                 )
                               : const Text(
-                                  'Cancel Trip',
+                                  'Cancel Schedule',
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,

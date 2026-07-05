@@ -21,6 +21,10 @@ class SelectOfficeScreen extends StatelessWidget {
   final bool useHybrid;
   final String selectedDates;
 
+  /// When `true`, both the Login and Logout trip are scheduled together with a
+  /// shared date range and office (see [CommuteTimingScreen.bookBoth]).
+  final bool bookBoth;
+
   const SelectOfficeScreen({
     super.key,
     required this.isLogIn,
@@ -30,6 +34,7 @@ class SelectOfficeScreen extends StatelessWidget {
     this.flowArgs,
     this.useHybrid = false,
     this.selectedDates = '',
+    this.bookBoth = false,
   });
 
   @override
@@ -44,6 +49,7 @@ class SelectOfficeScreen extends StatelessWidget {
         flowArgs: flowArgs,
         useHybrid: useHybrid,
         selectedDates: selectedDates,
+        bookBoth: bookBoth,
       ),
     );
   }
@@ -57,6 +63,7 @@ class _SelectOfficeView extends StatefulWidget {
   final TripScheduleFlowArgs? flowArgs;
   final bool useHybrid;
   final String selectedDates;
+  final bool bookBoth;
 
   const _SelectOfficeView({
     required this.isLogIn,
@@ -66,6 +73,7 @@ class _SelectOfficeView extends StatefulWidget {
     this.flowArgs,
     required this.useHybrid,
     required this.selectedDates,
+    required this.bookBoth,
   });
 
   @override
@@ -332,6 +340,7 @@ class _SelectOfficeViewState extends State<_SelectOfficeView> {
                           drList: state.details.drList,
                           useHybrid: widget.useHybrid,
                           selectedDates: widget.selectedDates,
+                          bookBoth: widget.bookBoth,
                         ),
                       ),
                     );

@@ -505,6 +505,8 @@ class TripPassenger {
   final double? reachedHomeLat;
   final double? reachedHomeLng;
   final String? paxTrackingStatus;
+  final String? empOffice;
+
 
   String get fullName =>
       [firstname, lastName].where((s) => s != null && s.isNotEmpty).join(' ');
@@ -577,6 +579,7 @@ class TripPassenger {
     this.reachedHomeLat,
     this.reachedHomeLng,
     this.paxTrackingStatus,
+    this.empOffice,
   });
 
   factory TripPassenger.fromJson(Map<String, dynamic> json) {
@@ -647,6 +650,7 @@ class TripPassenger {
       reachedHomeLat: readDouble(json['reachedHomeLat']),
       reachedHomeLng: readDouble(json['reachedHomeLng']),
       paxTrackingStatus: json['paxTrackingStatus']?.toString(),
+      empOffice: json['empOffice']?.toString()
     );
   }
 }

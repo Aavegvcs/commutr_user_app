@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
+import 'package:commutr_main/features/shorebird_update/shorebird_update.dart';
 import 'package:commutr_main/features/version_check/version_check_service.dart';
 import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +18,9 @@ class CommutrApp extends StatefulWidget {
 }
 
 class _CommutrAppState extends State<CommutrApp> {
+  final ShorebirdUpdateManager _shorebirdUpdateManager =
+      ShorebirdUpdateManager();
+
   @override
   void initState() {
     super.initState();
@@ -26,6 +32,34 @@ class _CommutrAppState extends State<CommutrApp> {
         VersionCheckService.checkOnAppOpen(context);
       }
     });
+
+    // When a Shorebird OTA patch finishes downloading, prompt the user to
+    // restart so it can be applied. Non-blocking; the patch also applies
+    // automatically on the next natural restart.
+    _shorebirdUpdateManager.restartRequired.addListener(_onRestartRequired);
+
+    // Check for and download an OTA patch off the startup critical path.
+    // Fire-and-forget: never awaited, never throws.
+    unawaited(_shorebirdUpdateManager.checkAndDownload());
+  }
+
+  void _onRestartRequired() {
+    if (!_shorebirdUpdateManager.restartRequired.value) return;
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Update ready. Restart the app to apply.'),
+        duration: Duration(seconds: 6),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _shorebirdUpdateManager.restartRequired.removeListener(_onRestartRequired);
+    _shorebirdUpdateManager.dispose();
+    super.dispose();
   }
 
   @override

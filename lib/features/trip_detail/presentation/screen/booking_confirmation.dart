@@ -1,5 +1,6 @@
 import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 class BookingConfirmedScreen extends StatefulWidget {
   /// `true` when the user updated an existing schedule (edit from welcome).
@@ -11,8 +12,14 @@ class BookingConfirmedScreen extends StatefulWidget {
   /// The selected date string (e.g. "2026-06-01").
   final String? selectedDate;
 
-  /// The selected time string (e.g. "09:00 AM").
+  /// The selected time string (e.g. "09:00 AM"). Used for the single-trip flow.
   final String? selectedTime;
+
+  /// Login (pickup) shift time when both trips were scheduled together.
+  final String? loginTime;
+
+  /// Logout (drop) shift time when both trips were scheduled together.
+  final String? logoutTime;
 
   const BookingConfirmedScreen({
     super.key,
@@ -20,6 +27,8 @@ class BookingConfirmedScreen extends StatefulWidget {
     this.successMessage,
     this.selectedDate,
     this.selectedTime,
+    this.loginTime,
+    this.logoutTime,
   });
 
   @override
@@ -86,16 +95,42 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
     return '${h.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')} $period';
   }
 
+  String? formatDate(String? selectedDate) {
+    if (selectedDate == null || selectedDate.isEmpty) return null;
+
+    final date = DateTime.parse(selectedDate); // "2026-06-01"
+    return DateFormat('dd-MM-yyyy').format(date); // "01-06-2026"
+  }
+
   String _buildSubtitle() {
-    final date = widget.selectedDate ?? '';
+    final date = formatDate(widget.selectedDate) ;
+    final rawLogin = widget.loginTime ?? '';
+    final rawLogout = widget.logoutTime ?? '';
+
+    // Both trips scheduled together → show login and logout timings.
+    if (rawLogin.isNotEmpty || rawLogout.isNotEmpty) {
+      final login = rawLogin.isNotEmpty ? _formatAmPm(rawLogin) : '';
+      final logout = rawLogout.isNotEmpty ? _formatAmPm(rawLogout) : '';
+      final buffer = StringBuffer();
+      if (date!.isNotEmpty) {
+        buffer.write('Your ride has been scheduled for $date.\n');
+      } else {
+        buffer.write('Your ride has been scheduled.\n');
+      }
+      if (login.isNotEmpty) buffer.write('Login trip schedule at $login');
+      if (login.isNotEmpty && logout.isNotEmpty) buffer.write('  •  ');
+      if (logout.isNotEmpty) buffer.write('Logout trip schedule at $logout');
+      return buffer.toString();
+    }
+
     final rawTime = widget.selectedTime ?? '';
     final time = rawTime.isNotEmpty ? _formatAmPm(rawTime) : '';
-    if (date.isNotEmpty && time.isNotEmpty) {
+    if (date!.isNotEmpty && time.isNotEmpty) {
       return 'Roster scheduled successfully for $date at $time';
     }
     return widget.isUpdate
         ? 'Your ride schedule has\nbeen successfully updated.'
-        : 'Your ride schedule has\nbeen successfully booked.';
+        : 'Your ride schedule has been\nsuccessfully booked.';
   }
 
   @override

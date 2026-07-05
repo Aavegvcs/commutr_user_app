@@ -51,6 +51,13 @@ class _TripDetailsView extends StatefulWidget {
 class _TripDetailsViewState extends State<_TripDetailsView> {
   bool isLogIn = true;
 
+  /// When `true`, the user is scheduling BOTH the Login and Logout trip in a
+  /// single flow: one shared date range + one shared office, then a Login shift
+  /// and a Logout shift on the timing screen, submitted as one create with both
+  /// `shiftStart` and `shiftEnd` set. Only selectable in the create flow (not
+  /// edit). When `false` the existing single-trip flow is used unchanged.
+  bool bookBoth = false;
+
   /// One-day selection (same start/end in the range picker).
   /// Defaults to today so the current date is pre-selected on first load.
   DateTime? _selectedSingleDate = _dateOnly(DateTime.now());
@@ -629,8 +636,12 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
       ),
       child: Row(
         children: [
-          _buildToggleBtn('Log In', isLogIn, enabled: !_isEditFlow),
-          _buildToggleBtn('Logout', !isLogIn, enabled: !_isEditFlow),
+          _buildToggleBtn('Log In', isLogIn && !bookBoth, enabled: !_isEditFlow),
+          _buildToggleBtn('Logout', !isLogIn && !bookBoth,
+              enabled: !_isEditFlow),
+          // "Both" is only available in the create flow; editing an existing
+          // schedule stays a single-trip operation.
+          if (!_isEditFlow) _buildToggleBtn('Both', bookBoth),
         ],
       ),
     );
@@ -639,8 +650,16 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
   Widget _buildToggleBtn(String label, bool isActive, {bool enabled = true}) {
     return Expanded(
       child: GestureDetector(
-        onTap:
-            enabled ? () => setState(() => isLogIn = label == 'Log In') : null,
+        onTap: enabled
+            ? () => setState(() {
+                  if (label == 'Both') {
+                    bookBoth = true;
+                  } else {
+                    bookBoth = false;
+                    isLogIn = label == 'Log In';
+                  }
+                })
+            : null,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           margin: const EdgeInsets.all(3),
@@ -1065,6 +1084,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                     flowArgs: widget.flowArgs,
                     useHybrid: true,
                     selectedDates: selectedDates,
+                    bookBoth: bookBoth,
                   ),
                 ),
               );
@@ -1104,6 +1124,7 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
                   toDate: toDate,
                   weekOffs: weekOffs,
                   flowArgs: widget.flowArgs,
+                  bookBoth: bookBoth,
                 ),
               ),
             );
