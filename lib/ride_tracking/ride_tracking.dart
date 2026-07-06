@@ -3126,7 +3126,8 @@ class _TrackingStatusBanner extends StatelessWidget {
       // Login → boarded & heading to office. Logout → dropped home.
       icon = logout ? Icons.home_rounded : Icons.event_seat_rounded;
       color = const Color(0xFF1A6B4A);
-      if (logout) {
+      if (logout)
+      {
         title = "Logout Trip";
         subtitle = 'Hope you had a good ride home';
       } else {
