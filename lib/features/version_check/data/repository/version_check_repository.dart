@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import '../../../../core/network/api_client.dart';
 import '../model/version_check_response.dart';
 
@@ -10,8 +8,8 @@ class VersionCheckRepository {
 
   /// Calls `GET /Auth/version-check`.
   ///
-  /// - [appType] `1` — Commutr user app.
-  /// - [platform] `1` = iOS, `2` = Android.
+  /// - [appType] `1` = DriverApp, `2` = UserApp.
+  /// - [platform] `1` = Android, `2` = iOS, `3` = Web.
   /// - [currentVersion] the running app version (e.g. `1.1.0`).
   Future<VersionCheckResponse> checkVersion({
     required int appType,
@@ -21,8 +19,8 @@ class VersionCheckRepository {
     final response = await apiClient.get(
       '/Auth/version-check',
       queryParameters: {
-        'appType': 2,
-        'platform': Platform.isAndroid ? 1 : 2,
+        'appType': appType,
+        'platform': platform,
         'currentVersion': currentVersion,
       },
     );

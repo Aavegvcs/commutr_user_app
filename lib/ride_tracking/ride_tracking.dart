@@ -162,7 +162,8 @@ List<TripPassenger> getRemainingDropPassengers(List<TripPassenger> passengers) {
 /// Marker hue for a LOGOUT drop stop, keyed on the passenger's live status and
 /// whether it is the cab's current drop target:
 ///   Current Drop → Orange · Upcoming Drop → Blue · Completed → Green · No Show → Red
-double logoutMarkerHue(LogoutPaxStatus status, {required bool isCurrentTarget}) {
+double logoutMarkerHue(LogoutPaxStatus status,
+    {required bool isCurrentTarget}) {
   switch (status) {
     case LogoutPaxStatus.completed:
       return BitmapDescriptor.hueGreen; // green
@@ -176,7 +177,8 @@ double logoutMarkerHue(LogoutPaxStatus status, {required bool isCurrentTarget}) 
 }
 
 /// Short status label for a LOGOUT drop stop, per the spec.
-String logoutStatusLabel(LogoutPaxStatus status, {required bool isCurrentTarget}) {
+String logoutStatusLabel(LogoutPaxStatus status,
+    {required bool isCurrentTarget}) {
   switch (status) {
     case LogoutPaxStatus.completed:
       return 'Completed';
@@ -627,9 +629,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         if (p.paxOrder == order) {
           final lat = p.plannedLat;
           final lng = p.plannedLng;
-          if (lat != null &&
-              lng != null &&
-              (lat != 0 || lng != 0)) {
+          if (lat != null && lng != null && (lat != 0 || lng != 0)) {
             return LatLng(lat, lng);
           }
           break;
@@ -641,9 +641,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         if (p.paxOrder == order) {
           final lat = p.plannedLat;
           final lng = p.plannedLng;
-          if (lat != null &&
-              lng != null &&
-              (lat != 0 || lng != 0)) {
+          if (lat != null && lng != null && (lat != 0 || lng != 0)) {
             return LatLng(lat, lng);
           }
           break;
@@ -700,7 +698,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     if (isLogout) {
       final officeLat = status.officeLat;
       final officeLng = status.officeLng;
-      if (officeLat != null && officeLng != null && (officeLat != 0 || officeLng != 0)) {
+      if (officeLat != null &&
+          officeLng != null &&
+          (officeLat != 0 || officeLng != 0)) {
         pts.add(LatLng(officeLat, officeLng));
       }
     }
@@ -744,7 +744,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     if (!isLogout) {
       final officeLat = status.officeLat;
       final officeLng = status.officeLng;
-      if (officeLat != null && officeLng != null && (officeLat != 0 || officeLng != 0)) {
+      if (officeLat != null &&
+          officeLng != null &&
+          (officeLat != 0 || officeLng != 0)) {
         pts.add(LatLng(officeLat, officeLng));
       }
     }
@@ -789,8 +791,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   /// the encoded planned polyline is absent. Safe to call repeatedly.
   Future<void> _loadGpsRoutePolylines(int tripId) async {
     try {
-      final route =
-          await sl<UserCabTrackingRepo>().getGpsRoute(tripId: tripId);
+      final route = await sl<UserCabTrackingRepo>().getGpsRoute(tripId: tripId);
       if (!mounted) return;
 
       // The encoded planned polyline from the API traces the FULL fleet route
@@ -835,7 +836,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     // Remove once the missing-passenger-marker issue is diagnosed.
     final status = _latestStatus;
     debugPrint('[MARKER-DEBUG] ── _rebuildStopMarkers ──');
-    debugPrint('[MARKER-DEBUG] flags: shouldUseSignalR=${status?.shouldUseSignalR} '
+    debugPrint(
+        '[MARKER-DEBUG] flags: shouldUseSignalR=${status?.shouldUseSignalR} '
         'shouldUsePolyline=${status?.shouldUsePolyline} '
         '_useSignalRWaypoints=$_useSignalRWaypoints');
     debugPrint('[MARKER-DEBUG] isLogout=$isLogout myPaxOrder=$_myPaxOrder '
@@ -844,7 +846,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
         'timelineStops=${_timeline.stops.length}');
     for (final s in _timeline.stops) {
       final resolved = _waypointLocationForStop(s);
-      debugPrint('[MARKER-DEBUG]   stop order=${s.order} isOffice=${s.isOffice} '
+      debugPrint(
+          '[MARKER-DEBUG]   stop order=${s.order} isOffice=${s.isOffice} '
           'isMe=${s.isMe} stop.location=${s.location} '
           'resolved=$resolved paxStatus=${s.paxTrackingStatus}'
           '${resolved == null ? "  <<< SKIPPED (null loc)" : ""}');
@@ -864,8 +867,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       // any unknown trip type keep the existing [StopState] scheme.
       //   LOGIN  pickup → Not Picked Up=Blue, Boarded=Orange, Completed=Green, No Show=Red
       //   LOGOUT drop   → Current Drop=Orange, Upcoming Drop=Blue, Completed=Green, No Show=Red
-      final TripPassenger? pax =
-          (isLogin || isLogout) && !stop.isOffice ? _passengerForStop(stop) : null;
+      final TripPassenger? pax = (isLogin || isLogout) && !stop.isOffice
+          ? _passengerForStop(stop)
+          : null;
 
       double hue;
       String stopLabel;
@@ -1105,6 +1109,17 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       return _officeStop ?? _timeline.target;
     }
     if (_isLogoutTripType()) {
+      // LOGOUT viewer-status gating (keyed off THIS passenger's status):
+      //   * Not-Boarded → cab has not left with them yet → aim the orange leg at
+      //     the office (cab → office), not at a drop home.
+      //   * No-Show     → no active leg at all (also gated in _shouldShowActiveLeg).
+      //   * En-Route / others → existing behaviour: cab → first remaining drop.
+      switch (_myLogoutTrackingStatus) {
+        case 'not-boarded':
+          return _officeStop ?? _fleetFirstPendingDrop;
+        case 'no-show':
+          return null;
+      }
       // Cab → first remaining drop; null when every passenger is dropped.
       return _fleetFirstPendingDrop;
     }
@@ -1240,7 +1255,15 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       // is nothing to draw — incl. before pickup data arrives, or once boarded
       // with no pickups left), so any non-empty login `points` should render —
       // including a not-yet-boarded pickup2 seeing cab → pickup1 → pickup2.
-      final showUpcoming = _isLoginTripType() || _isLogoutTripType();
+      // LOGOUT viewer-status gating for the blue upcoming route:
+      //   * Not-Boarded → orange is cab → office only, no future pax route (blue off).
+      //   * No-Show     → no future route at all (blue off).
+      //   * En-Route / others → existing behaviour (blue upcoming → own drop).
+      final logoutStatus = _myLogoutTrackingStatus;
+      final showUpcoming = _isLoginTripType() ||
+          (_isLogoutTripType() &&
+              logoutStatus != 'not-boarded' &&
+              logoutStatus != 'no-show');
       if (showUpcoming) {
         final targetLoc = _activeLegDestinationLatLng();
         // Anchor the blue at the current target's vertex (where the orange leg
@@ -1377,6 +1400,45 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     return !_timeline.isLogout;
   }
 
+  /// The viewer's own live LOGOUT drop status, keyed off THEIR
+  /// [TripPassenger.paxTrackingStatus] (matched by [widget.empId]), normalised to
+  /// one of `'not-boarded'`, `'en-route'`, `'no-show'`. Returns null on non-LOGOUT
+  /// trips, when the viewer's row / status is missing, or when the status is any
+  /// other value — callers then fall back to the existing behaviour untouched.
+  ///
+  /// Only used to gate the LOGOUT polyline set (see [_rebuildRoutePolylines] /
+  /// [_activeTarget]); login and all other logic are unaffected.
+  String? get _myLogoutTrackingStatus {
+    if (!_isLogoutTripType()) return null;
+    final status = _latestStatus;
+    final meEmpId = widget.empId;
+    if (status == null || meEmpId == null) return null;
+    for (final p in status.passengers) {
+      if (p.empId != meEmpId) continue;
+      final raw = p.paxTrackingStatus;
+      if (raw == null || raw.trim().isEmpty) return null;
+      // Normalise hyphen/underscore/space + casing, matching the existing
+      // [shouldIncludeInRoute] convention.
+      final s = raw
+          .trim()
+          .toLowerCase()
+          .replaceAll(RegExp(r'[-_]+'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ');
+      switch (s) {
+        case 'not boarded':
+          return 'not-boarded';
+        case 'en route':
+        case 'enroute':
+        case 'in cab': // legacy backend spelling for En-Route
+          return 'en-route';
+        case 'no show':
+          return 'no-show';
+      }
+      return null;
+    }
+    return null;
+  }
+
   /// LOGIN-only planned-route gating (Uber/Ola-shuttle passenger-wise logic).
   ///
   /// Until the logged-in passenger boards (status still "Not Picked Up"), the
@@ -1498,7 +1560,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     pts.add(_animatedDriverLatLng);
 
     for (final p in remaining) {
-      final order = p.paxOrder!; // non-null guaranteed by getRemainingDropPassengers
+      final order =
+          p.paxOrder!; // non-null guaranteed by getRemainingDropPassengers
       // Cap at the viewer's own drop — passengers never see drops beyond theirs.
       if (myOrder != null && order > myOrder) break;
 
@@ -1943,8 +2006,10 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
           empDistance: p.empDistance,
           empDirectDistance: p.empDirectDistance,
           empCost: p.empCost,
-          plannedScheduleTime: scheduleChanged ? liveSchedule : p.plannedScheduleTime,
-          etaDeviationMinutes: deviationChanged ? liveDeviation : p.etaDeviationMinutes,
+          plannedScheduleTime:
+              scheduleChanged ? liveSchedule : p.plannedScheduleTime,
+          etaDeviationMinutes:
+              deviationChanged ? liveDeviation : p.etaDeviationMinutes,
           empSigninTime: p.empSigninTime,
           empSigninLat: p.empSigninLat,
           empSigninLng: p.empSigninLng,
@@ -1971,7 +2036,8 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       // Keep the cached state in sync so the bottom sheet repaints from the
       // freshest passenger data on this silent tick (no loader, real-time).
       _latestData = _latestData?.copyWith(status: _latestStatus);
-      _timeline = RideTimeline.fromStatus(_latestStatus!, meEmpId: widget.empId);
+      _timeline =
+          RideTimeline.fromStatus(_latestStatus!, meEmpId: widget.empId);
       _fullTimeline = RideTimeline.fromStatus(_latestStatus!,
           meEmpId: widget.empId, includeAllStops: true);
     }
@@ -2449,8 +2515,8 @@ class _DebugInfoOverlayState extends State<_DebugInfoOverlay> {
                   if (p?.speed != null)
                     Text(
                       'speed ${p!.speed!.toStringAsFixed(1)} km/h',
-                      style: const TextStyle(
-                          fontSize: 10, color: Colors.white60),
+                      style:
+                          const TextStyle(fontSize: 10, color: Colors.white60),
                     ),
                   if (_open) ...[
                     const SizedBox(height: 6),
@@ -2465,8 +2531,7 @@ class _DebugInfoOverlayState extends State<_DebugInfoOverlay> {
                     const SizedBox(height: 2),
                     if (orders.isEmpty)
                       const Text('—',
-                          style:
-                              TextStyle(fontSize: 11, color: Colors.white54))
+                          style: TextStyle(fontSize: 11, color: Colors.white54))
                     else
                       ...orders.map((o) => Padding(
                             padding: const EdgeInsets.only(top: 2),
@@ -2689,8 +2754,7 @@ class _DriverCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final name = isLoading ? 'Loading…' : (driverName ?? '—');
     final plate = vehicleNo?.trim();
-    final canCall =
-        !isLoading && driverMobileNo?.trim().isNotEmpty == true;
+    final canCall = !isLoading && driverMobileNo?.trim().isNotEmpty == true;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -3086,12 +3150,12 @@ class _TrackingStatusBanner extends StatelessWidget {
           title = "You're on the way home";
         } else {
           title = stops == 0
-              ? 'Cab is on the way to your home'
+              ? 'Estimated arrival in'
               : '$stops drop${stops == 1 ? '' : 's'} before you';
         }
         // Both phases of a logout/drop trip describe progress toward MY drop.
         subtitle = stops == 0
-            ? 'Heading to your drop'
+            ? ''
             : '$stops drop${stops == 1 ? '' : 's'} before yours';
       } else {
         title = stops == 0
@@ -3116,20 +3180,46 @@ class _TrackingStatusBanner extends StatelessWidget {
     final showDurationEta =
         me.state != StopState.noShow && !(timeline.meBoarded && logout);
 
+    // LOGOUT ETA text/visibility keyed off THIS passenger's live
+    // paxTrackingStatus (Not-Boarded / En-Route / No-Show). Login and all other
+    // ETA behaviour are untouched; only the displayed label/visibility changes.
+    // Normalises hyphen/underscore/space + casing, matching the existing
+    // paxTrackingStatus convention used elsewhere in this file.
+    final myLogoutStatus = logout
+        ? (me.paxTrackingStatus == null || me.paxTrackingStatus!.trim().isEmpty
+            ? null
+            : me.paxTrackingStatus!
+                .trim()
+                .toLowerCase()
+                .replaceAll(RegExp(r'[-_]+'), ' ')
+                .replaceAll(RegExp(r'\s+'), ' '))
+        : null;
+    final isLogoutNotBoarded = myLogoutStatus == 'not boarded';
+    final isLogoutNoShow = myLogoutStatus == 'no show';
+    final isLogoutEnRoute = myLogoutStatus == 'en route' ||
+        myLogoutStatus == 'enroute' ||
+        myLogoutStatus == 'in cab'; // legacy backend spelling for En-Route
+
     // Render the strip whenever we have a server arrival clock, or (failing
-    // that) a duration ETA worth showing.
-    final showEtaStrip = arrivalClock != null || showDurationEta;
+    // that) a duration ETA worth showing. LOGOUT No-Show hides the ETA entirely.
+    final showEtaStrip =
+        !isLogoutNoShow && (arrivalClock != null || showDurationEta);
 
     // Contextual label. Falls back to a neutral "Scheduled arrival" when the
     // viewer-specific phrasing doesn't apply (no-show / already home) but the
     // server still gives us a planned arrival clock to display.
     final etaLabel = !showEtaStrip
         ? null
-        : (me.state == StopState.noShow || (timeline.meBoarded && logout)
-            ? 'Scheduled arrival'
-            : (!timeline.meBoarded
-                ? (logout ? 'ETA to your drop' : 'ETA to your pickup')
-                : (logout ? 'ETA to your drop' : 'ETA to office')));
+        : (isLogoutNotBoarded
+            ? 'ETA to your pickup'
+            : (isLogoutEnRoute
+                ? 'ETA to your drop'
+                : (me.state == StopState.noShow ||
+                        (timeline.meBoarded && logout)
+                    ? 'Scheduled arrival'
+                    : (!timeline.meBoarded
+                        ? (logout ? 'ETA to your drop' : 'ETA to your pickup')
+                        : (logout ? 'ETA to your drop' : 'ETA to office')))));
 
     return Container(
       decoration: BoxDecoration(
@@ -3200,7 +3290,7 @@ class _TrackingStatusBanner extends StatelessWidget {
                         color: Colors.white,
                       ),
                     ),
-                  ), 
+                  ),
                   Text(
                     arrivalClock ??
                         (showDurationEta ? formatEta(etaMinutes) : '—'),

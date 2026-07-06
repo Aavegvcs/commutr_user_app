@@ -250,6 +250,14 @@ class _WelcomeState extends State<_WelcomeView> {
     return s is AppControlLoaded && s.settings.hybridScheduleEnabled;
   }
 
+  /// Current per-location flag gating the "Both" (Login + Logout) toggle on the
+  /// trip-details screen (defaults to `false` until/unless settings are loaded).
+  bool get _isScheduleFillForLoginAndLogoutBoth {
+    final s = context.read<AppControlBloc>().state;
+    return s is AppControlLoaded &&
+        s.settings.isScheduleFillForLoginAndLogoutBoth;
+  }
+
   void _maybeDispatchTripHistoryFetch(int empId) {
     if (_tripHistoryFetchDispatched) return;
     _tripHistoryFetchDispatched = true;
@@ -474,6 +482,8 @@ class _WelcomeState extends State<_WelcomeView> {
         builder: (_) => TripDetailsScreen(
           flowArgs: args,
           hybridScheduleEnabled: _hybridScheduleEnabled,
+          isScheduleFillForLoginAndLogoutBoth:
+              _isScheduleFillForLoginAndLogoutBoth,
         ),
       ),
     );
@@ -1584,15 +1594,24 @@ class _WelcomeState extends State<_WelcomeView> {
   /// No-show status banner shown below the welcome header.
   ///
   /// Visibility rule: only rendered when [RosterUserDetails.noShowCountIsActive]
-  /// is true. When the user is suspended (not roster-eligible with a suspension
-  /// end date) it uses error styling; otherwise informational styling.
+  /// is true. The banner type and message are derived from
+  /// [RosterUserDetails.noShowMessage], a comma-separated string where the first
+  /// value is the type (`Info`/`Error`) and the second value is the message to
+  /// display (e.g. `"Info,NoShowLeft,0,0"`).
   Widget _buildNoShowBanner(RosterUserDetails details) {
     if (!details.noShowCountIsActive) {
       return const SizedBox.shrink();
     }
 
-    final suspensionDate = _formatSuspensionDate(details.suspensionEndDate);
-    final isSuspended = !details.isRosterEligible && suspensionDate != null;
+    final parts = details.noShowMessage.split(',');
+    final type = parts.isNotEmpty ? parts[0].trim().toLowerCase() : '';
+    final message = parts.length > 1 ? parts.sublist(1).join(',').trim() : '';
+
+    if (message.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final bool isError = type == 'error';
 
     final Color bgColor;
     final Color borderColor;
@@ -1600,7 +1619,7 @@ class _WelcomeState extends State<_WelcomeView> {
     final IconData icon;
     final String title;
 
-    if (isSuspended) {
+    if (isError) {
       bgColor = const Color(0xFFFDECEA);
       borderColor = const Color(0xFFF5C2C0);
       accentColor = const Color(0xFFD32F2F);
@@ -1641,30 +1660,13 @@ class _WelcomeState extends State<_WelcomeView> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                if (isSuspended) ...[
-                  const Text(
-                    'Your roster booking access is currently restricted '
-                    'due to no-show policy violations.',
-                    style: TextStyle(fontSize: 13, color: Color(0xFF444444)),
+                Text(
+                  message,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF444444),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Access will be restored on:\n$suspensionDate',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF222222),
-                    ),
-                  ),
-                ] else
-                  Text(
-                    'You currently have ${details.noShowCount} '
-                    'no-show(s) recorded.',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF444444),
-                    ),
-                  ),
+                ),
               ],
             ),
           ),
@@ -5112,6 +5114,8 @@ class _WelcomeState extends State<_WelcomeView> {
           MaterialPageRoute(
             builder: (context) => TripDetailsScreen(
               hybridScheduleEnabled: _hybridScheduleEnabled,
+              isScheduleFillForLoginAndLogoutBoth:
+                  _isScheduleFillForLoginAndLogoutBoth,
             ),
           ),
         );
@@ -6299,11 +6303,14 @@ class AppDrawer extends StatelessWidget {
                   final appControl = context.read<AppControlBloc>().state;
                   final hybridEnabled = appControl is AppControlLoaded &&
                       appControl.settings.hybridScheduleEnabled;
+                  final bothEnabled = appControl is AppControlLoaded &&
+                      appControl.settings.isScheduleFillForLoginAndLogoutBoth;
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => TripDetailsScreen(
                         hybridScheduleEnabled: hybridEnabled,
+                        isScheduleFillForLoginAndLogoutBoth: bothEnabled,
                       ),
                     ),
                   );

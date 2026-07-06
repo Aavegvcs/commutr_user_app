@@ -17,10 +17,16 @@ class TripDetailsScreen extends StatelessWidget {
   /// (instead of a range) which are scheduled via `/TransRoster/UpdateScheduleHybrid`.
   final bool hybridScheduleEnabled;
 
+  /// Per-location AppControl flag. When `true`, the "Both" toggle (schedule
+  /// Login and Logout together) is shown in the create flow; when `false` the
+  /// option is hidden and only Log In / Logout are selectable.
+  final bool isScheduleFillForLoginAndLogoutBoth;
+
   const TripDetailsScreen({
     super.key,
     this.flowArgs,
     this.hybridScheduleEnabled = false,
+    this.isScheduleFillForLoginAndLogoutBoth = false,
   });
 
   @override
@@ -30,6 +36,8 @@ class TripDetailsScreen extends StatelessWidget {
       child: _TripDetailsView(
         flowArgs: flowArgs,
         hybridScheduleEnabled: hybridScheduleEnabled,
+        isScheduleFillForLoginAndLogoutBoth:
+            isScheduleFillForLoginAndLogoutBoth,
       ),
     );
   }
@@ -38,10 +46,12 @@ class TripDetailsScreen extends StatelessWidget {
 class _TripDetailsView extends StatefulWidget {
   final TripScheduleFlowArgs? flowArgs;
   final bool hybridScheduleEnabled;
+  final bool isScheduleFillForLoginAndLogoutBoth;
 
   const _TripDetailsView({
     this.flowArgs,
     required this.hybridScheduleEnabled,
+    required this.isScheduleFillForLoginAndLogoutBoth,
   });
 
   @override
@@ -639,9 +649,11 @@ class _TripDetailsViewState extends State<_TripDetailsView> {
           _buildToggleBtn('Log In', isLogIn && !bookBoth, enabled: !_isEditFlow),
           _buildToggleBtn('Logout', !isLogIn && !bookBoth,
               enabled: !_isEditFlow),
-          // "Both" is only available in the create flow; editing an existing
-          // schedule stays a single-trip operation.
-          if (!_isEditFlow) _buildToggleBtn('Both', bookBoth),
+          // "Both" is only available in the create flow, and only when the
+          // per-location `isScheduleFillForLoginAndLogoutBoth` flag is enabled;
+          // editing an existing schedule stays a single-trip operation.
+          if (!_isEditFlow && widget.isScheduleFillForLoginAndLogoutBoth)
+            _buildToggleBtn('Both', bookBoth),
         ],
       ),
     );

@@ -47,6 +47,8 @@ class RosterUserDetails {
   final bool isRosterEligible;
   final String suspensionEndDate;
   final bool noShowCountIsActive;
+  final int configuredCount;
+  final String noShowMessage;
 
   const RosterUserDetails({
     required this.locations,
@@ -62,6 +64,8 @@ class RosterUserDetails {
     required this.isRosterEligible,
     required this.suspensionEndDate,
     required this.noShowCountIsActive,
+    required this.configuredCount,
+    required this.noShowMessage,
   });
 
   factory RosterUserDetails.fromJson(Map<String, dynamic> json) {
@@ -88,6 +92,8 @@ class RosterUserDetails {
       isRosterEligible: json['IsRosterEligible'] as bool? ?? false,
       suspensionEndDate: json['SuspensionEndDate']?.toString() ?? '',
       noShowCountIsActive: json['NoShowCountIsActive'] as bool? ?? false,
+      configuredCount: (json['ConfiguredCount'] as num?)?.toInt() ?? 0,
+      noShowMessage: json['NoShowMessage']?.toString() ?? '',
     );
   }
 }
