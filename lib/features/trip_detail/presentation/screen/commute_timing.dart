@@ -402,6 +402,13 @@ class _CommuteTimingViewState extends State<_CommuteTimingView> {
                     isUpdate: widget.flowArgs?.isEdit == true,
                     successMessage: state.message,
                     selectedDate: widget.fromDate,
+                    // Reuse the dates already selected upstream so the
+                    // confirmation can list every selected date:
+                    //  • Hybrid  → the comma-joined `selectedDates` list.
+                    //  • Range   → the from/to endpoints (expanded on display).
+                    toDate: widget.toDate,
+                    selectedDates: widget.selectedDates,
+                    useHybrid: widget.useHybrid,
                     selectedTime: widget.bookBoth
                         ? null
                         : widget.isLogIn
