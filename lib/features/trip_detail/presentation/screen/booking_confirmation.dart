@@ -9,8 +9,21 @@ class BookingConfirmedScreen extends StatefulWidget {
   /// Message from `UpdateSchedules` API (optional).
   final String? successMessage;
 
-  /// The selected date string (e.g. "2026-06-01").
+  /// The selected date string (e.g. "2026-06-01"). For a Date Range this is
+  /// the range start; combined with [toDate] it bounds the full range.
   final String? selectedDate;
+
+  /// Range end for a Date Range selection (e.g. "2026-06-30"). `null`/empty for
+  /// hybrid or single-date flows.
+  final String? toDate;
+
+  /// Comma-joined `yyyy-MM-dd` dates picked in the hybrid random-date flow
+  /// (e.g. "2026-06-01,2026-06-03"). Only meaningful when [useHybrid] is `true`.
+  final String? selectedDates;
+
+  /// When `true`, the dates come from [selectedDates] (hybrid random-date
+  /// selection). When `false`, [selectedDate]/[toDate] describe a Date Range.
+  final bool useHybrid;
 
   /// The selected time string (e.g. "09:00 AM"). Used for the single-trip flow.
   final String? selectedTime;
@@ -26,6 +39,9 @@ class BookingConfirmedScreen extends StatefulWidget {
     this.isUpdate = false,
     this.successMessage,
     this.selectedDate,
+    this.toDate,
+    this.selectedDates,
+    this.useHybrid = false,
     this.selectedTime,
     this.loginTime,
     this.logoutTime,
@@ -102,8 +118,66 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
     return DateFormat('dd-MM-yyyy').format(date); // "01-06-2026"
   }
 
+  /// Every selected date, formatted with the existing `dd-MM-yyyy` format.
+  ///
+  /// Reuses the dates already chosen upstream — no re-computation of the
+  /// selection itself:
+  ///  • Hybrid → splits the comma-joined [BookingConfirmedScreen.selectedDates].
+  ///  • Range  → expands [selectedDate]..[toDate] inclusive (the endpoints the
+  ///    user picked); a single date yields just that one entry.
+  List<String> _allSelectedDates() {
+    if (widget.useHybrid) {
+      final raw = widget.selectedDates ?? '';
+      final dates = raw
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .map(DateTime.parse)
+          .toList()
+        ..sort();
+      return dates.map((d) => DateFormat('dd-MM-yyyy').format(d)).toList();
+    }
+
+    final from = widget.selectedDate;
+    if (from == null || from.isEmpty) return const [];
+    final start = DateTime.parse(from);
+    final toRaw = widget.toDate;
+    final end = (toRaw != null && toRaw.isNotEmpty)
+        ? DateTime.parse(toRaw)
+        : start;
+
+    if (!end.isAfter(start)) {
+      return [DateFormat('dd-MM-yyyy').format(start)];
+    }
+
+    final result = <String>[];
+    var d = DateTime(start.year, start.month, start.day);
+    final last = DateTime(end.year, end.month, end.day);
+    while (!d.isAfter(last)) {
+      result.add(DateFormat('dd-MM-yyyy').format(d));
+      d = d.add(const Duration(days: 1));
+    }
+    return result;
+  }
+
+  /// The selected dates as a human phrase, e.g.
+  /// "08-07-2026, 09-07-2026 & 10-07-2026". Built from the actual selected
+  /// dates (reuses [_allSelectedDates], already `dd-MM-yyyy`) — comma-separated
+  /// with an "&" before the last. Empty when nothing is selected.
+  String _selectedDatesPhrase() {
+    final labels = _allSelectedDates();
+    if (labels.isEmpty) return '';
+    if (labels.length == 1) return labels.first;
+    final head = labels.sublist(0, labels.length - 1).join(', ');
+    return '$head & ${labels.last}';
+  }
+
   String _buildSubtitle() {
-    final date = formatDate(widget.selectedDate) ;
+    final date = formatDate(widget.selectedDate);
+    // For multi-date bookings the subtitle names every selected date inline
+    // (e.g. "08-07-2026, 09-07-2026 & 10-07-2026") instead of a single date.
+    final datesPhrase = _selectedDatesPhrase();
+    final hasMultipleDates = _allSelectedDates().length > 1;
     final rawLogin = widget.loginTime ?? '';
     final rawLogout = widget.logoutTime ?? '';
 
@@ -112,7 +186,9 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
       final login = rawLogin.isNotEmpty ? _formatAmPm(rawLogin) : '';
       final logout = rawLogout.isNotEmpty ? _formatAmPm(rawLogout) : '';
       final buffer = StringBuffer();
-      if (date!.isNotEmpty) {
+      if (hasMultipleDates && datesPhrase.isNotEmpty) {
+        buffer.write('Your ride has been scheduled for $datesPhrase.\n');
+      } else if (date != null && date.isNotEmpty) {
         buffer.write('Your ride has been scheduled for $date.\n');
       } else {
         buffer.write('Your ride has been scheduled.\n');
@@ -125,7 +201,10 @@ class _BookingConfirmedScreenState extends State<BookingConfirmedScreen>
 
     final rawTime = widget.selectedTime ?? '';
     final time = rawTime.isNotEmpty ? _formatAmPm(rawTime) : '';
-    if (date!.isNotEmpty && time.isNotEmpty) {
+    if (hasMultipleDates && datesPhrase.isNotEmpty && time.isNotEmpty) {
+      return 'Roster scheduled successfully for $datesPhrase at $time.';
+    }
+    if (date != null && date.isNotEmpty && time.isNotEmpty) {
       return 'Roster scheduled successfully for $date at $time';
     }
     return widget.isUpdate
