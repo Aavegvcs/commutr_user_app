@@ -605,6 +605,21 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     return '${_fleetFirstPendingPickup?.order ?? -1}:$remaining';
   }
 
+  /// Live OTP for the logged-in employee, taken from the latest SignalR
+  /// payload's passenger list (matched by [widget.empId]). Returns null when
+  /// SignalR hasn't delivered an OTP yet, so the caller can fall back to the
+  /// boarding/REST OTP. Read on every 200 ms tick so any backend OTP change is
+  /// reflected almost instantly, socket-style, with no loader or flicker.
+  String? get _liveSignalROtp {
+    final me = widget.empId;
+    final passengers = _lastPayload?.passengers;
+    if (me == null || passengers == null || passengers.isEmpty) return null;
+    for (final p in passengers) {
+      if (p.empId == me && p.otp != null) return p.otp.toString();
+    }
+    return null;
+  }
+
   /// True when waypoint markers should use live SignalR passenger coordinates.
   bool get _useSignalRWaypoints {
     final status = _latestStatus;
@@ -2304,12 +2319,16 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // OTP card — prefer the boarding OTP passed from the
-                      // home screen (always present); fall back to the API value.
+                      // OTP card — prefer the live OTP pushed over SignalR for
+                      // the logged-in employee (refreshed every 200 ms so any
+                      // backend change appears near-instantly, socket-style);
+                      // fall back to the boarding OTP passed from the home
+                      // screen, then the API value.
                       _OtpCard(
-                        otp: widget.boardingOtp?.trim().isNotEmpty == true
-                            ? widget.boardingOtp
-                            : data?.detail?.otpDisplay,
+                        otp: _liveSignalROtp ??
+                            (widget.boardingOtp?.trim().isNotEmpty == true
+                                ? widget.boardingOtp
+                                : data?.detail?.otpDisplay),
                         isLoading: isLoading,
                       ),
                       const SizedBox(height: 10),
