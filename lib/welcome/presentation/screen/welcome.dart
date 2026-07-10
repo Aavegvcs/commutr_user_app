@@ -61,6 +61,8 @@ import '../../../features/ai_chatbot/chat_popup.dart';
 import '../../../features/complaint/presentation/screen/raise_complaint_screen.dart';
 import '../../../features/notification/notification_screen.dart';
 import '../../../features/trip_chat/presentation/trip_group_chat_screen.dart';
+import '../../../features/trip_detail/data/model/cab_tracking/user_cab_tracking_response.dart';
+import '../../../features/trip_detail/data/repository/cab_tracking/user_cab_tracking_repo.dart';
 import '../../../features/trip_detail/presentation/screen/trip_detail.dart';
 import '../../../trip_summary/trip_summary_welcome.dart';
 import '../../../features/adhoc/presentation/screen/adhoc_request_screen.dart';
@@ -509,7 +511,7 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
-  void _openTripGroupChat(TripHomeItem item) {
+  Future<void> _openTripGroupChat(TripHomeItem item) async {
     final tripId = item.tripId;
     if (tripId == null || tripId == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -541,6 +543,22 @@ class _WelcomeState extends State<_WelcomeView> {
     final participants =
         userName.isNotEmpty ? '$userName$extra' : 'Trip passengers';
 
+    // The chat screen resolves other passengers' names (sender/receiver) from
+    // the trip's passenger list. The trip card has no cab-tracking data loaded,
+    // so fetch the tracking status here to get the passengers before opening
+    // the chat. On failure fall back to an empty list (names then resolve from
+    // drList / senderName as before).
+    List<TripPassenger> passengers = const [];
+    try {
+      final status =
+          await sl<UserCabTrackingRepo>().getTrackingStatus(tripId: tripId);
+      passengers = status.passengers;
+    } catch (_) {
+      // Ignore — chat still opens without pre-resolved passenger names.
+    }
+
+    if (!mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -555,6 +573,7 @@ class _WelcomeState extends State<_WelcomeView> {
           drList: rosterState is RosterLoaded
               ? rosterState.details.drList
               : const [],
+          passengers: passengers,
         ),
       ),
     );

@@ -196,6 +196,8 @@ class RouteTripPassenger {
 
   final String? paxTrackingStatus;
 
+  final int? otp;
+
   const RouteTripPassenger({
     this.empId,
     this.employeeID,
@@ -233,6 +235,7 @@ class RouteTripPassenger {
     this.reachedHomeLat,
     this.reachedHomeLng,
     this.paxTrackingStatus,
+    this.otp,
   });
 
   factory RouteTripPassenger.fromJson(Map<String, dynamic> json) {
@@ -276,6 +279,7 @@ class RouteTripPassenger {
       reachedHomeLat: _readDouble(json['reachedHomeLat']),
       reachedHomeLng: _readDouble(json['reachedHomeLng']),
       paxTrackingStatus: json['paxTrackingStatus']?.toString(),
+      otp: (json['otp'] as num?)?.toInt(),
     );
   }
 
@@ -316,6 +320,7 @@ class RouteTripPassenger {
         'reachedHomeLat': reachedHomeLat,
         'reachedHomeLng': reachedHomeLng,
         'paxTrackingStatus': paxTrackingStatus,
+        'otp': otp,
       };
 }
 
