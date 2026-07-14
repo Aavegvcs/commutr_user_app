@@ -200,6 +200,12 @@ class ScheduleItem {
   /// Office/location code for this schedule (`LocCode`). Used as the primary
   /// source when cancelling/editing a roster entry.
   final int? locCode;
+  final String? loginCancelled;
+  final String? logoutCancelled;
+  final String? loginNoshow;
+  final String? logoutNoshow;
+
+
 
   /// Trip availability flag from the backend, e.g. `"TripFound"` /
   /// `"TripNotFound"`. Indicates whether a vehicle/trip has been found for the
@@ -217,6 +223,10 @@ class ScheduleItem {
     this.userAddress,
     this.officeAddress,
     this.locCode,
+    this.loginCancelled,
+    this.logoutCancelled,
+    this.loginNoshow,
+    this.logoutNoshow
   });
 
   factory ScheduleItem.fromJson(Map<String, dynamic> json) {
@@ -239,6 +249,11 @@ class ScheduleItem {
       userAddress: readString('UserAddress'),
       officeAddress: readString('OfficeAddress'),
       locCode: (json['LocCode'] as num?)?.toInt(),
+      loginCancelled: readString('LoginCancelled'),
+      logoutCancelled: readString('LogoutCancelled'),
+      loginNoshow: readString('LoginNoshow'),
+      logoutNoshow: readString('LogoutNoshow'),
+
     );
   }
 

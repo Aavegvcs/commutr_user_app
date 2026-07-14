@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/storage/auth_local_storage.dart';
+import 'package:commutr_main/features/dpdca/dpdca_screen.dart';
 import 'package:commutr_main/welcome/presentation/screen/welcome.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -292,9 +294,17 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
       child: BlocConsumer<AuthBloc, AuthState>(
         listener: (context, state) {
           if (state is OtpVerifySuccess) {
+            // Show the one-time DPDP consent screen only on the first
+            // successful OTP verification after a fresh install; otherwise go
+            // straight to Welcome.
+            final showDpdca = !sl<AuthLocalStorage>().hasSeenDpdcaConsent;
             Navigator.pushAndRemoveUntil(
               context,
-              MaterialPageRoute(builder: (_) => const Welcome()),
+              MaterialPageRoute(
+                builder: (_) => showDpdca
+                    ? const DataPrivacyConsentScreen()
+                    : const Welcome(),
+              ),
               (_) => false,
             );
           } else if (state is OtpVerifyFailure) {
