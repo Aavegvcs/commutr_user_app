@@ -205,6 +205,10 @@ class ScheduleItem {
   final String? loginNoshow;
   final String? logoutNoshow;
 
+  /// UI-behaviour flags supplied by the backend (`AppUiConfig`), controlling
+  /// which actions the app should surface for this schedule entry.
+  final AppUiConfig? appUiConfig;
+
 
 
   /// Trip availability flag from the backend, e.g. `"TripFound"` /
@@ -226,7 +230,8 @@ class ScheduleItem {
     this.loginCancelled,
     this.logoutCancelled,
     this.loginNoshow,
-    this.logoutNoshow
+    this.logoutNoshow,
+    this.appUiConfig,
   });
 
   factory ScheduleItem.fromJson(Map<String, dynamic> json) {
@@ -253,7 +258,10 @@ class ScheduleItem {
       logoutCancelled: readString('LogoutCancelled'),
       loginNoshow: readString('LoginNoshow'),
       logoutNoshow: readString('LogoutNoshow'),
-
+      appUiConfig: json['AppUiConfig'] is Map
+          ? AppUiConfig.fromJson(
+              Map<String, dynamic>.from(json['AppUiConfig'] as Map))
+          : null,
     );
   }
 
@@ -292,4 +300,45 @@ class ScheduleItem {
   /// not applicable.
   bool get isScheduledStatus =>
       (tripStatusName ?? '').trim().toLowerCase() == 'scheduled';
+}
+
+/// UI-behaviour flags supplied by the backend under `AppUiConfig`. Each flag
+/// tells the app whether a given action should be surfaced for the schedule
+/// entry. All default to `false` when missing so the UI hides actions unless
+/// the backend explicitly enables them.
+class AppUiConfig {
+  final bool isCancellationAllowed;
+  final bool isEditScheduleAllowed;
+  final bool isAlreadyNoShow;
+  final bool isCancelledAllowedAfterTAT;
+  final bool isTrackingAllowed;
+
+  const AppUiConfig({
+    this.isCancellationAllowed = false,
+    this.isEditScheduleAllowed = false,
+    this.isAlreadyNoShow = false,
+    this.isCancelledAllowedAfterTAT = false,
+    this.isTrackingAllowed = false,
+  });
+
+  factory AppUiConfig.fromJson(Map<String, dynamic> json) {
+    bool readBool(String key) {
+      final v = json[key];
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final s = v.trim().toLowerCase();
+        return s == 'true' || s == '1';
+      }
+      return false;
+    }
+
+    return AppUiConfig(
+      isCancellationAllowed: readBool('isCancellationAllowed'),
+      isEditScheduleAllowed: readBool('isEditScheduleAllowed'),
+      isAlreadyNoShow: readBool('isAlreadyNoShow'),
+      isCancelledAllowedAfterTAT: readBool('isCancelledAllowedAfterTAT'),
+      isTrackingAllowed: readBool('isTrackingAllowed'),
+    );
+  }
 }

@@ -3645,6 +3645,18 @@ class _WelcomeState extends State<_WelcomeView> {
               userName: item.userName,
             );
 
+    // ─── Action-button visibility (AppUiConfig is the single source of truth) ─
+    // When the backend marks the schedule as already no-show, only a No-Show
+    // button is surfaced (in place of Cancel); Cancel and Edit are hidden.
+    // Otherwise Cancel/Edit visibility follows their respective flags.
+    final AppUiConfig uiConfig = item.appUiConfig ?? const AppUiConfig();
+    final bool showNoShowButton = uiConfig.isAlreadyNoShow;
+    final bool showCancelButton =
+        !showNoShowButton && uiConfig.isCancellationAllowed;
+    final bool showEditButton =
+        !showNoShowButton && uiConfig.isEditScheduleAllowed;
+    final bool showTrackButton = uiConfig.isTrackingAllowed;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
@@ -3924,86 +3936,123 @@ class _WelcomeState extends State<_WelcomeView> {
               const SizedBox(height: 14),
               Row(
                 children: [
-                  InkWell(
-                    splashColor: Colors.transparent,
-                    onTap: () {
-                      _showCancelRideDialog(
-                        context,
-                        isLogin: isLogin,
-                        item: item,
-                      );
-                    },
-                    child: Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0x33BA1A1A)),
-                      ),
-                      child: const Icon(
-                        Icons.close,
-                        color: Color(0xFFBA1A1A),
-                        size: 20,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  InkWell(
-                    splashColor: Colors.transparent,
-                    onTap: () {
-                      _openEditRoster(
-                        context,
-                        isLogin: isLogin,
-                        item: item,
-                      );
-                    },
-                    child: Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0xFFE8E8E8)),
-                      ),
-                      child: Icon(
-                        Icons.edit_outlined,
-                        color: Colors.grey[600],
-                        size: 18,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Opacity(
-                      opacity: isScheduled ? 0.6 : 1.0,
-                      child: GestureDetector(
-                        onTap: trackVehicleAction,
-                        child: Container(
-                          height: 42,
-                          decoration: BoxDecoration(
-                            color: trackBg,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.my_location, size: 16, color: trackFg),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Track Vehicle',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: trackFg,
-                                ),
-                              ),
-                            ],
+                  if (showNoShowButton) ...[
+                    InkWell(
+                      splashColor: Colors.transparent,
+                      onTap: () {
+                        _showCancelRideDialog(
+                          context,
+                          isLogin: isLogin,
+                          item: item,
+                        );
+                      },
+                      child: Container(
+                        height: 42,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: const Color(0x33BA1A1A)),
+                        ),
+                        alignment: Alignment.center,
+                        child: const Text(
+                          'No-Show',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFBA1A1A),
                           ),
                         ),
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 10),
+                  ],
+                  if (showCancelButton) ...[
+                    InkWell(
+                      splashColor: Colors.transparent,
+                      onTap: () {
+                        _showCancelRideDialog(
+                          context,
+                          isLogin: isLogin,
+                          item: item,
+                        );
+                      },
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0x33BA1A1A)),
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Color(0xFFBA1A1A),
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  if (showEditButton) ...[
+                    InkWell(
+                      splashColor: Colors.transparent,
+                      onTap: () {
+                        _openEditRoster(
+                          context,
+                          isLogin: isLogin,
+                          item: item,
+                        );
+                      },
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0xFFE8E8E8)),
+                        ),
+                        child: Icon(
+                          Icons.edit_outlined,
+                          color: Colors.grey[600],
+                          size: 18,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  if (showTrackButton)
+                    Expanded(
+                      child: Opacity(
+                        opacity: isScheduled ? 0.6 : 1.0,
+                        child: GestureDetector(
+                          onTap: trackVehicleAction,
+                          child: Container(
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: trackBg,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.my_location,
+                                    size: 16, color: trackFg),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Track Vehicle',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: trackFg,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ] else if (!isScheduled) ...[
@@ -4056,36 +4105,37 @@ class _WelcomeState extends State<_WelcomeView> {
                         ],
                       ),
                     ),
-                    Transform.translate(
-                      offset: const Offset(0.0, 10.0),
-                      child: GestureDetector(
-                        onTap: trackVehicleAction,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: tagBgColor,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.my_location,
-                                  size: 16, color: accentColor),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Track Vehicle',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: accentColor,
+                    if (showTrackButton)
+                      Transform.translate(
+                        offset: const Offset(0.0, 10.0),
+                        child: GestureDetector(
+                          onTap: trackVehicleAction,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: tagBgColor,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.my_location,
+                                    size: 16, color: accentColor),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Track Vehicle',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: accentColor,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
