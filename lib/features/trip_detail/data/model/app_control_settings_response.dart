@@ -15,6 +15,8 @@ class AppControlSettings {
   final bool hybridScheduleEnabled;
   final bool isScheduleFillForLoginAndLogoutBoth;
   final bool isBoardDeBoardOTPSameOrDifferent;
+  final bool isCancelTripByUserAfterTAT;
+  final bool isCancelScheduleByUserAfterTAT;
 
   const AppControlSettings({
     required this.adhocRequestEnabledForUser,
@@ -22,6 +24,8 @@ class AppControlSettings {
     required this.hybridScheduleEnabled,
     required this.isScheduleFillForLoginAndLogoutBoth,
     required this.isBoardDeBoardOTPSameOrDifferent,
+    required this.isCancelTripByUserAfterTAT,
+    required this.isCancelScheduleByUserAfterTAT
   });
 
   factory AppControlSettings.fromJson(Map<String, dynamic> json) {
@@ -36,6 +40,8 @@ class AppControlSettings {
           json['isScheduleFillForLoginAndLogoutBoth'] as bool? ?? false,
       isBoardDeBoardOTPSameOrDifferent:
           json['isBoardDeBoardOTPSameOrDifferent'] as bool? ?? false,
+      isCancelTripByUserAfterTAT: json['isCancelTripByUserAfterTAT'] as bool? ?? false,
+      isCancelScheduleByUserAfterTAT: json['isCancelScheduleByUserAfterTAT'] as bool? ?? false
     );
   }
 }

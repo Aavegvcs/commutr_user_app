@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' show pi;
 
+import 'package:commutr_main/features/trip_detail/data/model/app_control_settings_response.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:in_app_review/in_app_review.dart';
 
@@ -3455,6 +3456,14 @@ class _WelcomeState extends State<_WelcomeView> {
   }) {
     final widgets = <Widget>[];
 
+    // When cancel-schedule-after-TAT is enabled, a cancelled / no-show schedule
+    // leg must still render as a schedule card even if an active trip exists
+    // for the same date — so the active-trip de-dup is bypassed for that leg.
+    final appControlState = context.read<AppControlBloc>().state;
+    final bool cancelScheduleAfterTAT = appControlState is AppControlLoaded &&
+        appControlState.settings.isCancelScheduleByUserAfterTAT;
+    bool hasText(String? v) => v != null && v.trim().isNotEmpty;
+
     // Counter that is unique across every group so each schedule card gets its
     // own expansion key. Using only the per-group index `i` caused collisions
     // when two date groups shared the same (or null) `dateIn` label, which made
@@ -3468,10 +3477,19 @@ class _WelcomeState extends State<_WelcomeView> {
       final groupCards = <Widget>[];
       for (var i = 0; i < group.data.length; i++) {
         final item = group.data[i];
-        if (item.shouldShowLoginCard) {
+        final bool loginCancelledOrNoShow = cancelScheduleAfterTAT &&
+            (hasText(item.loginNoshow) || hasText(item.loginCancelled));
+        // Normally a login card needs both a schedule date and a shift time.
+        // For a cancelled / no-show leg (flag on) the shift time may be empty,
+        // so the date alone is enough to render the card.
+        final bool showLoginCard = item.shouldShowLoginCard ||
+            (loginCancelledOrNoShow && item.hasLoginSchedule);
+        if (showLoginCard) {
           final loginIso = scheduleDateToIso(item.loginScheduleDate);
           final activeKey = '${loginIso}_true';
-          if (loginIso != null && activeTripKeys.contains(activeKey)) {
+          if (loginIso != null &&
+              activeTripKeys.contains(activeKey) &&
+              !loginCancelledOrNoShow) {
             // Already shown as an active trip — skip this schedule card.
           } else {
             final key = '${group.dateIn ?? "_"}_${g}_login_${i}_$cardIndex';
@@ -3479,7 +3497,7 @@ class _WelcomeState extends State<_WelcomeView> {
             groupCards.add(_buildScheduleCard(
               type: 'login',
               label: 'Login',
-              time: _formatShiftTime(item.loginShiftTime) ?? '--:--',
+              time: _formatShiftTime(item.loginShiftTime) ?? '',
               isExpanded: _scheduleExpanded.contains(key),
               onTap: () => _toggleScheduleExpansion(key),
               isScheduled: item.isScheduledStatus,
@@ -3488,10 +3506,16 @@ class _WelcomeState extends State<_WelcomeView> {
             groupCards.add(const SizedBox(height: 10));
           }
         }
-        if (item.shouldShowLogoutCard) {
+        final bool logoutCancelledOrNoShow = cancelScheduleAfterTAT &&
+            (hasText(item.logoutNoshow) || hasText(item.logoutCancelled));
+        final bool showLogoutCard = item.shouldShowLogoutCard ||
+            (logoutCancelledOrNoShow && item.hasLogoutSchedule);
+        if (showLogoutCard) {
           final logoutIso = scheduleDateToIso(item.logoutScheduleDate);
           final activeKey = '${logoutIso}_false';
-          if (logoutIso != null && activeTripKeys.contains(activeKey)) {
+          if (logoutIso != null &&
+              activeTripKeys.contains(activeKey) &&
+              !logoutCancelledOrNoShow) {
             // Already shown as an active trip — skip this schedule card.
           } else {
             final key = '${group.dateIn ?? "_"}_${g}_logout_${i}_$cardIndex';
@@ -3499,7 +3523,7 @@ class _WelcomeState extends State<_WelcomeView> {
             groupCards.add(_buildScheduleCard(
               type: 'logout',
               label: 'Logout',
-              time: _formatShiftTime(item.logoutShiftTime) ?? '--:--',
+              time: _formatShiftTime(item.logoutShiftTime) ?? '',
               isExpanded: _scheduleExpanded.contains(key),
               onTap: () => _toggleScheduleExpansion(key),
               isScheduled: item.isScheduledStatus,
@@ -3570,7 +3594,7 @@ class _WelcomeState extends State<_WelcomeView> {
     final Color allocatedStatusColor =
         isLogin ? const Color(0xFFE0A309) : const Color(0xFFB40D1A);
     final Color scheduledStatusColor = const Color(0xFF596064);
-    final Color statusColor =
+    Color statusColor =
         isScheduled ? scheduledStatusColor : allocatedStatusColor;
     final Color tagBgColor =
         isLogin ? const Color(0xFFE8F5EE) : const Color(0xFFFFF0EE);
@@ -3579,7 +3603,34 @@ class _WelcomeState extends State<_WelcomeView> {
     final IconData arrowIcon = isLogin ? Icons.login : Icons.logout;
     final IconData statusIcon =
         isScheduled ? Icons.access_time : Icons.check_circle_outline;
-    final String statusLabel = isScheduled ? 'Scheduled' : 'Vehicle Allocated';
+
+    // ─── Status label ─────────────────────────────────────────────────────
+    // When cancel-schedule-after-TAT is enabled, the noshow/cancelled fields
+    // take precedence over tripStatusName (noshow first, then cancelled).
+    // Otherwise the label comes straight from tripStatusName.
+    final appControlState = context.read<AppControlBloc>().state;
+    final bool cancelScheduleAfterTAT = appControlState is AppControlLoaded &&
+        appControlState.settings.isCancelScheduleByUserAfterTAT;
+
+    bool isNotEmpty(String? v) => v != null && v.trim().isNotEmpty;
+
+    final String? tripStatusName = item.tripStatusName;
+    String statusLabel = tripStatusName ?? '';
+    if (cancelScheduleAfterTAT) {
+      final String? noshow = isLogin ? item.loginNoshow : item.logoutNoshow;
+      final String? cancelled =
+          isLogin ? item.loginCancelled : item.logoutCancelled;
+      if (isNotEmpty(noshow)) {
+        statusLabel = noshow!;
+        // No-Show / Cancelled statuses are always shown in red.
+        statusColor = const Color(0xFFB40D1A);
+      } else if (isNotEmpty(cancelled)) {
+        statusLabel = cancelled!;
+        statusColor = const Color(0xFFB40D1A);
+      } else {
+        statusLabel = tripStatusName ?? '';
+      }
+    }
     final List<String> otpDigits = ['3', '3', '3', '3'];
 
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
@@ -3629,23 +3680,27 @@ class _WelcomeState extends State<_WelcomeView> {
                       color: tagTextColor,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: tagBgColor,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      time,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: tagTextColor,
+                  // Shift-time chip is hidden when there is no shift time
+                  // (e.g. a cancelled / no-show schedule with an empty time).
+                  if (time.trim().isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: tagBgColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        time,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: tagTextColor,
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                   const Spacer(),
                   AnimatedRotation(
                     turns: isExpanded ? 0.5 : 0,
@@ -3668,7 +3723,7 @@ class _WelcomeState extends State<_WelcomeView> {
                   const SizedBox(width: 32),
                   Icon(statusIcon, size: 13, color: statusColor),
                   const SizedBox(width: 4),
-                  Text(
+                   Text(
                     statusLabel,
                     style: TextStyle(
                       fontSize: 12,

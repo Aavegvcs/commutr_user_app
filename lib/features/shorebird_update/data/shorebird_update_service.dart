@@ -40,13 +40,27 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
   /// [updater] is injectable purely for testing; in production the default
   /// [ShorebirdUpdater] is used.
   ShorebirdUpdateService({ShorebirdUpdater? updater})
-      : _updater = updater ?? ShorebirdUpdater();
+      : _updater = updater ?? (_shorebirdEngineExpected ? ShorebirdUpdater() : null);
 
   /// Log tag, consistent with the rest of the codebase (e.g. `[VERSION_CHECK]`).
   static const String _tag = '[SHOREBIRD]';
 
+  /// Whether the Shorebird engine can possibly be present in this build.
+  ///
+  /// Shorebird only embeds its engine in `shorebird release`/`shorebird preview`
+  /// builds, which are release-mode. In debug/profile (`flutter run`) the engine
+  /// is never present, so we skip instantiating [ShorebirdUpdater] entirely —
+  /// this avoids the native "Shorebird Updater is unavailable…" console notice
+  /// during development. In release mode we still instantiate normally, so real
+  /// Shorebird release builds behave exactly as before.
+  static bool get _shorebirdEngineExpected => kReleaseMode;
+
   /// The underlying Shorebird updater (latest non-deprecated API surface).
-  final ShorebirdUpdater _updater;
+  ///
+  /// `null` when the engine cannot be present in this build (debug/profile), in
+  /// which case every method degrades to a benign no-op — identical behaviour to
+  /// `isAvailable == false`.
+  final ShorebirdUpdater? _updater;
 
   // ---------------------------------------------------------------------------
   // Internal helpers
@@ -74,14 +88,13 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
 
   @override
   ShorebirdAvailability get availability {
-    final available = _updater.isAvailable;
-    return available
+    return isAvailable
         ? ShorebirdAvailability.available
         : ShorebirdAvailability.unavailable;
   }
 
   @override
-  bool get isAvailable => _updater.isAvailable;
+  bool get isAvailable => _updater?.isAvailable ?? false;
 
   // ---------------------------------------------------------------------------
   // Patch inspection
@@ -89,12 +102,12 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
 
   @override
   Future<ShorebirdPatchInfo?> currentPatch() async {
-    if (!_updater.isAvailable) {
+    if (!isAvailable) {
       _log('currentPatch: updater unavailable in this build — returning null.');
       return null;
     }
     try {
-      final patch = await _updater.readCurrentPatch();
+      final patch = await _updater!.readCurrentPatch();
       _log('currentPatch: ${patch?.number ?? 'none (base release)'}');
       return patch == null ? null : ShorebirdPatchInfo.fromPatch(patch);
     } on ReadPatchException catch (e) {
@@ -108,12 +121,12 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
 
   @override
   Future<ShorebirdPatchInfo?> nextPatch() async {
-    if (!_updater.isAvailable) {
+    if (!isAvailable) {
       _log('nextPatch: updater unavailable in this build — returning null.');
       return null;
     }
     try {
-      final patch = await _updater.readNextPatch();
+      final patch = await _updater!.readNextPatch();
       _log('nextPatch: ${patch?.number ?? 'none'}');
       return patch == null ? null : ShorebirdPatchInfo.fromPatch(patch);
     } on ReadPatchException catch (e) {
@@ -133,7 +146,7 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
   Future<ShorebirdCheckResult> checkForUpdate({
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
-    if (!_updater.isAvailable) {
+    if (!isAvailable) {
       _log('checkForUpdate: updater unavailable — no-op.');
       return ShorebirdCheckResult.unavailable();
     }
@@ -145,7 +158,7 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
       // caller regardless of the check outcome.
       final current = await currentPatch();
 
-      final status = await _updater.checkForUpdate(track: _trackFor(channel));
+      final status = await _updater!.checkForUpdate(track: _trackFor(channel));
       _log('checkForUpdate: status = ${status.name}');
 
       switch (status) {
@@ -172,7 +185,7 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
   Future<ShorebirdDownloadResult> downloadUpdate({
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
-    if (!_updater.isAvailable) {
+    if (!isAvailable) {
       _log('downloadUpdate: updater unavailable — no-op.');
       return ShorebirdDownloadResult.unavailable();
     }
@@ -183,7 +196,7 @@ class ShorebirdUpdateService implements IShorebirdUpdateService {
       // `update()` downloads + stages the patch and completes once it is ready
       // for the next app start. It throws an [UpdateException] when there is no
       // update available or when the download/install fails.
-      await _updater.update(track: _trackFor(channel));
+      await _updater!.update(track: _trackFor(channel));
 
       // After a successful update the newly-staged patch is the "next" patch.
       final staged = await nextPatch();
