@@ -205,9 +205,9 @@ class ScheduleItem {
   final String? loginNoshow;
   final String? logoutNoshow;
 
-  /// UI-behaviour flags supplied by the backend (`AppUiConfig`), controlling
-  /// which actions the app should surface for this schedule entry.
-  final AppUiConfig? appUiConfig;
+  /// UI-behaviour flags supplied by the backend (`ButtonUiConfig`), controlling
+  /// which action buttons the app should surface for this schedule entry.
+  final ButtonUiConfig? buttonUiConfig;
 
 
 
@@ -231,7 +231,7 @@ class ScheduleItem {
     this.logoutCancelled,
     this.loginNoshow,
     this.logoutNoshow,
-    this.appUiConfig,
+    this.buttonUiConfig,
   });
 
   factory ScheduleItem.fromJson(Map<String, dynamic> json) {
@@ -258,9 +258,9 @@ class ScheduleItem {
       logoutCancelled: readString('LogoutCancelled'),
       loginNoshow: readString('LoginNoshow'),
       logoutNoshow: readString('LogoutNoshow'),
-      appUiConfig: json['AppUiConfig'] is Map
-          ? AppUiConfig.fromJson(
-              Map<String, dynamic>.from(json['AppUiConfig'] as Map))
+      buttonUiConfig: json['ButtonUiConfig'] is Map
+          ? ButtonUiConfig.fromJson(
+              Map<String, dynamic>.from(json['ButtonUiConfig'] as Map))
           : null,
     );
   }
@@ -302,26 +302,40 @@ class ScheduleItem {
       (tripStatusName ?? '').trim().toLowerCase() == 'scheduled';
 }
 
-/// UI-behaviour flags supplied by the backend under `AppUiConfig`. Each flag
-/// tells the app whether a given action should be surfaced for the schedule
-/// entry. All default to `false` when missing so the UI hides actions unless
-/// the backend explicitly enables them.
-class AppUiConfig {
-  final bool isCancellationAllowed;
-  final bool isEditScheduleAllowed;
-  final bool isAlreadyNoShow;
-  final bool isCancelledAllowedAfterTAT;
-  final bool isTrackingAllowed;
+/// Per-button visibility flags supplied by the backend under `ButtonUiConfig`.
+/// Each flag tells the app whether a given action button should be surfaced for
+/// the schedule entry, split by pickup (login) / drop (logout) direction. All
+/// default to `false` when missing so the UI hides actions unless the backend
+/// explicitly enables them.
+class ButtonUiConfig {
+  /// Show the "Cancel" button for the pickup (login) trip.
+  final bool cancelSchedulePickupButtonShow;
 
-  const AppUiConfig({
-    this.isCancellationAllowed = false,
-    this.isEditScheduleAllowed = false,
-    this.isAlreadyNoShow = false,
-    this.isCancelledAllowedAfterTAT = false,
-    this.isTrackingAllowed = false,
+  /// Show the "Cancel" button for the drop (logout) trip.
+  final bool cancelScheduleDropButtonShow;
+
+  /// Show the "No Show" cancel button for the pickup (login) trip.
+  final bool cancelSchedulePickupNoShowButtonShow;
+
+  /// Show the "No Show" cancel button for the drop (logout) trip.
+  final bool cancelScheduleDropNoShowButtonShow;
+
+  /// Show the "Edit" button for the pickup (login) trip.
+  final bool editSchedulePickupButtonShow;
+
+  /// Show the "Edit" button for the drop (logout) trip.
+  final bool editScheduleDropButtonShow;
+
+  const ButtonUiConfig({
+    this.cancelSchedulePickupButtonShow = false,
+    this.cancelScheduleDropButtonShow = false,
+    this.cancelSchedulePickupNoShowButtonShow = false,
+    this.cancelScheduleDropNoShowButtonShow = false,
+    this.editSchedulePickupButtonShow = false,
+    this.editScheduleDropButtonShow = false,
   });
 
-  factory AppUiConfig.fromJson(Map<String, dynamic> json) {
+  factory ButtonUiConfig.fromJson(Map<String, dynamic> json) {
     bool readBool(String key) {
       final v = json[key];
       if (v is bool) return v;
@@ -333,12 +347,15 @@ class AppUiConfig {
       return false;
     }
 
-    return AppUiConfig(
-      isCancellationAllowed: readBool('isCancellationAllowed'),
-      isEditScheduleAllowed: readBool('isEditScheduleAllowed'),
-      isAlreadyNoShow: readBool('isAlreadyNoShow'),
-      isCancelledAllowedAfterTAT: readBool('isCancelledAllowedAfterTAT'),
-      isTrackingAllowed: readBool('isTrackingAllowed'),
+    return ButtonUiConfig(
+      cancelSchedulePickupButtonShow: readBool('cancelSchedulePickupButtonShow'),
+      cancelScheduleDropButtonShow: readBool('cancelScheduleDropButtonShow'),
+      cancelSchedulePickupNoShowButtonShow:
+          readBool('cancelSchedulePickupNoShowButtonShow'),
+      cancelScheduleDropNoShowButtonShow:
+          readBool('cancelScheduleDropNoShowButtonShow'),
+      editSchedulePickupButtonShow: readBool('EditSchedulePickupButtonShow'),
+      editScheduleDropButtonShow: readBool('EditScheduleDropButtonShow'),
     );
   }
 }
