@@ -4293,6 +4293,17 @@ class _WelcomeState extends State<_WelcomeView> {
         item.isDeBoarded &&
         (boardDeboardEnabled ? (item.isBoarded && item.isDeBoarded) : true);
 
+    // Same Safe Home Reach visibility logic reused for the Trip Completed
+    // (End) card. Conditions are identical to showSafeHomeReachButton above,
+    // with the state gate switched from Started (code 3) to Completed (code 4)
+    // since the two states are mutually exclusive. Nothing else changes.
+    final bool showSafeHomeReachButtonCompleted = item.isCompleted &&
+        item.reachedHomeReq == 1 &&
+        item.isReached != 1 &&
+        item.isBoarded &&
+        item.isDeBoarded &&
+        (boardDeboardEnabled ? (item.isBoarded && item.isDeBoarded) : true);
+
     // ─── Disabled "Track Vehicle" styling when in Scheduled state ─────────
     final Color trackBg = isScheduled ? const Color(0xFFF1F1F1) : tagBgColor;
     final Color trackFg = isScheduled ? const Color(0xFFB0B0B0) : accentColor;
@@ -4899,6 +4910,36 @@ class _WelcomeState extends State<_WelcomeView> {
                       ),
                     ),
                   ],
+                )
+              else if (showSafeHomeReachButtonCompleted)
+                // Trip Completed (End) card reuses the exact same Safe Home
+                // Reach button widget and callback as the Started card.
+                GestureDetector(
+                  onTap: () => _onSafeHomeReachTap(item),
+                  child: Container(
+                    height: 48,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A5C38),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.home_outlined,
+                            size: 18, color: Colors.white),
+                        SizedBox(width: 8),
+                        Text(
+                          'Safe Home Reach',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 )
               else if (isCompleted)
                 const SizedBox.shrink()
