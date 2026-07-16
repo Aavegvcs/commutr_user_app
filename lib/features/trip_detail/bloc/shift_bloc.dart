@@ -15,6 +15,7 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
     on<UpdateShiftSchedules>(_onUpdateSchedules);
     on<UpdateHybridSchedules>(_onUpdateHybridSchedules);
     on<CancelSchedule>(_onCancelSchedule);
+    on<FetchCancelScheduleConfirmation>(_onFetchCancelScheduleConfirmation);
   }
 
   @override
@@ -181,6 +182,51 @@ class ShiftBloc extends Bloc<ShiftEvent, ShiftState> {
         emit(const ShiftUnauthorized());
       } else {
         emit(ShiftCancelError(_friendlyMessage(e)));
+      }
+    }
+  }
+
+  Future<void> _onFetchCancelScheduleConfirmation(
+    FetchCancelScheduleConfirmation event,
+    Emitter<ShiftState> emit,
+  ) async {
+    debugPrint(
+      '[SHIFT_BLOC] FetchCancelScheduleConfirmation → '
+      'locCode=${event.locCode} '
+      'empId="${event.empId}" '
+      'scheduleDate="${event.scheduleDate}" '
+      'tripType="${event.tripType}" '
+      '(401 ⇒ refresh-token flow handled transparently by ApiClient)',
+    );
+    emit(const ShiftCancelConfirmLoading());
+    try {
+      final response = await _repository.cancelScheduleConfirmation(
+        locCode: event.locCode,
+        empId: event.empId,
+        scheduleDate: event.scheduleDate,
+        tripType: event.tripType,
+      );
+      debugPrint(
+        '[SHIFT_BLOC] FetchCancelScheduleConfirmation ✓ '
+        'errorCode=${response.errorCode} '
+        'popupId="${response.popup?.popupId}"',
+      );
+      if (response.isSuccess) {
+        emit(ShiftCancelConfirmLoaded(response.popup!));
+      } else {
+        // ErrorCode != 0 (or no popup) → surface DB_Response, don't open dialog.
+        emit(ShiftCancelConfirmError(
+          response.dbResponse.isNotEmpty
+              ? response.dbResponse
+              : 'Unable to continue. Please try again later.',
+        ));
+      }
+    } catch (e) {
+      debugPrint('[SHIFT_BLOC] FetchCancelScheduleConfirmation ✖ $e');
+      if (_isUnauthorized(e)) {
+        emit(const ShiftUnauthorized());
+      } else {
+        emit(ShiftCancelConfirmError(_friendlyMessage(e)));
       }
     }
   }

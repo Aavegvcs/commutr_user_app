@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import '../data/model/cancel_schedule_confirmation_response.dart';
 import '../data/model/roaster_shifts_response.dart';
 
 abstract class ShiftState extends Equatable {
@@ -89,6 +90,33 @@ class ShiftCancelError extends ShiftState {
   final String message;
 
   const ShiftCancelError(this.message);
+
+  @override
+  List<Object?> get props => [message];
+}
+
+// ─── Cancel / No-show confirmation popup states ─────────────────────────────
+
+class ShiftCancelConfirmLoading extends ShiftState {
+  const ShiftCancelConfirmLoading();
+}
+
+/// The backend returned a usable popup config (`ErrorCode == 0`).
+class ShiftCancelConfirmLoaded extends ShiftState {
+  final CancelSchedulePopup popup;
+
+  const ShiftCancelConfirmLoaded(this.popup);
+
+  @override
+  List<Object?> get props => [popup.popupId, popup.buttons.length];
+}
+
+/// The backend refused the popup (`ErrorCode != 0`) — [message] is the
+/// `DB_Response` to surface to the user; the dialog must not be opened.
+class ShiftCancelConfirmError extends ShiftState {
+  final String message;
+
+  const ShiftCancelConfirmError(this.message);
 
   @override
   List<Object?> get props => [message];

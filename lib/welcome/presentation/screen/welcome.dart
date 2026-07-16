@@ -23,6 +23,8 @@ import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verifi
 import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_state.dart';
+import 'package:commutr_main/features/trip_detail/bloc/user_app_config/user_app_config_bloc.dart';
+import 'package:commutr_main/features/trip_detail/bloc/user_app_config/user_app_config_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
@@ -40,6 +42,7 @@ import 'package:commutr_main/features/trip_detail/bloc/trip_home_state.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/shift_state.dart';
+import 'package:commutr_main/features/trip_detail/data/model/cancel_schedule_confirmation_response.dart';
 import 'package:commutr_main/features/trip_detail/data/model/schedule_home_response.dart';
 import 'package:commutr_main/features/trip_detail/data/model/trip_home_response.dart';
 import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.dart';
@@ -158,6 +161,9 @@ class Welcome extends StatelessWidget {
         BlocProvider<AppControlBloc>(
           create: (_) => sl<AppControlBloc>(),
         ),
+        BlocProvider<UserAppConfigBloc>(
+          create: (_) => sl<UserAppConfigBloc>(),
+        ),
         BlocProvider<TripHistoryBloc>(
           create: (_) => sl<TripHistoryBloc>(),
         ),
@@ -209,6 +215,7 @@ class _WelcomeState extends State<_WelcomeView> {
               toDate: _defaultToDate(),
             ));
         _fetchTeamCab(rosterState.details.empId);
+        _maybeFetchUserAppConfig(rosterState.details.locCode);
       }
     });
   }
@@ -244,6 +251,15 @@ class _WelcomeState extends State<_WelcomeView> {
   void _maybeFetchAppControlSettings(int locCode) {
     if (locCode == 0) return;
     context.read<AppControlBloc>().add(FetchAppControlSettings(locCode));
+    _maybeFetchUserAppConfig(locCode);
+  }
+
+  /// Fetches per-location UI-gating config (schedule/trip action buttons) from
+  /// `GetUserAppConfigurationByLocCode`, keyed off the roster [locCode].
+  /// Re-fetched fresh on every screen load, pull-to-refresh, and poll tick.
+  void _maybeFetchUserAppConfig(int locCode) {
+    if (locCode == 0) return;
+    context.read<UserAppConfigBloc>().add(FetchUserAppConfig(locCode));
   }
 
   /// Current per-location hybrid-schedule flag from the loaded AppControl
@@ -1395,19 +1411,28 @@ class _WelcomeState extends State<_WelcomeView> {
     final appControlState = context.read<AppControlBloc>().state;
     final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
         appControlState.settings.boardDebaordEnabledForUser;
+    // The single active-trip action button acts as a No-Show button when the
+    // trip is past TAT (isCancelTripByUserAfterTat == 1) and as a Cancel button
+    // otherwise. Its visibility follows the matching per-trip
+    // `tripButtonUiConfig` flag from the API.
+    final bool showCancelTripButton = item.isCancelTripByUserAfterTat == 1
+        ? (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false)
+        : (item.tripButtonUiConfig?.isTripCancellationButtonShow ?? false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
-            _buildTripCircleAction(
-              onTap: () => _showCancelActiveTripDialog(context, item: item),
-              icon: Icons.close,
-              iconColor: const Color(0xFFBA1A1A),
-              backgroundColor: Colors.white,
-              borderColor: const Color(0x33BA1A1A),
-            ),
-            const SizedBox(width: 10),
+            if (showCancelTripButton) ...[
+              _buildTripCircleAction(
+                onTap: () => _showCancelActiveTripDialog(context, item: item),
+                icon: Icons.close,
+                iconColor: const Color(0xFFBA1A1A),
+                backgroundColor: Colors.white,
+                borderColor: const Color(0x33BA1A1A),
+              ),
+              const SizedBox(width: 10),
+            ],
             _buildTripCircleAction(
               onTap: () => _shareActiveTrip(item),
               icon: Icons.share_outlined,
@@ -3645,17 +3670,37 @@ class _WelcomeState extends State<_WelcomeView> {
               userName: item.userName,
             );
 
-    // ─── Action-button visibility (AppUiConfig is the single source of truth) ─
-    // When the backend marks the schedule as already no-show, only a No-Show
-    // button is surfaced (in place of Cancel); Cancel and Edit are hidden.
-    // Otherwise Cancel/Edit visibility follows their respective flags.
-    final AppUiConfig uiConfig = item.appUiConfig ?? const AppUiConfig();
-    final bool showNoShowButton = uiConfig.isAlreadyNoShow;
-    final bool showCancelButton =
-        !showNoShowButton && uiConfig.isCancellationAllowed;
-    final bool showEditButton =
-        !showNoShowButton && uiConfig.isEditScheduleAllowed;
-    final bool showTrackButton = uiConfig.isTrackingAllowed;
+    // ─── Action-button visibility ─────────────────────────────────────────
+    // Priority: Cancelled → No-Show → ButtonUiConfig.
+    //   • If this side is already Cancelled (Login/LogoutCancelled non-empty) or
+    //     No-Show (Login/LogoutNoshow non-empty), hide ALL action buttons for
+    //     this card (Cancel, No-Show, Edit and Track Vehicle) and ignore the
+    //     ButtonUiConfig flags entirely.
+    //   • Otherwise, per-direction ButtonUiConfig flags drive each button
+    //     (all default false when the config/field is missing).
+    final bool sideCancelled =
+        isNotEmpty(isLogin ? item.loginCancelled : item.logoutCancelled);
+    final bool sideNoShow =
+        isNotEmpty(isLogin ? item.loginNoshow : item.logoutNoshow);
+    final bool hideAllActions = sideCancelled || sideNoShow;
+
+    final ButtonUiConfig uiConfig =
+        item.buttonUiConfig ?? const ButtonUiConfig();
+    final bool showNoShowButton = !hideAllActions &&
+        (isLogin
+            ? uiConfig.cancelSchedulePickupNoShowButtonShow
+            : uiConfig.cancelScheduleDropNoShowButtonShow);
+    final bool showCancelButton = !hideAllActions &&
+        (isLogin
+            ? uiConfig.cancelSchedulePickupButtonShow
+            : uiConfig.cancelScheduleDropButtonShow);
+    final bool showEditButton = !hideAllActions &&
+        (isLogin
+            ? uiConfig.editSchedulePickupButtonShow
+            : uiConfig.editScheduleDropButtonShow);
+    // Track Vehicle keeps its existing always-shown behaviour unless the side
+    // is Cancelled / No-Show, in which case all actions are hidden.
+    final bool showTrackButton = !hideAllActions;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -4029,30 +4074,29 @@ class _WelcomeState extends State<_WelcomeView> {
                           onTap: trackVehicleAction,
                           child: Container(
                             height: 42,
-                            decoration: BoxDecoration(
-                              color: trackBg,
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.my_location,
-                                    size: 16, color: trackFg),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'Track Vehicle',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: trackFg,
-                                  ),
+                          decoration: BoxDecoration(
+                            color: trackBg,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.my_location, size: 16, color: trackFg),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Track Vehicle',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: trackFg,
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
+                  ),
                 ],
               ),
             ] else if (!isScheduled) ...[
@@ -4184,6 +4228,13 @@ class _WelcomeState extends State<_WelcomeView> {
     final bool showBoardDeboardActions =
         item.showBoardDeboardActions && !isCompleted;
     final bool isFullyDeboarded = item.isBoarded && item.isDeBoarded;
+    // The single active-trip action button acts as a No-Show button when the
+    // trip is past TAT (isCancelTripByUserAfterTat == 1) and as a Cancel button
+    // otherwise. Its visibility follows the matching per-trip `tripButtonUiConfig`
+    // flag from the API; when absent, the button stays hidden.
+    final bool showCancelTripButton = item.isCancelTripByUserAfterTat == 1
+        ? (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false)
+        : (item.tripButtonUiConfig?.isTripCancellationButtonShow ?? false);
     final String? cancelOrNoShow = item.cancelorNoshow?.trim();
     // Trip is cancelled or a no-show: only TRIP DETAIL + Trip Summary should be
     // shown — no planned pickup, OTP, vehicle info, board/deboard, or actions.
@@ -4854,25 +4905,26 @@ class _WelcomeState extends State<_WelcomeView> {
               else if (isPrinted)
                 Row(
                   children: [
-                    InkWell(
-                      splashColor: Colors.transparent,
-                      onTap: () =>
-                          _showCancelActiveTripDialog(context, item: item),
-                      child: Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0x33BA1A1A)),
-                        ),
-                        child: const Icon(
-                          Icons.close,
-                          color: Color(0xFFBA1A1A),
-                          size: 20,
+                    if (showCancelTripButton)
+                      InkWell(
+                        splashColor: Colors.transparent,
+                        onTap: () =>
+                            _showCancelActiveTripDialog(context, item: item),
+                        child: Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0x33BA1A1A)),
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            color: Color(0xFFBA1A1A),
+                            size: 20,
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 )
               else if (showBoardDeboardActions)
@@ -4887,7 +4939,7 @@ class _WelcomeState extends State<_WelcomeView> {
               else if (!isFullyDeboarded && !isPrinted)
                 Row(
                   children: [
-                    if (!isScheduled)
+                    if (!isScheduled && showCancelTripButton)
                       InkWell(
                         splashColor: Colors.transparent,
                         onTap: () => _showCancelActiveTripDialog(
@@ -4909,7 +4961,8 @@ class _WelcomeState extends State<_WelcomeView> {
                           ),
                         ),
                       ),
-                    if (!isScheduled) const SizedBox(width: 10),
+                    if (!isScheduled && showCancelTripButton)
+                      const SizedBox(width: 10),
                     Expanded(
                       child: Opacity(
                         opacity: isScheduled ? 0.6 : 1.0,
@@ -5788,7 +5841,7 @@ class CancelActiveTripDialog extends StatelessWidget {
   }
 }
 
-class _CancelActiveTripDialogView extends StatelessWidget {
+class _CancelActiveTripDialogView extends StatefulWidget {
   const _CancelActiveTripDialogView({
     required this.isLogin,
     required this.requestedBy,
@@ -5806,6 +5859,47 @@ class _CancelActiveTripDialogView extends StatelessWidget {
   final int tripType;
   final int tripId;
   final bool showNoShowWording;
+
+  @override
+  State<_CancelActiveTripDialogView> createState() =>
+      _CancelActiveTripDialogViewState();
+}
+
+class _CancelActiveTripDialogViewState
+    extends State<_CancelActiveTripDialogView> {
+  /// The last successfully loaded popup, retained so the API-driven dialog
+  /// keeps rendering while a cancel/no-show request is in progress.
+  CancelSchedulePopup? _lastPopup;
+
+  /// True once the API returned an unusable config (or failed) and we've
+  /// switched to the hardcoded dialog. Once we fall back we stay on the
+  /// hardcoded dialog for the rest of the dialog's lifetime.
+  bool _useFallback = false;
+
+  /// True once a backend refusal has been surfaced so the dialog pops exactly
+  /// once (guards against a rebuild firing the listener twice).
+  bool _handledRefusal = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // The API is the source of truth for the popup content. Fetch it before
+    // rendering; on failure / invalid data we fall back to the hardcoded
+    // dialog so there is no regression in functionality.
+    debugPrint(
+      '[WELCOME] CancelActiveTripDialog → dispatching '
+      'FetchCancelActiveTripConfirmation requestFor=${widget.requestFor} '
+      'tripType=${widget.tripType} tripId=${widget.tripId} '
+      '(isLogin=${widget.isLogin})',
+    );
+    context.read<TripCancelBloc>().add(
+          FetchCancelActiveTripConfirmation(
+            requestFor: widget.requestFor,
+            tripType: widget.tripType,
+            tripId: widget.tripId,
+          ),
+        );
+  }
 
   void _showSnackBar(BuildContext context, String message,
       {required bool error}) {
@@ -5826,15 +5920,85 @@ class _CancelActiveTripDialogView extends StatelessWidget {
         fallback: 'Something went wrong. Please try again.');
   }
 
+  /// Maps the API's icon keyword to a Material icon. Falls back to the previous
+  /// hardcoded warning icon for anything unrecognised.
+  IconData _iconFor(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'error':
+      case 'cancel':
+      case 'cancel_schedule':
+        return Icons.cancel_outlined;
+      case 'info':
+        return Icons.info_outline;
+      case 'success':
+        return Icons.check_circle_outline;
+      case 'no_show':
+      case 'noshow':
+        return Icons.person_off_outlined;
+      case 'warning':
+      default:
+        return Icons.warning_amber_rounded;
+    }
+  }
+
+  /// Dispatches the existing active-trip cancel / no-show flow.
+  void _dispatchCancel(BuildContext context) {
+    context.read<TripCancelBloc>().add(
+          CancelTripRequested(
+            requestedBy: widget.requestedBy,
+            requestFor: widget.requestFor,
+            tripDate: widget.tripDate,
+            tripType: widget.tripType,
+            tripId: widget.tripId,
+          ),
+        );
+  }
+
+  /// Runs the action for a button returned by the API.
+  void _onButtonAction(BuildContext context, CancelScheduleAction action) {
+    switch (action) {
+      case CancelScheduleAction.dismiss:
+        Navigator.of(context).pop(false);
+        break;
+      case CancelScheduleAction.markNoShow:
+      case CancelScheduleAction.cancelSchedule:
+        // The primary action runs the existing active-trip cancel / no-show
+        // flow (POST /UserApp/UserCancelTrip via CancelTripRequested).
+        _dispatchCancel(context);
+        break;
+      case CancelScheduleAction.unknown:
+        // Unknown backend action — ignore rather than crash.
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<TripCancelBloc, TripCancelState>(
       listenWhen: (prev, curr) =>
           curr is TripCancelSuccess ||
           curr is TripCancelError ||
-          curr is TripCancelUnauthorized,
+          curr is TripCancelUnauthorized ||
+          curr is TripCancelConfirmRefused ||
+          curr is TripCancelConfirmFallback,
       listener: (context, state) {
-        if (state is TripCancelSuccess) {
+        if (state is TripCancelConfirmRefused) {
+          // Backend explicitly refused cancellation → close and surface the
+          // message; do not open any dialog.
+          if (_handledRefusal) return;
+          _handledRefusal = true;
+          Navigator.of(context).pop(false);
+          _showSnackBar(context, _friendlyMessage(state.message), error: true);
+        } else if (state is TripCancelConfirmFallback) {
+          // API refused / failed → render the existing hardcoded dialog.
+          debugPrint(
+            '[WELCOME] CancelActiveTripDialog → falling back to hardcoded '
+            'dialog (reason="${state.message}")',
+          );
+          if (!_useFallback) {
+            setState(() => _useFallback = true);
+          }
+        } else if (state is TripCancelSuccess) {
           Navigator.of(context).pop(true);
           _showSnackBar(
             context,
@@ -5859,9 +6023,55 @@ class _CancelActiveTripDialogView extends StatelessWidget {
           curr is TripCancelLoading ||
           curr is TripCancelSuccess ||
           curr is TripCancelError ||
-          curr is TripCancelUnauthorized,
+          curr is TripCancelUnauthorized ||
+          curr is TripCancelConfirmLoading ||
+          curr is TripCancelConfirmLoaded ||
+          curr is TripCancelConfirmRefused ||
+          curr is TripCancelConfirmFallback,
       builder: (context, state) {
         final isCancelling = state is TripCancelLoading;
+
+        // Fall back to the existing hardcoded dialog on API failure / invalid
+        // data so all existing functionality keeps working exactly as today.
+        if (_useFallback) {
+          return _buildHardcodedDialog(context, isCancelling);
+        }
+
+        // While the confirmation config is loading render a lightweight loader.
+        if (state is! TripCancelConfirmLoaded &&
+            !(isCancelling && _lastPopup != null)) {
+          return const PopScope(
+            canPop: true,
+            child: Dialog(
+              backgroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(24)),
+              ),
+              insetPadding:
+                  EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              child: Padding(
+                padding: EdgeInsets.all(36),
+                child: SizedBox(
+                  height: 48,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      color: Color(0xFF1A5C38),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        // Keep showing the last loaded popup while a cancel/no-show request is
+        // in flight so the button spinner can render.
+        final CancelSchedulePopup popup = state is TripCancelConfirmLoaded
+            ? state.popup
+            : _lastPopup!;
+        _lastPopup = popup;
+
         return PopScope(
           canPop: !isCancelling,
           child: Dialog(
@@ -5876,6 +6086,7 @@ class _CancelActiveTripDialogView extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Icon circle (icon driven by the API).
                   Container(
                     width: 64,
                     height: 64,
@@ -5883,19 +6094,19 @@ class _CancelActiveTripDialogView extends StatelessWidget {
                       color: Color(0xFFFFF0EE),
                       shape: BoxShape.circle,
                     ),
-                    child: const Center(
+                    child: Center(
                       child: Icon(
-                        Icons.warning_amber_rounded,
-                        color: Color(0xffBA1A1A),
+                        _iconFor(popup.icon),
+                        color: const Color(0xffBA1A1A),
                         size: 30,
                       ),
                     ),
                   ),
                   const SizedBox(height: 16),
+
+                  // Title (from API).
                   Text(
-                    isLogin
-                        ? 'Cancel this Login trip?'
-                        : 'Cancel this Logout trip?',
+                    popup.title,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 22,
@@ -5904,89 +6115,26 @@ class _CancelActiveTripDialogView extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Text(
-                    'You are about to cancel this ride. Do you want to continue?',
+
+                  // Message (from API).
+                  Text(
+                    popup.message,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 16,
                       color: Color(0xFF888888),
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                   const SizedBox(height: 32),
+
+                  // Buttons (rendered in ascending `order`, already sorted).
                   Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFCC2222),
-                            side: const BorderSide(
-                              color: Color(0xFFFFCCCC),
-                              width: 1.5,
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                          ),
-                          onPressed: isCancelling
-                              ? null
-                              : () {
-                                  context.read<TripCancelBloc>().add(
-                                        CancelTripRequested(
-                                          requestedBy: requestedBy,
-                                          requestFor: requestFor,
-                                          tripDate: tripDate,
-                                          tripType: tripType,
-                                          tripId: tripId,
-                                        ),
-                                      );
-                                },
-                          child: isCancelling
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.2,
-                                    color: Color(0xFFCC2222),
-                                  ),
-                                )
-                              : Text(
-                                  showNoShowWording
-                                      ? 'No-Show this Ride'
-                                      : 'Cancel Trip',
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1A5C38),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                          ),
-                          onPressed: isCancelling
-                              ? null
-                              : () => Navigator.of(context).pop(false),
-                          child: const Text(
-                            'Keep Trip',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                    children: _buildActionButtons(
+                      context,
+                      popup.buttons,
+                      isCancelling,
+                    ),
                   ),
                 ],
               ),
@@ -5994,6 +6142,208 @@ class _CancelActiveTripDialogView extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// Builds the button row from the API config, preserving the existing look:
+  /// the primary action (cancel / no-show) uses the red outlined style, and a
+  /// `dismiss` action uses the filled green style.
+  List<Widget> _buildActionButtons(
+    BuildContext context,
+    List<CancelScheduleButton> buttons,
+    bool isCancelling,
+  ) {
+    final widgets = <Widget>[];
+    for (var i = 0; i < buttons.length; i++) {
+      final button = buttons[i];
+      final bool isDismiss = button.action == CancelScheduleAction.dismiss;
+      final bool isPrimaryAction =
+          button.action == CancelScheduleAction.cancelSchedule ||
+              button.action == CancelScheduleAction.markNoShow;
+
+      final Widget child;
+      if (isDismiss) {
+        child = ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF1A5C38),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(50),
+            ),
+          ),
+          onPressed: isCancelling
+              ? null
+              : () => _onButtonAction(context, button.action),
+          child: Text(
+            button.text,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+        );
+      } else {
+        child = OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFCC2222),
+            side: const BorderSide(color: Color(0xFFFFCCCC), width: 1.5),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(50),
+            ),
+          ),
+          onPressed: isCancelling
+              ? null
+              : () => _onButtonAction(context, button.action),
+          child: isCancelling && isPrimaryAction
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    color: Color(0xFFCC2222),
+                  ),
+                )
+              : Text(
+                  button.text,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+        );
+      }
+
+      widgets.add(Expanded(child: child));
+      if (i != buttons.length - 1) {
+        widgets.add(const SizedBox(width: 14));
+      }
+    }
+    return widgets;
+  }
+
+  /// The original hardcoded dialog, rendered when the API fails / returns
+  /// invalid data. Behaviour, callbacks and API calls are unchanged.
+  Widget _buildHardcodedDialog(BuildContext context, bool isCancelling) {
+    return PopScope(
+      canPop: !isCancelling,
+      child: Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+        ),
+        insetPadding:
+            const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFFF0EE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.warning_amber_rounded,
+                    color: Color(0xffBA1A1A),
+                    size: 30,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                widget.isLogin
+                    ? 'Cancel this Login trip?'
+                    : 'Cancel this Logout trip?',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xff181C1B),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'You are about to cancel this ride. Do you want to continue?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Color(0xFF888888),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFCC2222),
+                        side: const BorderSide(
+                          color: Color(0xFFFFCCCC),
+                          width: 1.5,
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                      ),
+                      onPressed: isCancelling
+                          ? null
+                          : () => _dispatchCancel(context),
+                      child: isCancelling
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                                color: Color(0xFFCC2222),
+                              ),
+                            )
+                          : Text(
+                              widget.showNoShowWording
+                                  ? 'No-Show this Ride'
+                                  : 'Cancel Trip',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1A5C38),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                      ),
+                      onPressed: isCancelling
+                          ? null
+                          : () => Navigator.of(context).pop(false),
+                      child: const Text(
+                        'Keep Trip',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -6030,7 +6380,7 @@ class CancelRideDialog extends StatelessWidget {
   }
 }
 
-class _CancelRideDialogView extends StatelessWidget {
+class _CancelRideDialogView extends StatefulWidget {
   const _CancelRideDialogView({
     required this.isLogin,
     required this.locCode,
@@ -6044,6 +6394,36 @@ class _CancelRideDialogView extends StatelessWidget {
   final String empId;
   final String scheduleDate;
   final String tripType;
+
+  @override
+  State<_CancelRideDialogView> createState() => _CancelRideDialogViewState();
+}
+
+class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
+  /// True once the confirmation-error message has been surfaced so the dialog
+  /// pops exactly once (guards against a rebuild firing the listener twice).
+  bool _handledConfirmError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // The API is the single source of truth for the popup content. Fetch it
+    // before rendering; if it fails we close and surface the DB_Response.
+    debugPrint(
+      '[WELCOME] CancelRideDialog → dispatching '
+      'FetchCancelScheduleConfirmation locCode=${widget.locCode} '
+      'empId="${widget.empId}" scheduleDate="${widget.scheduleDate}" '
+      'tripType="${widget.tripType}" (isLogin=${widget.isLogin})',
+    );
+    context.read<ShiftBloc>().add(
+          FetchCancelScheduleConfirmation(
+            locCode: widget.locCode,
+            empId: widget.empId,
+            scheduleDate: widget.scheduleDate,
+            tripType: widget.tripType,
+          ),
+        );
+  }
 
   void _showSnackBar(BuildContext context, String message,
       {required bool error}) {
@@ -6059,15 +6439,74 @@ class _CancelRideDialogView extends StatelessWidget {
       );
   }
 
+  /// Maps the API's icon keyword to a Material icon. Falls back to the previous
+  /// hardcoded warning icon for anything unrecognised.
+  IconData _iconFor(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'error':
+      case 'cancel':
+      case 'cancel_schedule':
+        return Icons.cancel_outlined;
+      case 'info':
+        return Icons.info_outline;
+      case 'success':
+        return Icons.check_circle_outline;
+      case 'no_show':
+      case 'noshow':
+        return Icons.person_off_outlined;
+      case 'warning':
+      default:
+        return Icons.warning_amber_rounded;
+    }
+  }
+
+  /// Runs the action for a button returned by the API.
+  void _onButtonAction(BuildContext context, CancelScheduleAction action) {
+    switch (action) {
+      case CancelScheduleAction.dismiss:
+        Navigator.of(context).pop(false);
+        break;
+      case CancelScheduleAction.cancelSchedule:
+      case CancelScheduleAction.markNoShow:
+        // Both cancel-schedule and mark-no-show run the existing cancel flow.
+        // TODO: point markNoShow at a dedicated no-show endpoint when available.
+        debugPrint(
+          '[WELCOME] CancelRideDialog → dispatching CancelSchedule '
+          '(action=$action) locCode=${widget.locCode} empId="${widget.empId}" '
+          'scheduleDate="${widget.scheduleDate}" tripType="${widget.tripType}" '
+          '(isLogin=${widget.isLogin})',
+        );
+        context.read<ShiftBloc>().add(
+              CancelSchedule(
+                locCode: widget.locCode,
+                empId: widget.empId,
+                scheduleDate: widget.scheduleDate,
+                tripType: widget.tripType,
+              ),
+            );
+        break;
+      case CancelScheduleAction.unknown:
+        // Unknown backend action — ignore rather than crash.
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<ShiftBloc, ShiftState>(
       listenWhen: (prev, curr) =>
           curr is ShiftCancelSuccess ||
           curr is ShiftCancelError ||
+          curr is ShiftCancelConfirmError ||
           curr is ShiftUnauthorized,
       listener: (context, state) {
-        if (state is ShiftCancelSuccess) {
+        if (state is ShiftCancelConfirmError) {
+          // ErrorCode != 0 → do not open the dialog; surface DB_Response.
+          if (_handledConfirmError) return;
+          _handledConfirmError = true;
+          Navigator.of(context).pop(false);
+          _showSnackBar(context, state.message, error: true);
+        } else if (state is ShiftCancelSuccess) {
           Navigator.of(context).pop(true);
           _showSnackBar(context, state.message, error: false);
         } else if (state is ShiftCancelError) {
@@ -6083,12 +6522,55 @@ class _CancelRideDialogView extends StatelessWidget {
       },
       buildWhen: (prev, curr) =>
           curr is ShiftInitial ||
+          curr is ShiftCancelConfirmLoading ||
+          curr is ShiftCancelConfirmLoaded ||
+          curr is ShiftCancelConfirmError ||
           curr is ShiftCancelInProgress ||
           curr is ShiftCancelSuccess ||
           curr is ShiftCancelError ||
           curr is ShiftUnauthorized,
       builder: (context, state) {
         final isCancelling = state is ShiftCancelInProgress;
+
+        // While the confirmation config is loading (or the popup couldn't be
+        // shown) render a lightweight loader. The listener pops the dialog on
+        // ShiftCancelConfirmError, so this is transient in that case. The
+        // `_lastPopup == null` guard keeps the loader if a cancel somehow
+        // started before any popup was loaded (state-machine shouldn't allow it).
+        if (state is! ShiftCancelConfirmLoaded &&
+            !(isCancelling && _lastPopup != null)) {
+          return const PopScope(
+            canPop: true,
+            child: Dialog(
+              backgroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(24)),
+              ),
+              insetPadding:
+                  EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              child: Padding(
+                padding: EdgeInsets.all(36),
+                child: SizedBox(
+                  height: 48,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      color: Color(0xFF1A5C38),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        // Keep showing the last loaded popup while a cancel/no-show request is
+        // in flight so the button spinner can render.
+        final CancelSchedulePopup popup = state is ShiftCancelConfirmLoaded
+            ? state.popup
+            : _lastPopup!;
+        _lastPopup = popup;
+
         return PopScope(
           canPop: !isCancelling,
           child: Dialog(
@@ -6103,7 +6585,7 @@ class _CancelRideDialogView extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Warning icon circle
+                  // Icon circle (icon driven by the API).
                   Container(
                     width: 64,
                     height: 64,
@@ -6111,19 +6593,19 @@ class _CancelRideDialogView extends StatelessWidget {
                       color: Color(0xFFFFF0EE),
                       shape: BoxShape.circle,
                     ),
-                    child: const Center(
+                    child: Center(
                       child: Icon(
-                        Icons.warning_amber_rounded,
-                        color: Color(0xffBA1A1A),
+                        _iconFor(popup.icon),
+                        color: const Color(0xffBA1A1A),
                         size: 30,
                       ),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  // Title
+                  // Title (from API).
                   Text(
-                    'Cancel Ride Schedule?',
+                    popup.title,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 22,
@@ -6133,8 +6615,9 @@ class _CancelRideDialogView extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
+                  // Message (from API).
                   Text(
-                    'Are you sure you want to cancel this ${isLogin ? "Login" : "Logout"} schedule?',
+                    popup.message,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 16,
@@ -6143,87 +6626,14 @@ class _CancelRideDialogView extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  // Buttons row
-                  Row(
-                    children: [
-                      // Cancel Ride button — fires the CancelSchedules API.
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFCC2222),
-                            side: const BorderSide(
-                              color: Color(0xFFFFCCCC),
-                              width: 1.5,
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                          ),
-                          onPressed: isCancelling
-                              ? null
-                              : () {
-                                  debugPrint(
-                                    '[WELCOME] CancelRideDialog → '
-                                    'dispatching CancelSchedule '
-                                    'locCode=$locCode empId="$empId" '
-                                    'scheduleDate="$scheduleDate" '
-                                    'tripType="$tripType" (isLogin=$isLogin)',
-                                  );
-                                  context.read<ShiftBloc>().add(
-                                        CancelSchedule(
-                                          locCode: locCode,
-                                          empId: empId,
-                                          scheduleDate: scheduleDate,
-                                          tripType: tripType,
-                                        ),
-                                      );
-                                },
-                          child: isCancelling
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.2,
-                                    color: Color(0xFFCC2222),
-                                  ),
-                                )
-                              : const Text(
-                                  'Cancel Schedule',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(width: 14),
 
-                      // Keep Ride button (filled, dark green)
-                      Expanded(
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1A5C38),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                          ),
-                          onPressed: isCancelling
-                              ? null
-                              : () => Navigator.of(context).pop(false),
-                          child: const Text(
-                            'Go Back',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                  // Buttons (rendered in ascending `order`, already sorted).
+                  Row(
+                    children: _buildActionButtons(
+                      context,
+                      popup.buttons,
+                      isCancelling,
+                    ),
                   ),
                 ],
               ),
@@ -6232,6 +6642,85 @@ class _CancelRideDialogView extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// The last successfully loaded popup, retained so the dialog keeps rendering
+  /// while a cancel/no-show request is in progress.
+  CancelSchedulePopup? _lastPopup;
+
+  /// Builds the button row from the API config, preserving the existing look:
+  /// the primary action (cancel / no-show) uses the red outlined style, and a
+  /// `dismiss` action uses the filled green style.
+  List<Widget> _buildActionButtons(
+    BuildContext context,
+    List<CancelScheduleButton> buttons,
+    bool isCancelling,
+  ) {
+    final widgets = <Widget>[];
+    for (var i = 0; i < buttons.length; i++) {
+      final button = buttons[i];
+      final bool isDismiss = button.action == CancelScheduleAction.dismiss;
+      final bool isPrimaryAction =
+          button.action == CancelScheduleAction.cancelSchedule ||
+              button.action == CancelScheduleAction.markNoShow;
+
+      final Widget child;
+      if (isDismiss) {
+        child = ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF1A5C38),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(50),
+            ),
+          ),
+          onPressed:
+              isCancelling ? null : () => _onButtonAction(context, button.action),
+          child: Text(
+            button.text,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+        );
+      } else {
+        child = OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFCC2222),
+            side: const BorderSide(color: Color(0xFFFFCCCC), width: 1.5),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(50),
+            ),
+          ),
+          onPressed: isCancelling
+              ? null
+              : () => _onButtonAction(context, button.action),
+          child: isCancelling && isPrimaryAction
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    color: Color(0xFFCC2222),
+                  ),
+                )
+              : Text(
+                  button.text,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+        );
+      }
+
+      widgets.add(Expanded(child: child));
+      if (i != buttons.length - 1) {
+        widgets.add(const SizedBox(width: 14));
+      }
+    }
+    return widgets;
   }
 }
 

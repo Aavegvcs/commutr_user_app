@@ -79,6 +79,35 @@ class TripDayGroup {
   }
 }
 
+/// UI button visibility config for a home-page trip (`tripButtonUiConfig`).
+class TripButtonUiConfig {
+  final bool isTripCancellationButtonShow;
+  final bool isTripNoShowButtonShow;
+
+  const TripButtonUiConfig({
+    this.isTripCancellationButtonShow = false,
+    this.isTripNoShowButtonShow = false,
+  });
+
+  factory TripButtonUiConfig.fromJson(Map<String, dynamic> json) {
+    bool readBool(String key) {
+      final v = json[key];
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final lower = v.toLowerCase();
+        return lower == 'true' || lower == '1';
+      }
+      return false;
+    }
+
+    return TripButtonUiConfig(
+      isTripCancellationButtonShow: readBool('isTripCancellationButtonShow'),
+      isTripNoShowButtonShow: readBool('isTripNoShowButtonShow'),
+    );
+  }
+}
+
 /// Passenger entry from the `B` array inside a home-page trip object.
 class TripHomePax {
   final int? empId;
@@ -145,6 +174,7 @@ class TripHomeItem {
   final String? cancelorNoshow;
   final int? deBoardOtp;
   final int? isCancelTripByUserAfterTat;
+  final TripButtonUiConfig? tripButtonUiConfig;
   final List<TripHomePax>? passengers;
 
   const TripHomeItem({
@@ -178,6 +208,7 @@ class TripHomeItem {
     this.cancelorNoshow,
     this.deBoardOtp,
     this.isCancelTripByUserAfterTat,
+    this.tripButtonUiConfig,
     this.passengers,
   });
 
@@ -240,6 +271,11 @@ class TripHomeItem {
       deBoardOtp: (json['DeBoardOTP'] as num?)?.toInt(),
       isCancelTripByUserAfterTat:
           (json['IsCancelTripByUserAfterTAT'] as num?)?.toInt(),
+      tripButtonUiConfig: json['tripButtonUiConfig'] is Map
+          ? TripButtonUiConfig.fromJson(
+              Map<String, dynamic>.from(json['tripButtonUiConfig'] as Map),
+            )
+          : null,
       passengers: passengers,
     );
   }

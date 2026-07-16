@@ -101,3 +101,26 @@ class CancelSchedule extends ShiftEvent {
   @override
   List<Object?> get props => [locCode, empId, scheduleDate, tripType];
 }
+
+/// Fetches the cancel / no-show confirmation popup config via
+/// `POST /TransRoster/CancelScheduleConfirmation`.
+///
+/// The response decides whether the popup is a Cancel Schedule or a Mark No
+/// Show confirmation (and its icon/title/message/buttons). [tripType] must be
+/// `"1"` for a Login (pickup) trip or `"2"` for a Logout (drop) trip.
+class FetchCancelScheduleConfirmation extends ShiftEvent {
+  final int locCode;
+  final String empId;
+  final String scheduleDate;
+  final String tripType;
+
+  const FetchCancelScheduleConfirmation({
+    required this.locCode,
+    required this.empId,
+    required this.scheduleDate,
+    required this.tripType,
+  });
+
+  @override
+  List<Object?> get props => [locCode, empId, scheduleDate, tripType];
+}
