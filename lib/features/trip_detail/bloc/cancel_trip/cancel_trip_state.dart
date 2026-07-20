@@ -56,9 +56,10 @@ class TripCancelConfirmLoaded extends TripCancelState {
   List<Object?> get props => [popup.popupId, popup.buttons.length];
 }
 
-/// The backend explicitly refused cancellation (`errorCode != 0`). The dialog
-/// must not be opened; [message] is the `dB_Response` to surface to the user
-/// (e.g. "User boarded, cancellation not permitted.").
+/// Deprecated: no longer emitted. A confirmation refusal (`errorCode != 0`)
+/// now falls back to the hardcoded dialog via [TripCancelConfirmFallback] so
+/// the user can still confirm and `UserCancelTrip` is always callable. Retained
+/// only so existing (defensive) `is TripCancelConfirmRefused` guards compile.
 class TripCancelConfirmRefused extends TripCancelState {
   final String message;
 

@@ -49,18 +49,17 @@ class TripCancelBloc extends Bloc<TripCancelEvent, TripCancelState> {
       );
       if (response.isSuccess) {
         emit(TripCancelConfirmLoaded(response.popup!));
-      } else if (response.errorCode != 0) {
-        // The backend explicitly refused cancellation (e.g. user boarded, TAT
-        // over). Do not open the dialog — surface the DB_Response instead.
-        emit(TripCancelConfirmRefused(
+      } else {
+        // The confirmation config could not be used — either the backend
+        // returned errorCode != 0 (e.g. user boarded, TAT over) or errorCode
+        // == 0 with no usable popup config. In both cases fall back to the
+        // hardcoded dialog so the user can still confirm and UserCancelTrip is
+        // always callable (no hard block on the cancel flow).
+        emit(TripCancelConfirmFallback(
           response.dbResponse.isNotEmpty
               ? response.dbResponse
-              : 'Cancellation not permitted.',
+              : 'Cancellation confirmation unavailable.',
         ));
-      } else {
-        // errorCode == 0 but no usable popup config → fall back to the
-        // hardcoded dialog so there is no regression in functionality.
-        emit(TripCancelConfirmFallback(response.dbResponse));
       }
     } on UnauthorizedException catch (e) {
       emit(TripCancelUnauthorized(e.toString()));

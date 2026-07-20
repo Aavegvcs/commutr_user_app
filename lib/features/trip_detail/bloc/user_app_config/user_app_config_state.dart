@@ -34,6 +34,11 @@ class UserAppConfigLoaded extends UserAppConfigState {
         config.tripUiConfig.isTripChatAllowed,
         config.tripUiConfig.isTripShareCabAllowed,
         config.tripUiConfig.isTripIvrCallAllowed,
+        config.tripUiConfig.isTripSafeHomeReach,
+        config.tripUiConfig.isTripCancellationAllowed,
+        config.tripUiConfig.isTripNoShowAllowed,
+        config.tripUiConfig.isDeboardOtpFieldAllowed,
+        config.tripUiConfig.isTripSummaryAllowed,
       ];
 }
 

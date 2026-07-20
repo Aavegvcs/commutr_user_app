@@ -194,6 +194,12 @@ class RideTrackingScreen extends StatefulWidget {
   final int? tripId;
   final int? empId;
   final String? boardingOtp;
+  // UserAppConfiguration highest-priority feature gates, passed in from the
+  // caller (which has the loaded config). When `false` the corresponding button
+  // is always hidden; defaults to `true` so behaviour is unchanged when a caller
+  // does not supply a value.
+  final bool gateChat;
+  final bool gateIvrCall;
 
   const RideTrackingScreen({
     super.key,
@@ -201,6 +207,8 @@ class RideTrackingScreen extends StatefulWidget {
     this.tripId,
     this.empId,
     this.boardingOtp,
+    this.gateChat = true,
+    this.gateIvrCall = true,
   });
 
   @override
@@ -2343,6 +2351,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                         dsId: data?.status?.dsId ?? widget.tripId,
                         empId: widget.empId,
                         isLoading: isLoading,
+                        gateIvrCall: widget.gateIvrCall,
                       ),
 
                       // Personalised status banner — waiting vs boarded.
@@ -2373,6 +2382,7 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
                                 onTogglePassengers: () => setState(() =>
                                     _showPassengerList = !_showPassengerList),
                                 officeName: _empOfficeName,
+                                gateChat: widget.gateChat,
                               )
                             : const SizedBox.shrink(),
                       ),
@@ -2693,6 +2703,8 @@ class _DriverCard extends StatelessWidget {
   final int? dsId;
   final int? empId;
   final bool isLoading;
+  // UserAppConfiguration highest-priority gate for the IVR Call button.
+  final bool gateIvrCall;
 
   const _DriverCard({
     this.driverName,
@@ -2701,6 +2713,7 @@ class _DriverCard extends StatelessWidget {
     this.dsId,
     this.empId,
     this.isLoading = false,
+    this.gateIvrCall = true,
   });
 
   Future<void> _onCallPressed(BuildContext context) async {
@@ -2833,24 +2846,28 @@ class _DriverCard extends StatelessWidget {
               ],
             ),
           ),
-          ElevatedButton.icon(
-            onPressed: canCall ? () => _onCallPressed(context) : null,
-            icon: const Icon(Icons.phone_rounded, size: 16),
-            label: const Text('Call'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1A6B4A),
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-              textStyle: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+          // UserAppConfiguration highest-priority gate: hide the IVR Call button
+          // entirely when isTripIvrCallAllowed is `false`.
+          if (gateIvrCall)
+            ElevatedButton.icon(
+              onPressed: canCall ? () => _onCallPressed(context) : null,
+              icon: const Icon(Icons.phone_rounded, size: 16),
+              label: const Text('Call'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A6B4A),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -2874,6 +2891,8 @@ class _ExpandedSection extends StatelessWidget {
   // Office name from the logged-in passenger's `empOffice`; null falls back to
   // the office stop's own title.
   final String? officeName;
+  // UserAppConfiguration highest-priority gate for the Chat button.
+  final bool gateChat;
 
   const _ExpandedSection({
     this.data,
@@ -2887,6 +2906,7 @@ class _ExpandedSection extends StatelessWidget {
     required this.showPassengerList,
     required this.onTogglePassengers,
     this.officeName,
+    this.gateChat = true,
   });
 
   void _openTripGroupChat(BuildContext context) {
@@ -3035,71 +3055,75 @@ class _ExpandedSection extends StatelessWidget {
           ),
         ],
 
-        const SizedBox(height: 12),
-        Divider(color: Colors.grey.shade200, height: 1),
-        const SizedBox(height: 12),
+        // UserAppConfiguration highest-priority gate: hide the Chat entry
+        // ("Need Cab Update?") entirely when isTripChatAllowed is `false`.
+        if (gateChat) ...[
+          const SizedBox(height: 12),
+          Divider(color: Colors.grey.shade200, height: 1),
+          const SizedBox(height: 12),
 
-        // Need Cab Update row
-        GestureDetector(
-          onTap: () => _openTripGroupChat(context),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF9F9F9),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFEEEEEE)),
-            ),
-            child: Row(
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    const Icon(Icons.chat_bubble_outline_rounded,
-                        size: 22, color: Color(0xFF1A6B4A)),
-                    Positioned(
-                      top: -3,
-                      right: -3,
-                      child: Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          // Need Cab Update row
+          GestureDetector(
+            onTap: () => _openTripGroupChat(context),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9F9F9),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFEEEEEE)),
+              ),
+              child: Row(
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      Text(
-                        'Need Cab Update?',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      Text(
-                        'Chat with your group',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF888888),
+                      const Icon(Icons.chat_bubble_outline_rounded,
+                          size: 22, color: Color(0xFF1A6B4A)),
+                      Positioned(
+                        top: -3,
+                        right: -3,
+                        child: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
                         ),
                       ),
                     ],
                   ),
-                ),
-                const Icon(Icons.chevron_right,
-                    color: Color(0xFFAAAAAA), size: 20),
-              ],
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Need Cab Update?',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        Text(
+                          'Chat with your group',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF888888),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right,
+                      color: Color(0xFFAAAAAA), size: 20),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 4),
+          const SizedBox(height: 4),
+        ],
       ],
     );
   }

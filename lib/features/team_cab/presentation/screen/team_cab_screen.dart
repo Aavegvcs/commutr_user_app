@@ -15,7 +15,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 class TeamCabScreen extends StatelessWidget {
-  const TeamCabScreen({super.key});
+  // UserAppConfiguration highest-priority gate for the Trip Summary button,
+  // passed in from the caller (which has the loaded config). When `false` the
+  // Trip Summary button is always hidden; defaults to `true` so behaviour is
+  // unchanged when a caller does not supply a value.
+  final bool gateTripSummary;
+
+  const TeamCabScreen({super.key, this.gateTripSummary = true});
 
   static const Color _bg = Color(0xFFF5F5F4);
   static const Color _primary = Color(0xFF1A6B3C);
@@ -44,7 +50,7 @@ class TeamCabScreen extends StatelessWidget {
             ),
           ),
         ),
-        body: const _TeamCabBody(),
+        body: _TeamCabBody(gateTripSummary: gateTripSummary),
       ),
     );
   }
@@ -53,7 +59,9 @@ class TeamCabScreen extends StatelessWidget {
 /// Bridges the roster details (source of `empId`) into the team-cab fetch,
 /// then renders the team-cab state. Owns the currently-selected filter date.
 class _TeamCabBody extends StatefulWidget {
-  const _TeamCabBody();
+  final bool gateTripSummary;
+
+  const _TeamCabBody({this.gateTripSummary = true});
 
   @override
   State<_TeamCabBody> createState() => _TeamCabBodyState();
@@ -161,7 +169,10 @@ class _TeamCabBodyState extends State<_TeamCabBody> {
                   return BlocBuilder<TeamCabBloc, TeamCabState>(
                     builder: (context, state) {
                       if (state is TeamCabLoaded) {
-                        return _TeamCabContent(data: state.data);
+                        return _TeamCabContent(
+                          data: state.data,
+                          gateTripSummary: widget.gateTripSummary,
+                        );
                       }
                       if (state is TeamCabError) {
                         return _ScrollableFill(
@@ -278,8 +289,9 @@ class _FilterBar extends StatelessWidget {
 
 class _TeamCabContent extends StatelessWidget {
   final TeamTrackingPanelResponse data;
+  final bool gateTripSummary;
 
-  const _TeamCabContent({required this.data});
+  const _TeamCabContent({required this.data, this.gateTripSummary = true});
 
   @override
   Widget build(BuildContext context) {
@@ -311,7 +323,10 @@ class _TeamCabContent extends StatelessWidget {
         if (index == 0) {
           return _HeaderBar(date: data.requestedDate, count: trips.length);
         }
-        return _TripCard(trip: trips[index - 1]);
+        return _TripCard(
+          trip: trips[index - 1],
+          gateTripSummary: gateTripSummary,
+        );
       },
     );
   }
@@ -366,8 +381,10 @@ class _HeaderBar extends StatelessWidget {
 
 class _TripCard extends StatelessWidget {
   final TeamTripModel trip;
+  // UserAppConfiguration highest-priority gate for the Trip Summary button.
+  final bool gateTripSummary;
 
-  const _TripCard({required this.trip});
+  const _TripCard({required this.trip, this.gateTripSummary = true});
 
   bool get _isPickup => trip.tripType == 1;
 
@@ -382,7 +399,11 @@ class _TripCard extends StatelessWidget {
 
   /// Finished trips (Cancelled / Trip-Completed / No-Show) no longer track
   /// live — instead we offer a Trip Summary view.
+  ///
+  /// UserAppConfiguration highest-priority gate: when isTripSummaryAllowed is
+  /// `false` the Trip Summary button is always hidden, regardless of status.
   bool get _canShowSummary {
+    if (!gateTripSummary) return false;
     const summaryStatuses = {'cancelled', 'tripcompleted', 'noshow'};
     return summaryStatuses.contains(_normalisedStatus);
   }

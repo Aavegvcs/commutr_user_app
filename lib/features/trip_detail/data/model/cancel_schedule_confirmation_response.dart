@@ -165,12 +165,23 @@ enum CancelScheduleAction {
   unknown;
 
   static CancelScheduleAction fromString(String raw) {
-    switch (raw.trim()) {
-      case 'cancelSchedule':
+    // Normalise so backend variants (case / snake_case / alternate wording)
+    // can never silently fall through to `unknown` and skip the cancel API.
+    final normalised = raw.trim().toLowerCase().replaceAll(RegExp(r'[_\s-]'), '');
+    switch (normalised) {
+      case 'cancelschedule':
+      case 'cancel':
+      case 'canceltrip':
+      case 'cancelride':
+      case 'confirm':
         return CancelScheduleAction.cancelSchedule;
-      case 'markNoShow':
+      case 'marknoshow':
+      case 'noshow':
         return CancelScheduleAction.markNoShow;
       case 'dismiss':
+      case 'goback':
+      case 'keeptrip':
+      case 'cancel_dismiss':
         return CancelScheduleAction.dismiss;
       default:
         return CancelScheduleAction.unknown;
