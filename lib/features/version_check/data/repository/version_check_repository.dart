@@ -7,7 +7,6 @@ class VersionCheckRepository {
   VersionCheckRepository({required this.apiClient});
 
   /// Calls `GET /Auth/version-check`.
-  ///
   /// - [appType] `1` = DriverApp, `2` = UserApp.
   /// - [platform] `1` = Android, `2` = iOS, `3` = Web.
   /// - [currentVersion] the running app version (e.g. `1.1.0`).

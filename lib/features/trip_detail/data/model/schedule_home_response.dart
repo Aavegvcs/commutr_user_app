@@ -33,14 +33,14 @@ class ScheduleHomeResponse {
   });
 
   bool get isSuccess =>
-      (errorCode ?? -1) == 0 &&
-      (dbResponse ?? '').toLowerCase() == 'success';
+      (errorCode ?? -1) == 0 && (dbResponse ?? '').toLowerCase() == 'success';
 
   factory ScheduleHomeResponse.fromJson(Map<String, dynamic> json) {
     final groups = _parseGroups(json['result']);
     return ScheduleHomeResponse(
       errorCode: (json['errorCode'] as num?)?.toInt(),
-      dbResponse: json['dB_Response']?.toString() ?? json['dbResponse']?.toString(),
+      dbResponse:
+          json['dB_Response']?.toString() ?? json['dbResponse']?.toString(),
       groups: groups,
     );
   }
@@ -110,9 +110,8 @@ class ScheduleHomeResponse {
     if (date == null) return null;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final diff = DateTime(date.year, date.month, date.day)
-        .difference(today)
-        .inDays;
+    final diff =
+        DateTime(date.year, date.month, date.day).difference(today).inDays;
     if (diff == 0) return 'Today';
     if (diff == 1) return 'Tomorrow';
     return null;
@@ -205,7 +204,9 @@ class ScheduleItem {
   final String? loginNoshow;
   final String? logoutNoshow;
 
-
+  /// UI-behaviour flags supplied by the backend (`ButtonUiConfig`), controlling
+  /// which action buttons the app should surface for this schedule entry.
+  final ButtonUiConfig? buttonUiConfig;
 
   /// Trip availability flag from the backend, e.g. `"TripFound"` /
   /// `"TripNotFound"`. Indicates whether a vehicle/trip has been found for the
@@ -226,7 +227,8 @@ class ScheduleItem {
     this.loginCancelled,
     this.logoutCancelled,
     this.loginNoshow,
-    this.logoutNoshow
+    this.logoutNoshow,
+    this.buttonUiConfig,
   });
 
   factory ScheduleItem.fromJson(Map<String, dynamic> json) {
@@ -253,10 +255,12 @@ class ScheduleItem {
       logoutCancelled: readString('LogoutCancelled'),
       loginNoshow: readString('LoginNoshow'),
       logoutNoshow: readString('LogoutNoshow'),
-
+      buttonUiConfig: json['ButtonUiConfig'] is Map
+          ? ButtonUiConfig.fromJson(
+              Map<String, dynamic>.from(json['ButtonUiConfig'] as Map))
+          : null,
     );
   }
-
 
   /// `true` when `LoginScheduleDate` is present and non-empty.
   bool get hasLoginSchedule {
@@ -270,21 +274,25 @@ class ScheduleItem {
     return v.isNotEmpty;
   }
 
-  bool get _hasLoginShiftTime {
-    final v = loginShiftTime?.trim() ?? '';
-    return v.isNotEmpty;
-  }
+  bool _isEmpty(String? v) => (v?.trim() ?? '').isEmpty;
 
-  bool get _hasLogoutShiftTime {
-    final v = logoutShiftTime?.trim() ?? '';
-    return v.isNotEmpty;
-  }
+  /// Login card: hidden only when ALL of [loginShiftTime], [loginCancelled] and
+  /// [loginNoshow] are null/empty. If any one is non-empty the card is shown
+  /// (still requires a [loginScheduleDate]).
+  bool get shouldShowLoginCard =>
+      hasLoginSchedule &&
+      !(_isEmpty(loginShiftTime) &&
+          _isEmpty(loginCancelled) &&
+          _isEmpty(loginNoshow));
 
-  /// Login card: both [loginScheduleDate] and [loginShiftTime] must be set.
-  bool get shouldShowLoginCard => hasLoginSchedule && _hasLoginShiftTime;
-
-  /// Logout card: both [logoutScheduleDate] and [logoutShiftTime] must be set.
-  bool get shouldShowLogoutCard => hasLogoutSchedule && _hasLogoutShiftTime;
+  /// Logout card: hidden only when ALL of [logoutShiftTime], [logoutCancelled]
+  /// and [logoutNoshow] are null/empty. If any one is non-empty the card is
+  /// shown (still requires a [logoutScheduleDate]).
+  bool get shouldShowLogoutCard =>
+      hasLogoutSchedule &&
+      !(_isEmpty(logoutShiftTime) &&
+          _isEmpty(logoutCancelled) &&
+          _isEmpty(logoutNoshow));
 
   /// `true` when the backend marks the trip as still `"Scheduled"` —
   /// meaning the vehicle hasn't been assigned/dispatched yet and the
@@ -292,4 +300,63 @@ class ScheduleItem {
   /// not applicable.
   bool get isScheduledStatus =>
       (tripStatusName ?? '').trim().toLowerCase() == 'scheduled';
+}
+
+/// Per-button visibility flags supplied by the backend under `ButtonUiConfig`.
+/// Each flag tells the app whether a given action button should be surfaced for
+/// the schedule entry, split by pickup (login) / drop (logout) direction. All
+/// default to `false` when missing so the UI hides actions unless the backend
+/// explicitly enables them.
+class ButtonUiConfig {
+  /// Show the "Cancel" button for the pickup (login) trip.
+  final bool cancelSchedulePickupButtonShow;
+
+  /// Show the "Cancel" button for the drop (logout) trip.
+  final bool cancelScheduleDropButtonShow;
+
+  /// Show the "No Show" cancel button for the pickup (login) trip.
+  final bool cancelSchedulePickupNoShowButtonShow;
+
+  /// Show the "No Show" cancel button for the drop (logout) trip.
+  final bool cancelScheduleDropNoShowButtonShow;
+
+  /// Show the "Edit" button for the pickup (login) trip.
+  final bool editSchedulePickupButtonShow;
+
+  /// Show the "Edit" button for the drop (logout) trip.
+  final bool editScheduleDropButtonShow;
+
+  const ButtonUiConfig({
+    this.cancelSchedulePickupButtonShow = false,
+    this.cancelScheduleDropButtonShow = false,
+    this.cancelSchedulePickupNoShowButtonShow = false,
+    this.cancelScheduleDropNoShowButtonShow = false,
+    this.editSchedulePickupButtonShow = false,
+    this.editScheduleDropButtonShow = false,
+  });
+
+  factory ButtonUiConfig.fromJson(Map<String, dynamic> json) {
+    bool readBool(String key) {
+      final v = json[key];
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final s = v.trim().toLowerCase();
+        return s == 'true' || s == '1';
+      }
+      return false;
+    }
+
+    return ButtonUiConfig(
+      cancelSchedulePickupButtonShow:
+          readBool('cancelSchedulePickupButtonShow'),
+      cancelScheduleDropButtonShow: readBool('cancelScheduleDropButtonShow'),
+      cancelSchedulePickupNoShowButtonShow:
+          readBool('cancelSchedulePickupNoShowButtonShow'),
+      cancelScheduleDropNoShowButtonShow:
+          readBool('cancelScheduleDropNoShowButtonShow'),
+      editSchedulePickupButtonShow: readBool('EditSchedulePickupButtonShow'),
+      editScheduleDropButtonShow: readBool('EditScheduleDropButtonShow'),
+    );
+  }
 }

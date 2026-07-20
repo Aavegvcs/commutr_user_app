@@ -4,11 +4,17 @@ import 'package:flutter/material.dart';
 class TripProgressBottomSheet extends StatelessWidget {
   final CabTrackingData tracking;
   final String? currentUserName;
+  // UserAppConfiguration highest-priority gate for the Chat button, passed in
+  // from the caller (which has the loaded config). When `false` the Chat entry
+  // is always hidden; defaults to `true` so behaviour is unchanged when a caller
+  // does not supply a value.
+  final bool gateChat;
 
   const TripProgressBottomSheet({
     super.key,
     required this.tracking,
     this.currentUserName,
+    this.gateChat = true,
   });
 
   @override
@@ -70,49 +76,53 @@ class TripProgressBottomSheet extends StatelessWidget {
             tracking: tracking,
             currentUserName: currentUserName,
           ),
-          const SizedBox(height: 20),
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFFF2F2F2),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: ListTile(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-              leading: Stack(
-                children: [
-                  const Icon(
-                    Icons.chat_bubble_outline_rounded,
-                    size: 24,
-                    color: Color(0xFF1A5C38),
-                  ),
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
+          // UserAppConfiguration highest-priority gate: hide the Chat entry
+          // ("Need Cab Update?") entirely when isTripChatAllowed is `false`.
+          if (gateChat) ...[
+            const SizedBox(height: 20),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFF2F2F2),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: ListTile(
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                leading: Stack(
+                  children: [
+                    const Icon(
+                      Icons.chat_bubble_outline_rounded,
+                      size: 24,
+                      color: Color(0xFF1A5C38),
+                    ),
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+                title: const Text(
+                  'Need Cab Update?',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Chat with your group',
+                  style: TextStyle(color: Colors.black54, fontSize: 14),
+                ),
+                trailing: const Icon(Icons.chevron_right,
+                    color: Colors.black45, size: 22),
+                onTap: () {},
               ),
-              title: const Text(
-                'Need Cab Update?',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-              ),
-              subtitle: const Text(
-                'Chat with your group',
-                style: TextStyle(color: Colors.black54, fontSize: 14),
-              ),
-              trailing: const Icon(Icons.chevron_right,
-                  color: Colors.black45, size: 22),
-              onTap: () {},
             ),
-          ),
+          ],
         ],
       ),
     );
