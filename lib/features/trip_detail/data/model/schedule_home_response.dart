@@ -33,14 +33,14 @@ class ScheduleHomeResponse {
   });
 
   bool get isSuccess =>
-      (errorCode ?? -1) == 0 &&
-      (dbResponse ?? '').toLowerCase() == 'success';
+      (errorCode ?? -1) == 0 && (dbResponse ?? '').toLowerCase() == 'success';
 
   factory ScheduleHomeResponse.fromJson(Map<String, dynamic> json) {
     final groups = _parseGroups(json['result']);
     return ScheduleHomeResponse(
       errorCode: (json['errorCode'] as num?)?.toInt(),
-      dbResponse: json['dB_Response']?.toString() ?? json['dbResponse']?.toString(),
+      dbResponse:
+          json['dB_Response']?.toString() ?? json['dbResponse']?.toString(),
       groups: groups,
     );
   }
@@ -110,9 +110,8 @@ class ScheduleHomeResponse {
     if (date == null) return null;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final diff = DateTime(date.year, date.month, date.day)
-        .difference(today)
-        .inDays;
+    final diff =
+        DateTime(date.year, date.month, date.day).difference(today).inDays;
     if (diff == 0) return 'Today';
     if (diff == 1) return 'Tomorrow';
     return null;
@@ -209,8 +208,6 @@ class ScheduleItem {
   /// which action buttons the app should surface for this schedule entry.
   final ButtonUiConfig? buttonUiConfig;
 
-
-
   /// Trip availability flag from the backend, e.g. `"TripFound"` /
   /// `"TripNotFound"`. Indicates whether a vehicle/trip has been found for the
   /// scheduled shift.
@@ -265,7 +262,6 @@ class ScheduleItem {
     );
   }
 
-
   /// `true` when `LoginScheduleDate` is present and non-empty.
   bool get hasLoginSchedule {
     final v = loginScheduleDate?.trim() ?? '';
@@ -278,21 +274,25 @@ class ScheduleItem {
     return v.isNotEmpty;
   }
 
-  bool get _hasLoginShiftTime {
-    final v = loginShiftTime?.trim() ?? '';
-    return v.isNotEmpty;
-  }
+  bool _isEmpty(String? v) => (v?.trim() ?? '').isEmpty;
 
-  bool get _hasLogoutShiftTime {
-    final v = logoutShiftTime?.trim() ?? '';
-    return v.isNotEmpty;
-  }
+  /// Login card: hidden only when ALL of [loginShiftTime], [loginCancelled] and
+  /// [loginNoshow] are null/empty. If any one is non-empty the card is shown
+  /// (still requires a [loginScheduleDate]).
+  bool get shouldShowLoginCard =>
+      hasLoginSchedule &&
+      !(_isEmpty(loginShiftTime) &&
+          _isEmpty(loginCancelled) &&
+          _isEmpty(loginNoshow));
 
-  /// Login card: both [loginScheduleDate] and [loginShiftTime] must be set.
-  bool get shouldShowLoginCard => hasLoginSchedule && _hasLoginShiftTime;
-
-  /// Logout card: both [logoutScheduleDate] and [logoutShiftTime] must be set.
-  bool get shouldShowLogoutCard => hasLogoutSchedule && _hasLogoutShiftTime;
+  /// Logout card: hidden only when ALL of [logoutShiftTime], [logoutCancelled]
+  /// and [logoutNoshow] are null/empty. If any one is non-empty the card is
+  /// shown (still requires a [logoutScheduleDate]).
+  bool get shouldShowLogoutCard =>
+      hasLogoutSchedule &&
+      !(_isEmpty(logoutShiftTime) &&
+          _isEmpty(logoutCancelled) &&
+          _isEmpty(logoutNoshow));
 
   /// `true` when the backend marks the trip as still `"Scheduled"` —
   /// meaning the vehicle hasn't been assigned/dispatched yet and the
@@ -348,7 +348,8 @@ class ButtonUiConfig {
     }
 
     return ButtonUiConfig(
-      cancelSchedulePickupButtonShow: readBool('cancelSchedulePickupButtonShow'),
+      cancelSchedulePickupButtonShow:
+          readBool('cancelSchedulePickupButtonShow'),
       cancelScheduleDropButtonShow: readBool('cancelScheduleDropButtonShow'),
       cancelSchedulePickupNoShowButtonShow:
           readBool('cancelSchedulePickupNoShowButtonShow'),

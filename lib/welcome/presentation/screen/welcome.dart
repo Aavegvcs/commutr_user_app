@@ -25,6 +25,8 @@ import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_e
 import 'package:commutr_main/features/trip_detail/bloc/app_control/app_control_state.dart';
 import 'package:commutr_main/features/trip_detail/bloc/user_app_config/user_app_config_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/user_app_config/user_app_config_event.dart';
+import 'package:commutr_main/features/trip_detail/bloc/user_app_config/user_app_config_state.dart';
+import 'package:commutr_main/features/trip_detail/data/model/user_app_configuration_response.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_bloc.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_event.dart';
 import 'package:commutr_main/features/trip_detail/bloc/roaster_state.dart';
@@ -191,6 +193,17 @@ class _WelcomeState extends State<_WelcomeView> {
   bool _tripHistoryFetchDispatched = false;
   Timer? _pollingTimer;
 
+  /// True while a pull-to-refresh cascade is in flight. Used so the schedules
+  /// section keeps rendering the previously-loaded cards (with the single
+  /// [RefreshIndicator] spinner on top) instead of swapping in its own inline
+  /// loader — the user should ever see only one loader during a refresh.
+  bool _isRefreshing = false;
+
+  /// Last successfully-loaded active-trip / schedule groups, retained so the UI
+  /// can keep showing them while a refresh reloads in the background.
+  List<TripDayGroup>? _lastTripGroups;
+  List<ScheduleDateGroup>? _lastScheduleGroups;
+
   @override
   void initState() {
     super.initState();
@@ -262,6 +275,57 @@ class _WelcomeState extends State<_WelcomeView> {
     context.read<UserAppConfigBloc>().add(FetchUserAppConfig(locCode));
   }
 
+  /// Reloads the home screen data (active trips + schedules) so the UI — whose
+  /// feature visibility is gated by [UserAppConfiguration] — re-evaluates
+  /// against freshly-loaded config. Invoked when the user-app-config finishes
+  /// loading. Does NOT re-dispatch the config fetch, so there is no loop.
+  void _reloadHomeDataForUserAppConfig() {
+    if (!mounted) return;
+    context.read<TripHomeBloc>().add(const FetchTripHome());
+    context.read<ScheduleHomeBloc>().add(const FetchScheduleHome());
+  }
+
+  /// Drives pull-to-refresh: dispatches the roster fetch (which cascades through
+  /// AppControl → UserAppConfig → TripHome + ScheduleHome via the BlocListeners)
+  /// and returns a Future that completes only once the FINAL data — the active
+  /// trips and schedules — has finished reloading. This keeps the single
+  /// [RefreshIndicator] spinner up for the whole cascade instead of dismissing
+  /// it the instant the roster event is enqueued.
+  Future<void> _refreshHomeData() async {
+    final tripBloc = context.read<TripHomeBloc>();
+    final scheduleBloc = context.read<ScheduleHomeBloc>();
+
+    bool isTerminal(Object state) =>
+        state is! TripHomeLoading &&
+        state is! TripHomeInitial &&
+        state is! ScheduleHomeLoading &&
+        state is! ScheduleHomeInitial;
+
+    // Wait for the next terminal (loaded / error / unauthorized) state that the
+    // reload cascade produces. Listen BEFORE dispatching so a fast emission is
+    // never missed. A timeout guards against the spinner hanging if the cascade
+    // stalls (e.g. roster never re-emits RosterLoaded).
+    final tripDone = tripBloc.stream
+        .firstWhere(isTerminal)
+        .timeout(const Duration(seconds: 30), onTimeout: () => tripBloc.state);
+    final scheduleDone = scheduleBloc.stream.firstWhere(isTerminal).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => scheduleBloc.state);
+
+    // Suppress the inline section loader for the duration of the refresh so the
+    // RefreshIndicator spinner is the only loader on screen.
+    if (mounted) setState(() => _isRefreshing = true);
+
+    // Kick off the cascade.
+    context.read<RosterBloc>().add(const FetchRosterUserDetails());
+
+    try {
+      await Future.wait([tripDone, scheduleDone]);
+    } finally {
+      if (mounted) setState(() => _isRefreshing = false);
+    }
+  }
+
   /// Current per-location hybrid-schedule flag from the loaded AppControl
   /// settings (defaults to `false` until/unless settings are loaded).
   bool get _hybridScheduleEnabled {
@@ -276,6 +340,66 @@ class _WelcomeState extends State<_WelcomeView> {
     return s is AppControlLoaded &&
         s.settings.isScheduleFillForLoginAndLogoutBoth;
   }
+
+  // ---------------------------------------------------------------------------
+  // UserAppConfiguration — highest-priority per-location feature gate.
+  //
+  // These getters read the per-location UI-gating config from
+  // `GetUserAppConfigurationByLocCode` (see [UserAppConfigBloc]). Each one
+  // returns whether a given feature is *allowed* to be shown.
+  //
+  // The gate has the HIGHEST priority: when the config is loaded and a flag is
+  // `false`, the corresponding UI element must always be hidden regardless of
+  // trip status, TAT, AppControl, backend flags, or any existing visibility
+  // logic. When the flag is `true`, the existing logic is preserved exactly.
+  //
+  // While the config is NOT loaded (initial / loading / error), the gate falls
+  // back to `true` so existing behaviour is preserved unchanged — the gate only
+  // ever hides on an explicit loaded `false`.
+  // ---------------------------------------------------------------------------
+
+  /// The loaded per-location UI-gating config, or `null` when not yet loaded.
+  UserAppConfiguration? get _userAppConfig {
+    final s = context.read<UserAppConfigBloc>().state;
+    return s is UserAppConfigLoaded ? s.config : null;
+  }
+
+  // Schedule feature gates.
+  bool get _gateScheduleCancel =>
+      _userAppConfig?.scheduleUiConfig.isCancellationScheduledAllowed ?? true;
+  bool get _gateScheduleEdit =>
+      _userAppConfig?.scheduleUiConfig.isEditScheduleAllowed ?? true;
+  bool get _gateScheduleNoShow =>
+      _userAppConfig?.scheduleUiConfig.isAlreadyScheduledNoShow ?? true;
+  bool get _gateScheduleTracking =>
+      _userAppConfig?.scheduleUiConfig.isTrackingScheduledAllowed ?? true;
+  bool get _gateCreateSchedule =>
+      _userAppConfig?.scheduleUiConfig.isCreateScheduleAllowed ?? true;
+  // NOTE: isCreateScheduleAllowed is ALSO gated inline in [AppDrawer] (a
+  // separate StatelessWidget without access to these getters).
+  bool get _gateScheduleCancelAfterTAT =>
+      _userAppConfig?.scheduleUiConfig.isCancelledScheduledAllowedAfterTAT ??
+      true;
+
+  // Trip feature gates.
+  bool get _gateTripTracking =>
+      _userAppConfig?.tripUiConfig.isTripTrackingAllowed ?? true;
+  bool get _gateTripChat =>
+      _userAppConfig?.tripUiConfig.isTripChatAllowed ?? true;
+  bool get _gateTripShareCab =>
+      _userAppConfig?.tripUiConfig.isTripShareCabAllowed ?? true;
+  bool get _gateTripIvrCall =>
+      _userAppConfig?.tripUiConfig.isTripIvrCallAllowed ?? true;
+  bool get _gateTripSafeHomeReach =>
+      _userAppConfig?.tripUiConfig.isTripSafeHomeReach ?? true;
+  bool get _gateTripCancellation =>
+      _userAppConfig?.tripUiConfig.isTripCancellationAllowed ?? true;
+  bool get _gateTripNoShow =>
+      _userAppConfig?.tripUiConfig.isTripNoShowAllowed ?? true;
+  bool get _gateDeboardOtpField =>
+      _userAppConfig?.tripUiConfig.isDeboardOtpFieldAllowed ?? true;
+  bool get _gateTripSummary =>
+      _userAppConfig?.tripUiConfig.isTripSummaryAllowed ?? true;
 
   void _maybeDispatchTripHistoryFetch(int empId) {
     if (_tripHistoryFetchDispatched) return;
@@ -386,6 +510,7 @@ class _WelcomeState extends State<_WelcomeView> {
   void _showCancelActiveTripDialog(
     BuildContext context, {
     required TripHomeItem item,
+    bool isNoShow = false,
   }) {
     void showBar(String msg) {
       ScaffoldMessenger.of(context)
@@ -421,7 +546,7 @@ class _WelcomeState extends State<_WelcomeView> {
         tripDate: tripDateIso,
         tripType: item.isLogin ? 1 : 2,
         tripId: tripId,
-        showNoShowWording: item.isCancelTripByUserAfterTat == 1,
+        showNoShowWording: isNoShow,
       ),
     ).then((cancelled) {
       if (cancelled == true && context.mounted) {
@@ -1105,6 +1230,8 @@ class _WelcomeState extends State<_WelcomeView> {
             tripId: tripId,
             empId: empId,
             boardingOtp: boardingOtp,
+            gateChat: _gateTripChat,
+            gateIvrCall: _gateTripIvrCall,
           ),
         ),
       ),
@@ -1393,6 +1520,34 @@ class _WelcomeState extends State<_WelcomeView> {
     );
   }
 
+  /// Active-trip No-Show action rendered as a text pill ("No Show") rather than
+  /// an icon, matching the schedule-card No-Show button styling.
+  Widget _buildTripNoShowTextButton({required VoidCallback? onTap}) {
+    return InkWell(
+      splashColor: Colors.transparent,
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        height: 42,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: const Color(0x33BA1A1A)),
+        ),
+        child: const Text(
+          'No Show',
+          style: TextStyle(
+            color: Color(0xFFBA1A1A),
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTripStartedExpandedActions({
     required TripHomeItem item,
     required Color accentColor,
@@ -1411,19 +1566,36 @@ class _WelcomeState extends State<_WelcomeView> {
     final appControlState = context.read<AppControlBloc>().state;
     final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
         appControlState.settings.boardDebaordEnabledForUser;
-    // The single active-trip action button acts as a No-Show button when the
-    // trip is past TAT (isCancelTripByUserAfterTat == 1) and as a Cancel button
-    // otherwise. Its visibility follows the matching per-trip
-    // `tripButtonUiConfig` flag from the API.
-    final bool showCancelTripButton = item.isCancelTripByUserAfterTat == 1
-        ? (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false)
-        : (item.tripButtonUiConfig?.isTripCancellationButtonShow ?? false);
+    // The active-trip card shows independent No-Show and Cancel action buttons.
+    //   • No-Show: only relevant after TAT — gated by the per-location AppControl
+    //     flag (isCancelTripByUserAfterTAT), the UserAppConfiguration No-Show
+    //     gate, and the per-trip `isTripNoShowButtonShow` flag.
+    //   • Cancel: gated by the UserAppConfiguration Cancel gate and the per-trip
+    //     `isTripCancellationButtonShow` flag.
+    // Both may appear at once (mirrors the schedule-card button model).
+    final bool isCancelTripByUserAfterTAT = appControlState is AppControlLoaded &&
+        appControlState.settings.isCancelTripByUserAfterTAT;
+    final bool showTripNoShowButton = _gateTripNoShow &&
+        isCancelTripByUserAfterTAT &&
+        (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false);
+    final bool showTripCancelButton = _gateTripCancellation &&
+        (item.tripButtonUiConfig?.isTripCancellationButtonShow ?? false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
-            if (showCancelTripButton) ...[
+            if (showTripNoShowButton) ...[
+              _buildTripNoShowTextButton(
+                onTap: () => _showCancelActiveTripDialog(
+                  context,
+                  item: item,
+                  isNoShow: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (showTripCancelButton) ...[
               _buildTripCircleAction(
                 onTap: () => _showCancelActiveTripDialog(context, item: item),
                 icon: Icons.close,
@@ -1433,47 +1605,52 @@ class _WelcomeState extends State<_WelcomeView> {
               ),
               const SizedBox(width: 10),
             ],
-            _buildTripCircleAction(
-              onTap: () => _shareActiveTrip(item),
-              icon: Icons.share_outlined,
-              iconColor: accentColor,
-              backgroundColor: tagBgColor,
-            ),
-            const SizedBox(width: 10),
-            _buildTripCircleAction(
-              onTap: () => _openTripGroupChat(item),
-              icon: Icons.chat_bubble_outline,
-              iconColor: accentColor,
-              backgroundColor: tagBgColor,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: GestureDetector(
-                onTap: trackVehicleAction,
-                child: Container(
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: trackBg,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.my_location, size: 16, color: trackFg),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Track Vehicle',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: trackFg,
+            if (_gateTripShareCab) ...[
+              _buildTripCircleAction(
+                onTap: () => _shareActiveTrip(item),
+                icon: Icons.share_outlined,
+                iconColor: accentColor,
+                backgroundColor: tagBgColor,
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (_gateTripChat) ...[
+              _buildTripCircleAction(
+                onTap: () => _openTripGroupChat(item),
+                icon: Icons.chat_bubble_outline,
+                iconColor: accentColor,
+                backgroundColor: tagBgColor,
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (_gateTripTracking)
+              Expanded(
+                child: GestureDetector(
+                  onTap: trackVehicleAction,
+                  child: Container(
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: trackBg,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.my_location, size: 16, color: trackFg),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Track Vehicle',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: trackFg,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
           ],
         ),
         if (boardDeboardEnabled &&
@@ -1541,14 +1718,27 @@ class _WelcomeState extends State<_WelcomeView> {
       //     ),
       //   ),
       // ),
-      body: BlocListener<RosterBloc, RosterState>(
-        listener: (context, state) {
-          if (state is RosterLoaded) {
-            _ensureTripHistoryFetched();
-            _maybeFetchAppControlSettings(state.details.locCode);
-            _fetchTeamCab(state.details.empId);
-          }
-        },
+      body: MultiBlocListener(
+        listeners: [
+          BlocListener<RosterBloc, RosterState>(
+            listener: (context, state) {
+              if (state is RosterLoaded) {
+                _ensureTripHistoryFetched();
+                _maybeFetchAppControlSettings(state.details.locCode);
+                _fetchTeamCab(state.details.empId);
+              }
+            },
+          ),
+          // When the per-location UI-gating config finishes loading, reload the
+          // home data so the gated UI re-evaluates against the fresh config.
+          BlocListener<UserAppConfigBloc, UserAppConfigState>(
+            listener: (context, state) {
+              if (state is UserAppConfigLoaded) {
+                _reloadHomeDataForUserAppConfig();
+              }
+            },
+          ),
+        ],
         child: Stack(
           children: [
             Column(
@@ -1592,11 +1782,24 @@ class _WelcomeState extends State<_WelcomeView> {
             ),
 
             // FAB image (sits above the notch)
-            Positioned(
-              bottom: 36,
-              left: 0,
-              right: 0,
-              child: Center(child: _buildFAB()),
+            // UserAppConfiguration highest-priority gate: hide the Create
+            // Schedule plus icon entirely when isCreateScheduleAllowed is
+            // `false`.
+            // Wrapped in a BlocBuilder so the gate re-evaluates whenever
+            // UserAppConfigBloc emits (e.g. after pull-to-refresh re-fetches
+            // the config). `_gateCreateSchedule` reads via context.read, which
+            // does not subscribe, so without this the FAB would not rebuild on
+            // config changes.
+            BlocBuilder<UserAppConfigBloc, UserAppConfigState>(
+              builder: (context, _) {
+                if (!_gateCreateSchedule) return const SizedBox.shrink();
+                return Positioned(
+                  bottom: 36,
+                  left: 0,
+                  right: 0,
+                  child: Center(child: _buildFAB()),
+                );
+              },
             ),
 
             // // Left lc.png decoration
@@ -2740,23 +2943,11 @@ class _WelcomeState extends State<_WelcomeView> {
             return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
               builder: (context, scheduleState) {
                 return RefreshIndicator(
-                  onRefresh: () async {
-                    context.read<TripHomeBloc>().add(const FetchTripHome());
-                    context
-                        .read<ScheduleHomeBloc>()
-                        .add(const FetchScheduleHome());
-                    // Re-fetch the roster (source of locCode) and the
-                    // per-location AppControl settings on pull-to-refresh.
-                    context
-                        .read<RosterBloc>()
-                        .add(const FetchRosterUserDetails());
-                    final rosterState = context.read<RosterBloc>().state;
-                    if (rosterState is RosterLoaded) {
-                      _maybeFetchAppControlSettings(
-                        rosterState.details.locCode,
-                      );
-                    }
-                  },
+                  // Re-fetch only the roster; the BlocListener<RosterBloc> chain
+                  // re-runs the rest (AppControl + UserAppConfig → TripHome +
+                  // ScheduleHome). The returned Future keeps this single spinner
+                  // up until the trips + schedules have finished reloading.
+                  onRefresh: _refreshHomeData,
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.only(bottom: 200),
@@ -2823,10 +3014,33 @@ class _WelcomeState extends State<_WelcomeView> {
       );
     }
 
-    final tripLoading =
+    // Retain the latest loaded groups so a background refresh can keep showing
+    // them instead of flashing the inline loader.
+    if (tripState is TripHomeLoaded) {
+      _lastTripGroups = tripState.groups;
+    }
+    if (scheduleState is ScheduleHomeLoaded) {
+      _lastScheduleGroups = scheduleState.groups;
+    }
+
+    // During a pull-to-refresh, fall back to the retained groups so only the
+    // single RefreshIndicator spinner is shown — never a second inline loader.
+    final tripLoadingRaw =
         tripState is TripHomeLoading || tripState is TripHomeInitial;
-    final scheduleLoading = scheduleState is ScheduleHomeLoading ||
+    final scheduleLoadingRaw = scheduleState is ScheduleHomeLoading ||
         scheduleState is ScheduleHomeInitial;
+
+    final tripGroups = tripState is TripHomeLoaded
+        ? tripState.groups
+        : (_isRefreshing ? _lastTripGroups : null);
+    final scheduleGroups = scheduleState is ScheduleHomeLoaded
+        ? scheduleState.groups
+        : (_isRefreshing ? _lastScheduleGroups : null);
+
+    // Only treat a section as "loading" (i.e. show its loader) when we have no
+    // cached groups to display in its place.
+    final tripLoading = tripLoadingRaw && tripGroups == null;
+    final scheduleLoading = scheduleLoadingRaw && scheduleGroups == null;
 
     if (tripLoading && scheduleLoading) {
       return _buildSectionLoader();
@@ -2836,7 +3050,7 @@ class _WelcomeState extends State<_WelcomeView> {
 
     if (tripLoading) {
       children.add(_buildSectionLoader(compact: true));
-    } else if (tripState is TripHomeError) {
+    } else if (tripGroups == null && tripState is TripHomeError) {
       children.add(
         _buildSchedulesEmptyState(
           title: 'Could not load active trips',
@@ -2846,8 +3060,8 @@ class _WelcomeState extends State<_WelcomeView> {
           retryLabel: 'Retry',
         ),
       );
-    } else if (tripState is TripHomeLoaded) {
-      final tripCards = _buildTripHomeGroupWidgets(tripState.groups);
+    } else if (tripGroups != null) {
+      final tripCards = _buildTripHomeGroupWidgets(tripGroups);
       if (tripCards.isNotEmpty) {
         children.add(_buildSubsectionLabel('Active Trips'));
         // children.add(_buildSubsectionLabel('Yash shorebird patch'));
@@ -2859,8 +3073,8 @@ class _WelcomeState extends State<_WelcomeView> {
     // Build a set of (dateIso, isLogin) keys from active trips so that schedule
     // cards with the same date and trip type are suppressed.
     final activeTripKeys = <String>{};
-    if (tripState is TripHomeLoaded) {
-      for (final group in tripState.groups) {
+    if (tripGroups != null) {
+      for (final group in tripGroups) {
         for (final item in group.data) {
           final iso = scheduleDateToIso(item.tripDate);
           if (iso != null && iso.isNotEmpty) {
@@ -2872,7 +3086,7 @@ class _WelcomeState extends State<_WelcomeView> {
 
     if (scheduleLoading) {
       children.add(_buildSectionLoader(compact: true));
-    } else if (scheduleState is ScheduleHomeError) {
+    } else if (scheduleGroups == null && scheduleState is ScheduleHomeError) {
       children.add(
         _buildSchedulesEmptyState(
           title: 'Could not load schedules',
@@ -2882,9 +3096,9 @@ class _WelcomeState extends State<_WelcomeView> {
           retryLabel: 'Retry',
         ),
       );
-    } else if (scheduleState is ScheduleHomeLoaded) {
+    } else if (scheduleGroups != null) {
       final scheduleCards = _buildScheduleGroupWidgets(
-        scheduleState.groups,
+        scheduleGroups,
         activeTripKeys: activeTripKeys,
       );
       if (scheduleCards.isNotEmpty) {
@@ -3484,8 +3698,12 @@ class _WelcomeState extends State<_WelcomeView> {
     // When cancel-schedule-after-TAT is enabled, a cancelled / no-show schedule
     // leg must still render as a schedule card even if an active trip exists
     // for the same date — so the active-trip de-dup is bypassed for that leg.
+    // UserAppConfiguration highest-priority gate: when
+    // isCancelledScheduledAllowedAfterTAT is `false` the after-TAT behaviour is
+    // fully disabled, ignoring the AppControl/TAT flag entirely.
     final appControlState = context.read<AppControlBloc>().state;
-    final bool cancelScheduleAfterTAT = appControlState is AppControlLoaded &&
+    final bool cancelScheduleAfterTAT = _gateScheduleCancelAfterTAT &&
+        appControlState is AppControlLoaded &&
         appControlState.settings.isCancelScheduleByUserAfterTAT;
     bool hasText(String? v) => v != null && v.trim().isNotEmpty;
 
@@ -3504,9 +3722,10 @@ class _WelcomeState extends State<_WelcomeView> {
         final item = group.data[i];
         final bool loginCancelledOrNoShow = cancelScheduleAfterTAT &&
             (hasText(item.loginNoshow) || hasText(item.loginCancelled));
-        // Normally a login card needs both a schedule date and a shift time.
-        // For a cancelled / no-show leg (flag on) the shift time may be empty,
-        // so the date alone is enough to render the card.
+        // A login card is hidden only when LoginShiftTime, LoginCancelled and
+        // LoginNoshow are all null/empty (see [shouldShowLoginCard]); if any one
+        // is non-empty the card is shown. The extra OR keeps the cancelled /
+        // no-show leg visible for the de-dup bypass below.
         final bool showLoginCard = item.shouldShowLoginCard ||
             (loginCancelledOrNoShow && item.hasLoginSchedule);
         if (showLoginCard) {
@@ -3533,6 +3752,10 @@ class _WelcomeState extends State<_WelcomeView> {
         }
         final bool logoutCancelledOrNoShow = cancelScheduleAfterTAT &&
             (hasText(item.logoutNoshow) || hasText(item.logoutCancelled));
+        // A logout card is hidden only when LogoutShiftTime, LogoutCancelled and
+        // LogoutNoshow are all null/empty (see [shouldShowLogoutCard]); if any
+        // one is non-empty the card is shown. The extra OR keeps the cancelled /
+        // no-show leg visible for the de-dup bypass below.
         final bool showLogoutCard = item.shouldShowLogoutCard ||
             (logoutCancelledOrNoShow && item.hasLogoutSchedule);
         if (showLogoutCard) {
@@ -3630,18 +3853,17 @@ class _WelcomeState extends State<_WelcomeView> {
         isScheduled ? Icons.access_time : Icons.check_circle_outline;
 
     // ─── Status label ─────────────────────────────────────────────────────
-    // When cancel-schedule-after-TAT is enabled, the noshow/cancelled fields
-    // take precedence over tripStatusName (noshow first, then cancelled).
-    // Otherwise the label comes straight from tripStatusName.
+    // The noshow/cancelled fields always take precedence over tripStatusName
+    // (noshow first, then cancelled), regardless of the AppControl
+    // isCancelScheduleByUserAfterTAT flag (`true` OR `false`). When neither is
+    // present the label comes straight from tripStatusName.
     final appControlState = context.read<AppControlBloc>().state;
-    final bool cancelScheduleAfterTAT = appControlState is AppControlLoaded &&
-        appControlState.settings.isCancelScheduleByUserAfterTAT;
 
     bool isNotEmpty(String? v) => v != null && v.trim().isNotEmpty;
 
     final String? tripStatusName = item.tripStatusName;
     String statusLabel = tripStatusName ?? '';
-    if (cancelScheduleAfterTAT) {
+    {
       final String? noshow = isLogin ? item.loginNoshow : item.logoutNoshow;
       final String? cancelled =
           isLogin ? item.loginCancelled : item.logoutCancelled;
@@ -3682,25 +3904,48 @@ class _WelcomeState extends State<_WelcomeView> {
         isNotEmpty(isLogin ? item.loginCancelled : item.logoutCancelled);
     final bool sideNoShow =
         isNotEmpty(isLogin ? item.loginNoshow : item.logoutNoshow);
-    final bool hideAllActions = sideCancelled || sideNoShow;
+    // Per-location AppControl flag (isCancelScheduleByUserAfterTAT), read raw
+    // (independent of the UserAppConfiguration after-TAT gate).
+    final bool isCancelScheduleByUserAfterTAT =
+        appControlState is AppControlLoaded &&
+            appControlState.settings.isCancelScheduleByUserAfterTAT;
+    // When this side is Cancelled (Login/LogoutCancelled non-empty), the action
+    // buttons are always driven purely by ButtonUiConfig — the Cancelled /
+    // No-Show "hide all actions" override is ignored for this card.
+    // Otherwise the existing behaviour is preserved:
+    //   • isCancelScheduleByUserAfterTAT `false` → drive buttons from
+    //     ButtonUiConfig (override ignored).
+    //   • isCancelScheduleByUserAfterTAT `true`  → a No-Show leg suppresses
+    //     every action button.
+    final bool hideAllActions = !sideCancelled &&
+        isCancelScheduleByUserAfterTAT &&
+        sideNoShow;
 
     final ButtonUiConfig uiConfig =
         item.buttonUiConfig ?? const ButtonUiConfig();
-    final bool showNoShowButton = !hideAllActions &&
+    // UserAppConfiguration highest-priority gate: when a schedule feature flag
+    // is `false` the corresponding button is always hidden, regardless of the
+    // per-schedule ButtonUiConfig / cancelled / no-show logic below.
+    final bool showNoShowButton = _gateScheduleNoShow &&
+        !hideAllActions &&
         (isLogin
             ? uiConfig.cancelSchedulePickupNoShowButtonShow
             : uiConfig.cancelScheduleDropNoShowButtonShow);
-    final bool showCancelButton = !hideAllActions &&
+    final bool showCancelButton = _gateScheduleCancel &&
+        !hideAllActions &&
         (isLogin
             ? uiConfig.cancelSchedulePickupButtonShow
             : uiConfig.cancelScheduleDropButtonShow);
-    final bool showEditButton = !hideAllActions &&
+    final bool showEditButton = _gateScheduleEdit &&
+        !hideAllActions &&
         (isLogin
             ? uiConfig.editSchedulePickupButtonShow
             : uiConfig.editScheduleDropButtonShow);
     // Track Vehicle keeps its existing always-shown behaviour unless the side
-    // is Cancelled / No-Show, in which case all actions are hidden.
-    final bool showTrackButton = !hideAllActions;
+    // is Cancelled / No-Show, in which case it stays hidden — unaffected by the
+    // isCancelScheduleByUserAfterTAT ButtonUiConfig override above.
+    final bool showTrackButton =
+        _gateScheduleTracking && !(sideCancelled || sideNoShow);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -3780,7 +4025,7 @@ class _WelcomeState extends State<_WelcomeView> {
                   const SizedBox(width: 32),
                   Icon(statusIcon, size: 13, color: statusColor),
                   const SizedBox(width: 4),
-                   Text(
+                  Text(
                     statusLabel,
                     style: TextStyle(
                       fontSize: 12,
@@ -4074,29 +4319,30 @@ class _WelcomeState extends State<_WelcomeView> {
                           onTap: trackVehicleAction,
                           child: Container(
                             height: 42,
-                          decoration: BoxDecoration(
-                            color: trackBg,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.my_location, size: 16, color: trackFg),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Track Vehicle',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: trackFg,
+                            decoration: BoxDecoration(
+                              color: trackBg,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.my_location,
+                                    size: 16, color: trackFg),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Track Vehicle',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: trackFg,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ] else if (!isScheduled) ...[
@@ -4228,13 +4474,23 @@ class _WelcomeState extends State<_WelcomeView> {
     final bool showBoardDeboardActions =
         item.showBoardDeboardActions && !isCompleted;
     final bool isFullyDeboarded = item.isBoarded && item.isDeBoarded;
-    // The single active-trip action button acts as a No-Show button when the
-    // trip is past TAT (isCancelTripByUserAfterTat == 1) and as a Cancel button
-    // otherwise. Its visibility follows the matching per-trip `tripButtonUiConfig`
-    // flag from the API; when absent, the button stays hidden.
-    final bool showCancelTripButton = item.isCancelTripByUserAfterTat == 1
-        ? (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false)
-        : (item.tripButtonUiConfig?.isTripCancellationButtonShow ?? false);
+    // The active-trip card shows independent No-Show and Cancel action buttons.
+    //   • No-Show: only relevant after TAT — gated by the per-location AppControl
+    //     flag (isCancelTripByUserAfterTAT), the UserAppConfiguration No-Show
+    //     gate, and the per-trip `isTripNoShowButtonShow` flag.
+    //   • Cancel: gated by the UserAppConfiguration Cancel gate and the per-trip
+    //     `isTripCancellationButtonShow` flag.
+    // Both may appear at once (mirrors the schedule-card button model). When
+    // absent, the config/gate defaults hide each button.
+    final appControlStateForCancel = context.read<AppControlBloc>().state;
+    final bool isCancelTripByUserAfterTAT =
+        appControlStateForCancel is AppControlLoaded &&
+            appControlStateForCancel.settings.isCancelTripByUserAfterTAT;
+    final bool showTripNoShowButton = _gateTripNoShow &&
+        isCancelTripByUserAfterTAT &&
+        (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false);
+    final bool showTripCancelButton = _gateTripCancellation &&
+        (item.tripButtonUiConfig?.isTripCancellationButtonShow ?? false);
     final String? cancelOrNoShow = item.cancelorNoshow?.trim();
     // Trip is cancelled or a no-show: only TRIP DETAIL + Trip Summary should be
     // shown — no planned pickup, OTP, vehicle info, board/deboard, or actions.
@@ -4286,7 +4542,10 @@ class _WelcomeState extends State<_WelcomeView> {
     final appControlState = context.read<AppControlBloc>().state;
     final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
         appControlState.settings.boardDebaordEnabledForUser;
-    final bool showSafeHomeReachButton = item.isStarted &&
+    // UserAppConfiguration highest-priority gate: hide Safe Home Reach entirely
+    // when isTripSafeHomeReach is `false`, ignoring the conditions below.
+    final bool showSafeHomeReachButton = _gateTripSafeHomeReach &&
+        item.isStarted &&
         item.reachedHomeReq == 1 &&
         item.isReached != 1 &&
         item.isBoarded &&
@@ -4297,7 +4556,8 @@ class _WelcomeState extends State<_WelcomeView> {
     // (End) card. Conditions are identical to showSafeHomeReachButton above,
     // with the state gate switched from Started (code 3) to Completed (code 4)
     // since the two states are mutually exclusive. Nothing else changes.
-    final bool showSafeHomeReachButtonCompleted = item.isCompleted &&
+    final bool showSafeHomeReachButtonCompleted = _gateTripSafeHomeReach &&
+        item.isCompleted &&
         item.reachedHomeReq == 1 &&
         item.isReached != 1 &&
         item.isBoarded &&
@@ -4615,33 +4875,37 @@ class _WelcomeState extends State<_WelcomeView> {
                 // ─── Vehicle Info (also shown when Completed) ──────────────
                 const SizedBox(height: 10),
                 _buildVehicleInfoBox(vehicleLabel),
-                const SizedBox(height: 14),
                 // ─── Trip Summary button ──────────────────────────────────
-                GestureDetector(
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => TripSummaryWelcomeScreen(item: item),
+                // UserAppConfiguration highest-priority gate: hide Trip Summary
+                // entirely when isTripSummaryAllowed is `false`.
+                if (_gateTripSummary) ...[
+                  const SizedBox(height: 14),
+                  GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TripSummaryWelcomeScreen(item: item),
+                      ),
                     ),
-                  ),
-                  child: Container(
-                    width: double.infinity,
-                    height: 42,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE8F5EE),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: const Text(
-                      'Trip Summary',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A6B3C),
+                    child: Container(
+                      width: double.infinity,
+                      height: 42,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8F5EE),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        'Trip Summary',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A6B3C),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ] else if (isCancelledOrNoShow) ...[
                 // ─── Cancelled / No-show: Vehicle Info + Trip Summary ─────
                 // When the trip was Started and the user was a No-show, also
@@ -4685,32 +4949,36 @@ class _WelcomeState extends State<_WelcomeView> {
                 ],
                 const SizedBox(height: 16),
                 _buildVehicleInfoBox(vehicleLabel),
-                const SizedBox(height: 14),
-                GestureDetector(
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => TripSummaryWelcomeScreen(item: item),
+                // UserAppConfiguration highest-priority gate: hide Trip Summary
+                // entirely when isTripSummaryAllowed is `false`.
+                if (_gateTripSummary) ...[
+                  const SizedBox(height: 14),
+                  GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TripSummaryWelcomeScreen(item: item),
+                      ),
                     ),
-                  ),
-                  child: Container(
-                    width: double.infinity,
-                    height: 42,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE8F5EE),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: const Text(
-                      'Trip Summary',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A6B3C),
+                    child: Container(
+                      width: double.infinity,
+                      height: 42,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8F5EE),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        'Trip Summary',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A6B3C),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ] else if (!isScheduled) ...[
                 // ─── Non-completed: Planned Pickup + Vehicle Info ─────────
                 const SizedBox(height: 16),
@@ -4785,7 +5053,8 @@ class _WelcomeState extends State<_WelcomeView> {
                                 ],
                               ),
                             ),
-                            if (ivr != null &&
+                            if (_gateTripIvrCall &&
+                                ivr != null &&
                                 ivr.isNotEmpty &&
                                 !isFullyDeboarded)
                               InkWell(
@@ -4825,17 +5094,24 @@ class _WelcomeState extends State<_WelcomeView> {
                             compact: true,
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _buildOtpField(
-                            label: 'Deboard OTP',
-                            digits: _otpDigits(item.deBoardOtp?.toString()),
-                            compact: true,
+                        // UserAppConfiguration highest-priority gate: hide the
+                        // Deboard OTP field when isDeboardOtpFieldAllowed is
+                        // `false`.
+                        if (_gateDeboardOtpField) ...[
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _buildOtpField(
+                              label: 'Deboard OTP',
+                              digits: _otpDigits(item.deBoardOtp?.toString()),
+                              compact: true,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     )
-                  else
+                  // The single OTP field is a Deboard OTP field once the user
+                  // has boarded (isBoardedNotDeboarded); gate that case only.
+                  else if (!item.isBoardedNotDeboarded || _gateDeboardOtpField)
                     _buildOtpField(
                       label: item.isBoardedNotDeboarded
                           ? 'Deboard OTP'
@@ -4853,7 +5129,9 @@ class _WelcomeState extends State<_WelcomeView> {
                   children: [
                     // Live Tracking must always be available while the trip is
                     // "Started" — even when the Safe Home Reach CTA is shown.
-                    if (item.isStarted) ...[
+                    // UserAppConfiguration highest-priority gate: hidden when
+                    // isTripTrackingAllowed is `false`.
+                    if (_gateTripTracking && item.isStarted) ...[
                       GestureDetector(
                         onTap: trackVehicleAction,
                         child: Container(
@@ -4946,7 +5224,17 @@ class _WelcomeState extends State<_WelcomeView> {
               else if (isPrinted)
                 Row(
                   children: [
-                    if (showCancelTripButton)
+                    if (showTripNoShowButton) ...[
+                      _buildTripNoShowTextButton(
+                        onTap: () => _showCancelActiveTripDialog(
+                          context,
+                          item: item,
+                          isNoShow: true,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    if (showTripCancelButton)
                       InkWell(
                         splashColor: Colors.transparent,
                         onTap: () =>
@@ -4980,7 +5268,17 @@ class _WelcomeState extends State<_WelcomeView> {
               else if (!isFullyDeboarded && !isPrinted)
                 Row(
                   children: [
-                    if (!isScheduled && showCancelTripButton)
+                    if (!isScheduled && showTripNoShowButton) ...[
+                      _buildTripNoShowTextButton(
+                        onTap: () => _showCancelActiveTripDialog(
+                          context,
+                          item: item,
+                          isNoShow: true,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    if (!isScheduled && showTripCancelButton) ...[
                       InkWell(
                         splashColor: Colors.transparent,
                         onTap: () => _showCancelActiveTripDialog(
@@ -5002,39 +5300,40 @@ class _WelcomeState extends State<_WelcomeView> {
                           ),
                         ),
                       ),
-                    if (!isScheduled && showCancelTripButton)
                       const SizedBox(width: 10),
-                    Expanded(
-                      child: Opacity(
-                        opacity: isScheduled ? 0.6 : 1.0,
-                        child: GestureDetector(
-                          onTap: trackVehicleAction,
-                          child: Container(
-                            height: 42,
-                            decoration: BoxDecoration(
-                              color: trackBg,
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.my_location,
-                                    size: 16, color: trackFg),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'Track Vehicle',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: trackFg,
+                    ],
+                    if (_gateTripTracking)
+                      Expanded(
+                        child: Opacity(
+                          opacity: isScheduled ? 0.6 : 1.0,
+                          child: GestureDetector(
+                            onTap: trackVehicleAction,
+                            child: Container(
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: trackBg,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.my_location,
+                                      size: 16, color: trackFg),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Track Vehicle',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: trackFg,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 ),
             ] else if (isCompleted) ...[
@@ -5053,49 +5352,56 @@ class _WelcomeState extends State<_WelcomeView> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item.isBoardedNotDeboarded
-                                ? 'Deboard OTP'
-                                : 'Boarding OTP',
-                            style: const TextStyle(
-                              fontSize: 9,
-                              color: Color(0xFF282828),
-                              fontWeight: FontWeight.w700,
+                    // UserAppConfiguration highest-priority gate: when this is
+                    // the Deboard OTP field (isBoardedNotDeboarded) hide it if
+                    // isDeboardOtpFieldAllowed is `false`; a Spacer keeps the
+                    // Track Vehicle button right-aligned.
+                    if (!item.isBoardedNotDeboarded || _gateDeboardOtpField)
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.isBoardedNotDeboarded
+                                  ? 'Deboard OTP'
+                                  : 'Boarding OTP',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                color: Color(0xFF282828),
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: otpDigits
-                                .map(
-                                  (digit) => Container(
-                                    margin: const EdgeInsets.only(right: 6),
-                                    width: 23,
-                                    height: 23,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFE6F3ED),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      digit,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF002D1C),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: otpDigits
+                                  .map(
+                                    (digit) => Container(
+                                      margin: const EdgeInsets.only(right: 6),
+                                      width: 23,
+                                      height: 23,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFE6F3ED),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        digit,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF002D1C),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (!isFullyDeboarded)
+                                  )
+                                  .toList(),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      const Spacer(),
+                    if (_gateTripTracking && !isFullyDeboarded)
                       Transform.translate(
                         offset: const Offset(0.0, 10.0),
                         child: GestureDetector(
@@ -6003,12 +6309,14 @@ class _CancelActiveTripDialogViewState
         break;
       case CancelScheduleAction.markNoShow:
       case CancelScheduleAction.cancelSchedule:
-        // The primary action runs the existing active-trip cancel / no-show
-        // flow (POST /UserApp/UserCancelTrip via CancelTripRequested).
-        _dispatchCancel(context);
-        break;
       case CancelScheduleAction.unknown:
-        // Unknown backend action — ignore rather than crash.
+        // The primary (non-dismiss) action runs the existing active-trip
+        // cancel / no-show flow (POST /UserApp/UserCancelTrip via
+        // CancelTripRequested). `unknown` is treated as a cancel too: this
+        // handler is only reached from a non-dismiss button, so an
+        // unrecognised backend action must still cancel rather than silently
+        // do nothing.
+        _dispatchCancel(context);
         break;
     }
   }
@@ -6088,8 +6396,7 @@ class _CancelActiveTripDialogViewState
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(Radius.circular(24)),
               ),
-              insetPadding:
-                  EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              insetPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 80),
               child: Padding(
                 padding: EdgeInsets.all(36),
                 child: SizedBox(
@@ -6108,9 +6415,8 @@ class _CancelActiveTripDialogViewState
 
         // Keep showing the last loaded popup while a cancel/no-show request is
         // in flight so the button spinner can render.
-        final CancelSchedulePopup popup = state is TripCancelConfirmLoaded
-            ? state.popup
-            : _lastPopup!;
+        final CancelSchedulePopup popup =
+            state is TripCancelConfirmLoaded ? state.popup : _lastPopup!;
         _lastPopup = popup;
 
         return PopScope(
@@ -6272,8 +6578,7 @@ class _CancelActiveTripDialogViewState
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(24),
         ),
-        insetPadding:
-            const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
           child: Column(
@@ -6332,9 +6637,8 @@ class _CancelActiveTripDialogViewState
                           borderRadius: BorderRadius.circular(50),
                         ),
                       ),
-                      onPressed: isCancelling
-                          ? null
-                          : () => _dispatchCancel(context),
+                      onPressed:
+                          isCancelling ? null : () => _dispatchCancel(context),
                       child: isCancelling
                           ? const SizedBox(
                               width: 18,
@@ -6509,7 +6813,11 @@ class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
         break;
       case CancelScheduleAction.cancelSchedule:
       case CancelScheduleAction.markNoShow:
+      case CancelScheduleAction.unknown:
         // Both cancel-schedule and mark-no-show run the existing cancel flow.
+        // `unknown` is treated the same: this handler is only reached from a
+        // non-dismiss button, so an unrecognised backend action must still
+        // cancel rather than silently do nothing.
         // TODO: point markNoShow at a dedicated no-show endpoint when available.
         debugPrint(
           '[WELCOME] CancelRideDialog → dispatching CancelSchedule '
@@ -6525,9 +6833,6 @@ class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
                 tripType: widget.tripType,
               ),
             );
-        break;
-      case CancelScheduleAction.unknown:
-        // Unknown backend action — ignore rather than crash.
         break;
     }
   }
@@ -6551,6 +6856,9 @@ class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
           Navigator.of(context).pop(true);
           _showSnackBar(context, state.message, error: false);
         } else if (state is ShiftCancelError) {
+          // Cancel failed (e.g. "Schedule has already been canceled.") — close
+          // the popup as well and surface the backend message.
+          Navigator.of(context).pop(false);
           _showSnackBar(context, state.message, error: true);
         } else if (state is ShiftUnauthorized) {
           Navigator.of(context).pop(false);
@@ -6587,8 +6895,7 @@ class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(Radius.circular(24)),
               ),
-              insetPadding:
-                  EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              insetPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 80),
               child: Padding(
                 padding: EdgeInsets.all(36),
                 child: SizedBox(
@@ -6607,9 +6914,8 @@ class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
 
         // Keep showing the last loaded popup while a cancel/no-show request is
         // in flight so the button spinner can render.
-        final CancelSchedulePopup popup = state is ShiftCancelConfirmLoaded
-            ? state.popup
-            : _lastPopup!;
+        final CancelSchedulePopup popup =
+            state is ShiftCancelConfirmLoaded ? state.popup : _lastPopup!;
         _lastPopup = popup;
 
         return PopScope(
@@ -6717,8 +7023,9 @@ class _CancelRideDialogViewState extends State<_CancelRideDialogView> {
               borderRadius: BorderRadius.circular(50),
             ),
           ),
-          onPressed:
-              isCancelling ? null : () => _onButtonAction(context, button.action),
+          onPressed: isCancelling
+              ? null
+              : () => _onButtonAction(context, button.action),
           child: Text(
             button.text,
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
@@ -6950,26 +7257,37 @@ class AppDrawer extends StatelessWidget {
 
               // ── MY SCHEDULE section ──────────────────────────────────
               _SectionLabel('MY SCHEDULE'),
-              _DrawerItem(
-                icon: Icons.calendar_today_outlined,
-                label: 'Create Schedule',
-                onTap: () {
-                  final appControl = context.read<AppControlBloc>().state;
-                  final hybridEnabled = appControl is AppControlLoaded &&
-                      appControl.settings.hybridScheduleEnabled;
-                  final bothEnabled = appControl is AppControlLoaded &&
-                      appControl.settings.isScheduleFillForLoginAndLogoutBoth;
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => TripDetailsScreen(
-                        hybridScheduleEnabled: hybridEnabled,
-                        isScheduleFillForLoginAndLogoutBoth: bothEnabled,
+              // UserAppConfiguration highest-priority gate: hide the Create
+              // Schedule entry entirely when isCreateScheduleAllowed is `false`.
+              // Falls back to the existing (always-shown) behaviour until the
+              // config is loaded.
+              if (() {
+                final configState = context.read<UserAppConfigBloc>().state;
+                return configState is UserAppConfigLoaded
+                    ? configState
+                        .config.scheduleUiConfig.isCreateScheduleAllowed
+                    : true;
+              }())
+                _DrawerItem(
+                  icon: Icons.calendar_today_outlined,
+                  label: 'Create Schedule',
+                  onTap: () {
+                    final appControl = context.read<AppControlBloc>().state;
+                    final hybridEnabled = appControl is AppControlLoaded &&
+                        appControl.settings.hybridScheduleEnabled;
+                    final bothEnabled = appControl is AppControlLoaded &&
+                        appControl.settings.isScheduleFillForLoginAndLogoutBoth;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => TripDetailsScreen(
+                          hybridScheduleEnabled: hybridEnabled,
+                          isScheduleFillForLoginAndLogoutBoth: bothEnabled,
+                        ),
                       ),
-                    ),
-                  );
-                },
-              ),
+                    );
+                  },
+                ),
               _DrawerItem(
                 icon: Icons.calendar_month_outlined,
                 label: 'Weekly Offs',
@@ -6996,11 +7314,22 @@ class AppDrawer extends StatelessWidget {
                     icon: Icons.people_outline,
                     label: 'Team Cab',
                     onTap: () {
+                      // UserAppConfiguration highest-priority gate: pass the
+                      // Trip Summary flag into the pushed Team Cab screen (which
+                      // does not inherit the config provider).
+                      final configState =
+                          context.read<UserAppConfigBloc>().state;
+                      final bool gateTripSummary = configState
+                              is UserAppConfigLoaded
+                          ? configState.config.tripUiConfig.isTripSummaryAllowed
+                          : true;
                       Navigator.pop(context);
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const TeamCabScreen(),
+                          builder: (_) => TeamCabScreen(
+                            gateTripSummary: gateTripSummary,
+                          ),
                         ),
                       );
                     },

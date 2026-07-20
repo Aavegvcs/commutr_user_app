@@ -76,12 +76,22 @@ class AppTripUiConfig {
   final bool isTripChatAllowed;
   final bool isTripShareCabAllowed;
   final bool isTripIvrCallAllowed;
+  final bool isTripSafeHomeReach;
+  final bool isTripCancellationAllowed;
+  final bool isTripNoShowAllowed;
+  final bool isDeboardOtpFieldAllowed;
+  final bool isTripSummaryAllowed;
 
   const AppTripUiConfig({
     required this.isTripTrackingAllowed,
     required this.isTripChatAllowed,
     required this.isTripShareCabAllowed,
     required this.isTripIvrCallAllowed,
+    required this.isTripSafeHomeReach,
+    required this.isTripCancellationAllowed,
+    required this.isTripNoShowAllowed,
+    required this.isDeboardOtpFieldAllowed,
+    required this.isTripSummaryAllowed,
   });
 
   factory AppTripUiConfig.fromJson(Map<String, dynamic> json) {
@@ -90,6 +100,13 @@ class AppTripUiConfig {
       isTripChatAllowed: json['isTripChatAllowed'] as bool? ?? false,
       isTripShareCabAllowed: json['isTripShareCabAllowed'] as bool? ?? false,
       isTripIvrCallAllowed: json['isTripIvrCallAllowed'] as bool? ?? false,
+      isTripSafeHomeReach: json['isTripSafeHomeReach'] as bool? ?? false,
+      isTripCancellationAllowed:
+          json['isTripCancellationAllowed'] as bool? ?? false,
+      isTripNoShowAllowed: json['isTripNoShowAllowed'] as bool? ?? false,
+      isDeboardOtpFieldAllowed:
+          json['isDeboardOtpFieldAllowed'] as bool? ?? false,
+      isTripSummaryAllowed: json['isTripSummaryAllowed'] as bool? ?? false,
     );
   }
 }
