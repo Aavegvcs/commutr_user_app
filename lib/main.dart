@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:commutr_main/app.dart';
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/commutr_ltr/commutr_ltr_login/ltr_session_storage.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -90,6 +91,7 @@ Future<void> main() async {
   await Hive.initFlutter();
   await Hive.openBox(AuthLocalStorage.boxName);
   await Hive.openBox(kEtsChatHiveBoxName);
+  await Hive.openBox(LtrSessionStorage.boxName);
   setupDependencies();
   runApp(const CommutrApp());
 }

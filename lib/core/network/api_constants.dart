@@ -25,4 +25,10 @@ abstract final class ApiConstants {
   /// service from the core/auth APIs above.
   static const String etsChatHost = 'http://13.205.219.46';
   static const String etsChatBaseUrl = '$etsChatHost:5050';
+
+  /// LTR guest-booking service (scan-QR → start trip). Separate host/port from
+  /// the core/auth APIs above.
+  // static const String ltrGuestHost = 'http://13.206.26.255:5002';
+  static const String ltrGuestHost = 'https://ltr.commutr.in/';
+  static const String ltrGuestBaseUrl = '$ltrGuestHost/api/v1';
 }

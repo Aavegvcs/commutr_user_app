@@ -1,6 +1,6 @@
-
 import 'dart:io' show Platform;
 
+import 'package:commutr_main/commutr_ltr/commutr_ltr_flow_selection/commutr_ltr_flow_selection.dart';
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/features/auth/presentation/screens/signup.dart';
 import 'package:flutter/gestures.dart';
@@ -9,6 +9,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../commutr_ltr/commutr_ltr_home/commutr_ltr_home.dart';
+import '../../../../commutr_ltr/commutr_ltr_login/commutr_ltr_login.dart';
+import '../../../../commutr_ltr/commutr_ltr_login/ltr_session_storage.dart';
 import '../../bloc/auth_bloc.dart';
 import '../../bloc/auth_event.dart';
 import '../../bloc/auth_state.dart';
@@ -168,18 +171,18 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
                       Text(
                         _phoneFieldError!,
                         style: const TextStyle(
-                            fontSize: 12,
-                            height: 1.2,
-                            color: Colors.redAccent),
+                            fontSize: 12, height: 1.2, color: Colors.redAccent),
                       ),
                     ],
                     const SizedBox(height: 18),
                     _buildSendOtpButton(context, state),
+                    const SizedBox(height: 16),
+                    _buildOrDivider(),
+                    const SizedBox(height: 16),
+                    _buildContinueWithLtrButton(context),
+                    const SizedBox(height: 20),
+                    // _buildTermsText(),
                     // const SizedBox(height: 20),
-                    // _buildSignUpRow(),
-                    const SizedBox(height: 20),
-                    _buildTermsText(),
-                    const SizedBox(height: 20),
                   ],
                 ),
               ),
@@ -288,7 +291,11 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
                 children: [
                   _buildSendOtpButton(context, state),
                   const SizedBox(height: 16),
-                  _buildTermsText(),
+                  _buildOrDivider(),
+                  const SizedBox(height: 16),
+                  _buildContinueWithLtrButton(context),
+                  // const SizedBox(height: 16),
+                  // _buildTermsText(),
                 ],
               ),
             ),
@@ -310,7 +317,12 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Image.asset('assets/images/app_logo.png', width: 136, height: 25, fit: BoxFit.cover,)
+                Image.asset(
+                  'assets/images/app_logo.png',
+                  width: 136,
+                  height: 25,
+                  fit: BoxFit.cover,
+                )
               ],
             ),
           ],
@@ -330,7 +342,7 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
   }
 
   Widget _buildHeroImage() {
-    return  _buildCarPlaceholder();
+    return _buildCarPlaceholder();
   }
 
   // ✅ FIXED: Image now uses full screen width and fixed height of 284
@@ -338,17 +350,18 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
     return Container(
       width: double.infinity,
       margin: EdgeInsets.symmetric(horizontal: 16), // Full screen width
-      height: 234,                 // Fixed height as required
+      height: 234, // Fixed height as required
       child: ClipRRect(
-    borderRadius: const BorderRadius.only(
-    topLeft: Radius.circular(16),
-    topRight: Radius.circular(16),
-    bottomLeft: Radius.circular(16),
-    bottomRight: Radius.circular(16),
-    ),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(16),
+          topRight: Radius.circular(16),
+          bottomLeft: Radius.circular(16),
+          bottomRight: Radius.circular(16),
+        ),
         child: Image.asset(
           'assets/images/commutr_car_login.png',
-          fit: BoxFit.cover,         // Ensures the image covers the area without distortion
+          fit: BoxFit
+              .cover, // Ensures the image covers the area without distortion
         ),
       ),
     );
@@ -473,6 +486,99 @@ class _MobileNoVerificationState extends State<MobileNoVerification> {
       ),
     );
   }
+
+  Widget _buildOrDivider() {
+    return Row(
+      children: [
+        Expanded(
+          child: Container(height: 1, color: _dividerColor),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            'OR',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: _textGrey,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Container(height: 1, color: _dividerColor),
+        ),
+      ],
+    );
+  }
+
+  /// Routes into the LTR flow: straight to the home screen when a valid,
+  /// unexpired LTR session token exists, otherwise to the LTR login screen.
+  void _onContinueWithLtr() {
+    final hasValidSession = LtrSessionStorage().hasValidSession;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            hasValidSession ? const CommutrLtrHome() : const CommutrLtrLogin(),
+      ),
+    );
+  }
+
+  Widget _buildContinueWithLtrButton(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: OutlinedButton(
+        onPressed: _onContinueWithLtr,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: _inputBackground,
+          side: const BorderSide(color: _linkColor, width: 1.5),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.directions_car,
+              size: 22,
+              color: _darkGreen,
+            ),
+            const SizedBox(width: 12),
+            RichText(
+              text: const TextSpan(
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: _textDark,
+                ),
+                children: [
+                  TextSpan(text: 'Continue with '),
+                  TextSpan(
+                    text: 'Commutr-',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _darkGreen,
+                    ),
+                  ),
+                  TextSpan(
+                    text: 'LTR',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _linkColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSignUpRow() {
     return Center(
       child: Row(
@@ -629,12 +735,10 @@ class _CarPainter extends CustomPainter {
     final bodyPath = Path();
     bodyPath.moveTo(size.width * 0.05, size.height * 0.65);
     bodyPath.lineTo(size.width * 0.05, size.height * 0.80);
-    bodyPath.quadraticBezierTo(
-        size.width * 0.05, size.height * 0.90,
+    bodyPath.quadraticBezierTo(size.width * 0.05, size.height * 0.90,
         size.width * 0.12, size.height * 0.90);
     bodyPath.lineTo(size.width * 0.88, size.height * 0.90);
-    bodyPath.quadraticBezierTo(
-        size.width * 0.95, size.height * 0.90,
+    bodyPath.quadraticBezierTo(size.width * 0.95, size.height * 0.90,
         size.width * 0.95, size.height * 0.80);
     bodyPath.lineTo(size.width * 0.95, size.height * 0.65);
     bodyPath.close();
@@ -643,12 +747,10 @@ class _CarPainter extends CustomPainter {
     final roofPath = Path();
     roofPath.moveTo(size.width * 0.18, size.height * 0.65);
     roofPath.lineTo(size.width * 0.24, size.height * 0.30);
-    roofPath.quadraticBezierTo(
-        size.width * 0.28, size.height * 0.18,
+    roofPath.quadraticBezierTo(size.width * 0.28, size.height * 0.18,
         size.width * 0.36, size.height * 0.16);
     roofPath.lineTo(size.width * 0.72, size.height * 0.16);
-    roofPath.quadraticBezierTo(
-        size.width * 0.80, size.height * 0.17,
+    roofPath.quadraticBezierTo(size.width * 0.80, size.height * 0.17,
         size.width * 0.84, size.height * 0.30);
     roofPath.lineTo(size.width * 0.90, size.height * 0.65);
     roofPath.close();
@@ -661,8 +763,7 @@ class _CarPainter extends CustomPainter {
     final frontWindow = Path();
     frontWindow.moveTo(size.width * 0.20, size.height * 0.62);
     frontWindow.lineTo(size.width * 0.26, size.height * 0.32);
-    frontWindow.quadraticBezierTo(
-        size.width * 0.29, size.height * 0.22,
+    frontWindow.quadraticBezierTo(size.width * 0.29, size.height * 0.22,
         size.width * 0.36, size.height * 0.20);
     frontWindow.lineTo(size.width * 0.46, size.height * 0.20);
     frontWindow.lineTo(size.width * 0.43, size.height * 0.62);
@@ -673,8 +774,7 @@ class _CarPainter extends CustomPainter {
     rearWindow.moveTo(size.width * 0.58, size.height * 0.62);
     rearWindow.lineTo(size.width * 0.56, size.height * 0.20);
     rearWindow.lineTo(size.width * 0.72, size.height * 0.20);
-    rearWindow.quadraticBezierTo(
-        size.width * 0.78, size.height * 0.21,
+    rearWindow.quadraticBezierTo(size.width * 0.78, size.height * 0.21,
         size.width * 0.82, size.height * 0.32);
     rearWindow.lineTo(size.width * 0.87, size.height * 0.62);
     rearWindow.close();
