@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:commutr_main/commutr_ltr/commutr_ltr_home/commutr_ltr_home.dart';
+import 'package:commutr_main/commutr_ltr/commutr_ltr_login/ltr_session_storage.dart';
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
@@ -64,8 +66,21 @@ class _CommutrAppState extends State<CommutrApp> {
 
   @override
   Widget build(BuildContext context) {
+    // A valid, unexpired LTR session takes priority: send the user straight to
+    // the LTR home so they don't have to re-enter the flow on every app open.
+    final hasValidLtrSession = LtrSessionStorage().hasValidSession;
+
     final token = sl<AuthLocalStorage>().getAccessToken();
     final loggedIn = token != null && token.isNotEmpty;
+
+    final Widget home;
+    if (hasValidLtrSession) {
+      home = const CommutrLtrHome();
+    } else if (loggedIn) {
+      home = const Welcome();
+    } else {
+      home = const MobileNoVerification();
+    }
 
     return MaterialApp(
       title: 'Commutr',
@@ -76,7 +91,7 @@ class _CommutrAppState extends State<CommutrApp> {
         useMaterial3: true,
         fontFamily: 'Manrope',
       ),
-      home: loggedIn ? const Welcome() : const MobileNoVerification(),
+      home: home,
     );
   }
 }
