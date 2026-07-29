@@ -51,6 +51,9 @@ class _RaiseComplaintViewState extends State<_RaiseComplaintView> {
   late DateTime _fromDate;
   late DateTime _toDate;
 
+  /// Last successfully loaded list, kept so a refresh doesn't blank the screen.
+  List<ComplaintListItem>? _lastItems;
+
   @override
   void initState() {
     super.initState();
@@ -148,6 +151,17 @@ class _RaiseComplaintViewState extends State<_RaiseComplaintView> {
           ),
         ],
       ),
+      // Sits above the bottom "Add Complaint" bar.
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 84),
+        child: BlocBuilder<ComplaintBloc, ComplaintState>(
+          builder: (context, state) => _RefreshFab(
+            busy: state is ComplaintListLoading,
+            onPressed: _fetch,
+          ),
+        ),
+      ),
       body: Stack(
         children: [
           BlocConsumer<ComplaintBloc, ComplaintState>(
@@ -157,7 +171,12 @@ class _RaiseComplaintViewState extends State<_RaiseComplaintView> {
               }
             },
             builder: (context, state) {
-              if (state is ComplaintListLoading) {
+              if (state is ComplaintListLoaded) {
+                _lastItems = state.items;
+              }
+              // Only blank the screen on the very first load; a refresh keeps
+              // the current list visible while the FAB spins.
+              if (state is ComplaintListLoading && _lastItems == null) {
                 return const Center(
                   child: CircularProgressIndicator(
                     valueColor:
@@ -165,13 +184,15 @@ class _RaiseComplaintViewState extends State<_RaiseComplaintView> {
                   ),
                 );
               }
-              if (state is ComplaintListError) {
+              if (state is ComplaintListError && _lastItems == null) {
                 return _ErrorBody(message: state.message);
               }
-              final items = state is ComplaintListLoaded
-                  ? state.items
-                  : <ComplaintListItem>[];
-              return _ComplaintBody(items: items, empId: widget.empId);
+              final items = _lastItems ?? const <ComplaintListItem>[];
+              return RefreshIndicator(
+                color: const Color(0xFF1A6B3C),
+                onRefresh: () async => _fetch(),
+                child: _ComplaintBody(items: items, empId: widget.empId),
+              );
             },
           ),
           Positioned(
@@ -459,6 +480,8 @@ class _ComplaintBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
+      // Always scrollable so pull-to-refresh works when the list is short.
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 110),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -716,6 +739,40 @@ class _ComplaintCard extends StatelessWidget {
     );
   }
 
+}
+
+/// Circular refresh button. Shows a spinner while the list fetch is in flight
+/// and ignores taps until it completes.
+///
+/// Deliberately not green — refresh is a secondary action, so it uses the
+/// feature's informational blue rather than competing with the green
+/// "Add Complaint" button directly below it.
+class _RefreshFab extends StatelessWidget {
+  const _RefreshFab({required this.busy, required this.onPressed});
+
+  final bool busy;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton(
+      onPressed: busy ? null : onPressed,
+      backgroundColor: const Color(0xFF2563EB),
+      foregroundColor: Colors.white,
+      elevation: 2,
+      tooltip: 'Refresh',
+      child: busy
+          ? const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            )
+          : const Icon(Icons.refresh, size: 26),
+    );
+  }
 }
 
 class _AddComplaintButton extends StatelessWidget {
