@@ -177,6 +177,35 @@ class ComplaintListApiV2Response {
   }
 }
 
+/// A single message in a complaint's conversation thread.
+class ComplaintThreadItem {
+  final String message;
+  final String threadBy;
+  final String threadOn;
+  final String roleName;
+
+  const ComplaintThreadItem({
+    required this.message,
+    required this.threadBy,
+    required this.threadOn,
+    required this.roleName,
+  });
+
+  /// True when [roleName] is `Employee` — the user's own message. These render
+  /// on the right of the thread; everyone else (the transport management team)
+  /// renders on the left.
+  bool get isFromEmployee => roleName.trim().toLowerCase() == 'employee';
+
+  factory ComplaintThreadItem.fromJson(Map<String, dynamic> json) {
+    return ComplaintThreadItem(
+      message: json['Message']?.toString() ?? '',
+      threadBy: json['ThreadBy']?.toString() ?? '',
+      threadOn: json['ThreadOn']?.toString() ?? '',
+      roleName: json['RoleName']?.toString() ?? '',
+    );
+  }
+}
+
 class ComplaintDetailItem {
   final int complaintId;
   final String complaintType;
@@ -184,6 +213,7 @@ class ComplaintDetailItem {
   final String complainMessage;
   final String transportReply;
   final String status;
+  final List<ComplaintThreadItem> threads;
 
   const ComplaintDetailItem({
     required this.complaintId,
@@ -192,6 +222,7 @@ class ComplaintDetailItem {
     required this.complainMessage,
     required this.transportReply,
     required this.status,
+    this.threads = const [],
   });
 
   factory ComplaintDetailItem.fromJson(Map<String, dynamic> json) {
@@ -202,7 +233,27 @@ class ComplaintDetailItem {
       complainMessage: json['ComplainMessage']?.toString() ?? '',
       transportReply: json['TransportReply']?.toString() ?? '',
       status: json['STATUS']?.toString() ?? '',
+      threads: _parseThreads(json['ComplaintThreads']),
     );
+  }
+
+  static List<ComplaintThreadItem> _parseThreads(Object? raw) {
+    if (raw == null) return const [];
+    Object? decoded = raw;
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return const [];
+      try {
+        decoded = jsonDecode(trimmed);
+      } catch (_) {
+        return const [];
+      }
+    }
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((m) => ComplaintThreadItem.fromJson(Map<String, dynamic>.from(m)))
+        .toList(growable: false);
   }
 }
 
