@@ -324,6 +324,27 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   String? _activeLegTargetKey;
   int _activeLegFetchGen = 0;
   static const Duration _activeLegThrottle = Duration(seconds: 12);
+
+  // ── Planned-route (Directions) memo ────────────────────────────────────────
+  // The planned route's SHAPE is a pure function of its ordered waypoints, so
+  // refetching it for an unchanged waypoint list returns identical geometry.
+  // These fields memo the last result by waypoint signature so the repeated
+  // REST-driven rebuilds (which fire on every bloc emit via _applyStateToMap →
+  // _loadGpsRoutePolylines) reuse it instead of issuing a Directions request.
+  //
+  // This mirrors the guard the SignalR path already applies at
+  // `if (_plannedPoints.length < 2)`, whose comment notes that refetching per
+  // tick made the polyline geometry visibly fluctuate.
+  //
+  // A genuine sequence change (a pickup boards, a drop completes, a no-show)
+  // changes the waypoint list, hence the signature, so the route still rebuilds
+  // exactly as before — including via the _loginRouteSignature() /
+  // _logoutRouteSignature() triggers in _rebuildTimelineFromPayload.
+  String? _plannedRouteSignature;
+  List<LatLng> _plannedRouteCache = const [];
+  // Non-null while a planned-route Directions fetch is in flight; concurrent
+  // callers await this same Future rather than starting a duplicate request.
+  Future<List<LatLng>>? _plannedRouteInFlight;
   // Personalised, ordered tracking timeline (built from status.passengers and
   // the logged-in user's empId). Drives the markers, polyline colouring, and
   // the bottom-sheet timeline UI.
@@ -778,11 +799,64 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
   }
 
   /// Builds the planned route through every stop via Google Directions API.
+  ///
+  /// Memoised by waypoint signature: the route's geometry depends only on its
+  /// ordered waypoints, so an unchanged stop sequence reuses the previous result
+  /// instead of issuing another Directions request. A changed sequence (boarding,
+  /// drop, no-show) produces a new signature and refetches, so every existing
+  /// rebuild trigger behaves exactly as before.
   Future<List<LatLng>> _fetchDirectionsPlannedRoute() async {
     final waypoints = _orderedWaypointPoints();
     if (waypoints.length < 2) return const [];
-    return fetchRoutePolylineThroughPoints(waypoints);
+
+    final signature = _waypointsSignature(waypoints);
+
+    // Same waypoints as the last successful fetch — reuse that geometry.
+    if (signature == _plannedRouteSignature && _plannedRouteCache.length >= 2) {
+      return _plannedRouteCache;
+    }
+
+    // A fetch for this exact waypoint list is already running — join it so
+    // overlapping callers produce a single Directions request.
+    final inFlight = _plannedRouteInFlight;
+    if (inFlight != null && signature == _plannedRouteSignature) {
+      return inFlight;
+    }
+
+    // Publish the signature + Future synchronously (before any await) so a
+    // caller in the same event-loop turn joins instead of starting a duplicate.
+    _plannedRouteSignature = signature;
+    final request = fetchRoutePolylineThroughPoints(waypoints);
+    _plannedRouteInFlight = request;
+
+    try {
+      final points = await request;
+      // Cache successes only. `fetchRoutePolylineThroughPoints` falls back to
+      // returning the raw waypoints when the API fails, so require a real
+      // road-following result before memoising it.
+      if (points.length >= 2) {
+        _plannedRouteCache = points;
+      } else {
+        _plannedRouteSignature = null;
+      }
+      return points;
+    } catch (_) {
+      // Don't memoise a failure — let the next call retry, as it does today.
+      _plannedRouteSignature = null;
+      rethrow;
+    } finally {
+      if (_plannedRouteInFlight == request) _plannedRouteInFlight = null;
+    }
   }
+
+  /// Compact signature of an ordered waypoint list, used to detect whether the
+  /// planned route's shape actually changed. Coordinates are rounded to ~1 m so
+  /// insignificant GPS jitter in a stop's reported position doesn't invalidate
+  /// the memo.
+  String _waypointsSignature(List<LatLng> points) => points
+      .map((p) => '${p.latitude.toStringAsFixed(5)},'
+          '${p.longitude.toStringAsFixed(5)}')
+      .join(';');
 
   Future<void> _applyDirectionsPlannedRoute({LatLng? cabOverride}) async {
     final planned = await _fetchDirectionsPlannedRoute();
