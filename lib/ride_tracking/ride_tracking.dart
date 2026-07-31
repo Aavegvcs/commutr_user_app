@@ -3453,6 +3453,14 @@ class _RouteTimelineView extends StatelessWidget {
       children: [
         for (int i = 0; i < stops.length; i++)
           _TimelineRow(
+            // Stable identity per stop (office is unique; pickups/drops are
+            // keyed by paxOrder). Without this, rows are matched positionally,
+            // so a stop dropping out of the list would slide the next
+            // passenger's status onto the previous row's element and make the
+            // pill flash the wrong value before settling.
+            key: ValueKey(
+              stops[i].isOffice ? 'office' : 'stop-${stops[i].order ?? i}',
+            ),
             stop: stops[i],
             isLast: i == stops.length - 1,
             etaMinutes: stops[i].isOffice ? etaMinutes : null,
@@ -3474,6 +3482,7 @@ class _TimelineRow extends StatelessWidget {
   final String? officeName;
 
   const _TimelineRow({
+    super.key,
     required this.stop,
     required this.isLast,
     this.etaMinutes,
@@ -3609,30 +3618,99 @@ class _StopNode extends StatelessWidget {
   }
 }
 
+/// The two values a [_StatusPill] actually paints. Compared by value so an
+/// unchanged status can be detected across rebuilds.
+@immutable
+class _PillData {
+  final String label;
+  final Color color;
+
+  const _PillData(this.label, this.color);
+
+  /// Resolves the pill values for [stop] exactly as before: prefer the live
+  /// server-provided status (`paxTrackingStatus`) from the SignalR payload,
+  /// and fall back to the locally-derived [StopState] label.
+  factory _PillData.forStop(RideStop stop, Color color) =>
+      _PillData(stop.paxTrackingStatus ?? statusLabelForStop(stop), color);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is _PillData && other.label == label && other.color == color);
+
+  @override
+  int get hashCode => Object.hash(label, color);
+}
+
 /// Small status chip ("Boarded", "Arriving", "Not boarded", "No show").
-class _StatusPill extends StatelessWidget {
+///
+/// The screen calls `setState` on every SignalR push and on the silent 200 ms
+/// tick, and each of those rebuilds hands down a freshly-constructed
+/// [RideStop]. The pill's own content is usually identical across those ticks,
+/// but the new stop object makes the subtree rebuild and repaint ~5×/s, which
+/// is the visible flicker.
+///
+/// `Widget.==` is `@nonVirtual`, so a StatelessWidget can't opt out of that.
+/// Instead the resolved values are pushed into a [ValueNotifier] — which only
+/// notifies when the value genuinely differs — and the chip itself is built
+/// inside a [ValueListenableBuilder]. A tick carrying an unchanged status
+/// updates the notifier to an equal value, no notification fires, and the
+/// chip's subtree is never rebuilt. A genuinely new status notifies and paints
+/// immediately, with no throttling or delay.
+///
+/// The [RepaintBoundary] keeps the chip on its own layer, so a repaint of a
+/// neighbouring row never forces the pill's pixels to be re-rasterised.
+class _StatusPill extends StatefulWidget {
   final RideStop stop;
   final Color color;
 
   const _StatusPill({required this.stop, required this.color});
 
   @override
+  State<_StatusPill> createState() => _StatusPillState();
+}
+
+class _StatusPillState extends State<_StatusPill> {
+  late final ValueNotifier<_PillData> _data =
+      ValueNotifier(_PillData.forStop(widget.stop, widget.color));
+
+  @override
+  void didUpdateWidget(covariant _StatusPill oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Assigning an equal _PillData is a no-op for ValueNotifier (it compares
+    // with ==), so ticks that carry no status change never notify — the chip
+    // holds steady. A real change notifies and repaints on the same frame.
+    _data.value = _PillData.forStop(widget.stop, widget.color);
+  }
+
+  @override
+  void dispose() {
+    _data.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        // Prefer the live server-provided status (paxTrackingStatus) from the
-        // SignalR payload; fall back to the locally-derived StopState label.
-        stop.paxTrackingStatus ?? statusLabelForStop(stop),
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: color,
-        ),
+    return RepaintBoundary(
+      child: ValueListenableBuilder<_PillData>(
+        valueListenable: _data,
+        builder: (context, data, _) {
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: data.color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              data.label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: data.color,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
