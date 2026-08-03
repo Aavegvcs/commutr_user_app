@@ -39,6 +39,7 @@ class UserAppConfigLoaded extends UserAppConfigState {
         config.tripUiConfig.isTripNoShowAllowed,
         config.tripUiConfig.isDeboardOtpFieldAllowed,
         config.tripUiConfig.isTripSummaryAllowed,
+        config.commonUiConfig.isUserUpdateProfile,
       ];
 }
 
