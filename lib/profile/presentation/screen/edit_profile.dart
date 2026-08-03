@@ -9,6 +9,8 @@ import 'package:commutr_main/core/network/api_constants.dart';
 import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
+import 'package:commutr_main/features/trip_detail/data/model/user_app_configuration_response.dart';
+import 'package:commutr_main/features/trip_detail/data/repository/user_app_configuration_repo.dart';
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/bloc/profile_event.dart';
 import 'package:commutr_main/profile/bloc/profile_state.dart';
@@ -25,9 +27,21 @@ class ProfileEditScreen extends StatefulWidget {
   const ProfileEditScreen({
     super.key,
     required this.initialData,
+    this.isUserUpdateProfile,
   });
 
   final ProfileUserData initialData;
+
+  /// UserAppConfiguration highest-priority gate for editing the profile
+  /// ([CommonUiConfig.isUserUpdateProfile]). When `false` every form field on
+  /// this screen is read-only and saving is disabled; when `true` the existing
+  /// behaviour is preserved exactly.
+  ///
+  /// Pass `null` (the default) when the caller does not have the config — the
+  /// screen then fetches it itself from
+  /// `GetUserAppConfigurationByLocCode` using the profile's `locCode`, and
+  /// keeps everything editable until an explicit `false` arrives.
+  final bool? isUserUpdateProfile;
 
   @override
   State<ProfileEditScreen> createState() => _ProfileEditScreenState();
@@ -57,6 +71,17 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   String? _addressChangeRejectionRemark;
   bool _hasAddressChangeRequest = false;
   bool _loadingAddressChange = false;
+
+  // UserAppConfiguration highest-priority gate: when this resolves to `false`
+  // every field on the form becomes read-only and Save is disabled. Starts as
+  // the value handed in by the caller (or `null` when unknown) and is filled in
+  // by [_fetchUserUpdateProfileGate] when the caller supplied nothing.
+  bool? _isUserUpdateProfile;
+
+  /// Whether the profile form is editable. Falls back to `true` while the gate
+  /// is unknown so existing behaviour is preserved — it only ever locks the
+  /// form on an explicit `false`.
+  bool get _canEditProfile => _isUserUpdateProfile ?? true;
 
   // Mobile OTP state
   final TextEditingController _otpController = TextEditingController();
@@ -95,7 +120,45 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     _stateController = TextEditingController(text: widget.initialData.state);
     _pincodeController =
         TextEditingController(text: widget.initialData.pincode);
+    _isUserUpdateProfile = widget.isUserUpdateProfile;
+    if (_isUserUpdateProfile == null) {
+      // `context.read` is not available during initState — defer to the first
+      // frame so the ProfileBloc (which carries locCode) can be read.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_fetchUserUpdateProfileGate());
+      });
+    }
     _fetchAddressChangeStatus();
+  }
+
+  /// Loads [CommonUiConfig.isUserUpdateProfile] for the employee's location so
+  /// the form can lock itself when profile editing is disabled. Used only when
+  /// the caller did not pass the flag in. On any failure the gate stays `null`,
+  /// which keeps the form editable.
+  Future<void> _fetchUserUpdateProfileGate() async {
+    final locCode = _profileLocCode();
+    if (locCode == null || locCode == 0) return;
+    try {
+      final config = await sl<UserAppConfigurationRepository>()
+          .getUserAppConfigurationByLocCode(locCode);
+      if (!mounted) return;
+      setState(() {
+        _isUserUpdateProfile = config.commonUiConfig.isUserUpdateProfile;
+      });
+    } catch (_) {
+      // Non-fatal: leave the form editable when the config cannot be loaded.
+    }
+  }
+
+  /// The employee's location code from the [ProfileBloc] in scope, or `null`
+  /// when no bloc is available / the profile has not loaded yet.
+  int? _profileLocCode() {
+    try {
+      final state = context.read<ProfileBloc>().state;
+      return state is ProfileLoaded ? state.profile.locCode : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Loads the latest address-change request for the current employee so the
@@ -482,6 +545,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               ),
               const SizedBox(height: 28),
 
+              // UserAppConfiguration highest-priority gate: explains why every
+              // field is locked. Only shown on an explicit `false`.
+              _buildEditDisabledBanner(),
+
               // Personal Details Section
               _buildSectionHeader('Personal Details'),
               const SizedBox(height: 16),
@@ -552,7 +619,11 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                           right: gender != 'Other' ? 8 : 0,
                         ),
                         child: GestureDetector(
-                          onTap: () => setState(() => _selectedGender = gender),
+                          // UserAppConfiguration highest-priority gate: gender
+                          // cannot be changed when editing is disabled.
+                          onTap: _canEditProfile
+                              ? () => setState(() => _selectedGender = gender)
+                              : null,
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
                             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -612,20 +683,26 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                           child: TextFormField(
                             controller: _mobileController,
                             keyboardType: TextInputType.phone,
+                            // UserAppConfiguration highest-priority gate.
+                            readOnly: !_canEditProfile,
                             inputFormatters: [
                               FilteringTextInputFormatter.digitsOnly,
                               LengthLimitingTextInputFormatter(10),
                             ],
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
-                              color: Colors.black87,
+                              color: _canEditProfile
+                                  ? Colors.black87
+                                  : Colors.black45,
                             ),
                             decoration: InputDecoration(
                               hintText: '9XXXXXXXXX',
                               hintStyle: TextStyle(
                                   color: Colors.grey.shade400, fontSize: 14),
                               filled: true,
-                              fillColor: const Color(0xFFF5F5F5),
+                              fillColor: _canEditProfile
+                                  ? const Color(0xFFF5F5F5)
+                                  : const Color(0xFFEAEAE9),
                               prefixIcon: Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 12, vertical: 13),
@@ -704,7 +781,11 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: TextButton(
-                            onPressed: (_sendingOtp || _verifyingOtp)
+                            // UserAppConfiguration highest-priority gate: no
+                            // mobile re-verification when editing is disabled.
+                            onPressed: (_sendingOtp ||
+                                    _verifyingOtp ||
+                                    !_canEditProfile)
                                 ? null
                                 : () => _sendMobileOtp(fromResend: _showOtpField),
                             style: TextButton.styleFrom(
@@ -788,9 +869,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: ElevatedButton(
-                              onPressed: (_verifyingOtp || _sendingOtp)
-                                  ? null
-                                  : _verifyMobileOtp,
+                              onPressed:
+                                  (_verifyingOtp || _sendingOtp || !_canEditProfile)
+                                      ? null
+                                      : _verifyMobileOtp,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: _primaryGreen,
                                 foregroundColor: Colors.white,
@@ -861,20 +943,24 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                     ],
                   ),
                   OutlinedButton.icon(
-                    onPressed: _openLocationDialog,
-                    icon: const Icon(Icons.edit_location_alt_outlined,
-                        size: 16, color: _primaryGreen),
-                    label: const Text(
+                    // UserAppConfiguration highest-priority gate: no address
+                    // changes when editing is disabled.
+                    onPressed: _canEditProfile ? _openLocationDialog : null,
+                    icon: Icon(Icons.edit_location_alt_outlined,
+                        size: 16,
+                        color: _canEditProfile ? _primaryGreen : Colors.grey),
+                    label: Text(
                       'EDIT LOCATION',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.8,
-                        color: _primaryGreen,
+                        color: _canEditProfile ? _primaryGreen : Colors.grey,
                       ),
                     ),
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _primaryGreen),
+                      side: BorderSide(
+                          color: _canEditProfile ? _primaryGreen : Colors.grey),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),
                       ),
@@ -958,7 +1044,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
 
               // Address summary (read-only, tap to edit via dialog)
               GestureDetector(
-                onTap: _openLocationDialog,
+                onTap: _canEditProfile ? _openLocationDialog : null,
                 child: _buildLabeledField(
                   label: 'CURRENT ADDRESS',
                   child: AbsorbPointer(
@@ -976,7 +1062,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                 children: [
                   Expanded(
                     child: GestureDetector(
-                      onTap: _openLocationDialog,
+                      onTap: _canEditProfile ? _openLocationDialog : null,
                       child: _buildLabeledField(
                         label: 'CITY',
                         child: AbsorbPointer(
@@ -991,7 +1077,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: GestureDetector(
-                      onTap: _openLocationDialog,
+                      onTap: _canEditProfile ? _openLocationDialog : null,
                       child: _buildLabeledField(
                         label: 'STATE',
                         child: AbsorbPointer(
@@ -1006,7 +1092,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: GestureDetector(
-                      onTap: _openLocationDialog,
+                      onTap: _canEditProfile ? _openLocationDialog : null,
                       child: _buildLabeledField(
                         label: 'PINCODE',
                         child: AbsorbPointer(
@@ -1022,12 +1108,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               ),
               const SizedBox(height: 36),
 
-              // Save Button
+              // Save Button — UserAppConfiguration highest-priority gate:
+              // disabled entirely when profile editing is not allowed.
               SizedBox(
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: _isSavingProfile ? null : _handleSave,
+                  onPressed:
+                      (_isSavingProfile || !_canEditProfile) ? null : _handleSave,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _primaryGreen,
                     foregroundColor: Colors.white,
@@ -1057,7 +1145,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
               // Discard Button
               Center(
                 child: TextButton(
-                  onPressed: _handleDiscard,
+                  onPressed: _canEditProfile ? _handleDiscard : null,
                   child: const Text(
                     'Discard',
                     style: TextStyle(
@@ -1093,6 +1181,42 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     );
   }
 
+  /// Info banner shown when [CommonUiConfig.isUserUpdateProfile] is `false`,
+  /// i.e. profile editing is disabled for the employee's location.
+  Widget _buildEditDisabledBanner() {
+    if (_canEditProfile) return const SizedBox.shrink();
+    const color = Color(0xFFB26A00);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.lock_outline, color: color, size: 18),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Profile editing is disabled for you. '
+              'Please contact your transport admin for any changes.',
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildLabeledField({required String label, required Widget child}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1123,7 +1247,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     List<TextInputFormatter>? inputFormatters,
     ValueChanged<String>? onChanged,
     bool readOnly = false,
+    // Set to false for fields that must stay interactive even when profile
+    // editing is disabled (currently none).
+    bool respectEditGate = true,
   }) {
+    // UserAppConfiguration highest-priority gate: force read-only when profile
+    // editing is not allowed for this location.
+    final effectiveReadOnly =
+        readOnly || (respectEditGate && !_canEditProfile);
     return TextFormField(
       controller: controller,
       keyboardType: keyboardType,
@@ -1131,13 +1262,17 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       inputFormatters: inputFormatters,
       validator: validator,
       onChanged: onChanged,
-      readOnly: readOnly,
-      style: TextStyle(fontSize: 14, color: readOnly ? Colors.black45 : Colors.black87),
+      readOnly: effectiveReadOnly,
+      style: TextStyle(
+          fontSize: 14,
+          color: effectiveReadOnly ? Colors.black45 : Colors.black87),
       decoration: InputDecoration(
         hintText: hintText,
         hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
         filled: true,
-        fillColor: readOnly ? const Color(0xFFEAEAE9) : const Color(0xFFF5F5F5),
+        fillColor: effectiveReadOnly
+            ? const Color(0xFFEAEAE9)
+            : const Color(0xFFF5F5F5),
         prefixIcon: prefixIcon,
         suffixIcon: suffixIcon,
         contentPadding: EdgeInsets.symmetric(
@@ -1171,6 +1306,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
 
 
   void _openLocationDialog() {
+    // UserAppConfiguration highest-priority gate: the address-change dialog is
+    // unreachable when profile editing is disabled.
+    if (!_canEditProfile) return;
+
     // Local controllers seeded from the current state so the dialog is
     // independently editable and only commits on "Save".
     final addrCtrl = TextEditingController(text: _addressController.text);
@@ -1717,6 +1856,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   }
 
   Future<void> _handleSave() async {
+    // UserAppConfiguration highest-priority gate — belt-and-braces guard in
+    // case a save is somehow triggered while the form is locked.
+    if (!_canEditProfile) return;
+
     if (!_formKey.currentState!.validate()) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

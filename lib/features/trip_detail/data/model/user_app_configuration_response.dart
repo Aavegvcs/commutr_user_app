@@ -12,10 +12,12 @@
 class UserAppConfiguration {
   final AppScheduleUiConfig scheduleUiConfig;
   final AppTripUiConfig tripUiConfig;
+  final CommonUiConfig commonUiConfig;
 
   const UserAppConfiguration({
     required this.scheduleUiConfig,
     required this.tripUiConfig,
+    required this.commonUiConfig,
   });
 
   factory UserAppConfiguration.fromJson(Map<String, dynamic> json) {
@@ -26,6 +28,10 @@ class UserAppConfiguration {
       ),
       tripUiConfig: AppTripUiConfig.fromJson(
         (json['AppTripUiConfig'] as Map<String, dynamic>?) ??
+            const <String, dynamic>{},
+      ),
+      commonUiConfig: CommonUiConfig.fromJson(
+        (json['CommonUiConfig'] as Map<String, dynamic>?) ??
             const <String, dynamic>{},
       ),
     );
@@ -107,6 +113,19 @@ class AppTripUiConfig {
       isDeboardOtpFieldAllowed:
           json['isDeboardOtpFieldAllowed'] as bool? ?? false,
       isTripSummaryAllowed: json['isTripSummaryAllowed'] as bool? ?? false,
+    );
+  }
+}
+
+/// Common (non trip/schedule specific) UI gating flags.
+class CommonUiConfig {
+  final bool isUserUpdateProfile;
+
+  const CommonUiConfig({required this.isUserUpdateProfile});
+
+  factory CommonUiConfig.fromJson(Map<String, dynamic> json) {
+    return CommonUiConfig(
+      isUserUpdateProfile: json['IsUserUpdateProfile'] as bool? ?? false,
     );
   }
 }
