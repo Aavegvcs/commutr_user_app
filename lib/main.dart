@@ -4,6 +4,8 @@ import 'package:commutr_main/app.dart';
 import 'package:commutr_main/core/di/injection.dart';
 import 'package:commutr_main/commutr_ltr/commutr_ltr_login/ltr_session_storage.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
+import 'package:commutr_main/ride_tracking/service/live_trip_fcm_handler.dart';
+import 'package:commutr_main/ride_tracking/service/live_trip_notification_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -24,9 +26,21 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
 /// Handles FCM messages when the app is terminated or in the background.
+///
+/// Runs in a SEPARATE isolate where `main()` never executed — no DI, no widget
+/// tree, and plugins must be initialised locally.
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Live-trip updates must still render when the app is killed — this is the
+  // only path that can reach the device once the SignalR socket is gone.
+  if (LiveTripFcmHandler.handles(message)) {
+    // The plugin is uninitialised in this isolate; without this the show() call
+    // silently no-ops.
+    await initLocalNotificationsForBackgroundIsolate();
+    await LiveTripFcmHandler.handle(message);
+  }
 }
 
 Future<void> main() async {
@@ -66,6 +80,14 @@ Future<void> main() async {
   // to present the banner itself, so we must NOT also show a local
   // notification here or it would appear twice.
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    // Live-trip updates are DATA-ONLY (no `notification` block), so they must be
+    // intercepted before the null-notification early-return below — otherwise
+    // they'd be dropped silently while the app is foregrounded.
+    if (LiveTripFcmHandler.handles(message)) {
+      LiveTripFcmHandler.handle(message);
+      return;
+    }
+
     final notification = message.notification;
     if (notification == null) return;
 
@@ -113,7 +135,33 @@ Future<void> _initLocalNotifications() async {
     android: initSettingsAndroid,
     iOS: initSettingsIOS,
   );
-  await flutterLocalNotificationsPlugin.initialize(settings: initSettings);
+  await flutterLocalNotificationsPlugin.initialize(
+    settings: initSettings,
+    onDidReceiveNotificationResponse: _onNotificationTapped,
+  );
+
+  // The app may have been launched *by* tapping the ongoing trip notification
+  // while it was terminated. In that case the callback above never fires, so the
+  // launch details have to be read explicitly and routed after the first frame
+  // (the navigator doesn't exist yet at this point).
+  final launchDetails = await flutterLocalNotificationsPlugin
+      .getNotificationAppLaunchDetails();
+  if (launchDetails?.didNotificationLaunchApp == true) {
+    final payload = launchDetails!.notificationResponse?.payload;
+    if (payload != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        openTrackingFromNotificationPayload(payload);
+      });
+    }
+  }
+}
+
+/// Routes a notification tap. Only handles the ongoing live-trip notification;
+/// any other payload is ignored so FCM behaviour is unchanged.
+void _onNotificationTapped(NotificationResponse response) {
+  final payload = response.payload;
+  if (payload == null) return;
+  openTrackingFromNotificationPayload(payload);
 }
 
 Future<void> _requestNotificationPermission() async {

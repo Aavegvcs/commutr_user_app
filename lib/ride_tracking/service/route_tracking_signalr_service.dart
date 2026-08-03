@@ -28,6 +28,46 @@ Map<String, dynamic>? _readMap(Object? v) {
   return null;
 }
 
+/// Reads the first present key from [keys], tolerating camelCase/PascalCase and
+/// other casing differences.
+///
+/// The backend has historically been inconsistent about casing (see the
+/// `etaDeviationMinutes` / `EtaDeviationMinutes` pair below), and a silent null
+/// from a casing mismatch is very hard to diagnose from the client — the feature
+/// simply appears broken. This matches case-insensitively as a last resort.
+Object? _readAny(Map<String, dynamic> json, List<String> keys) {
+  for (final k in keys) {
+    final v = json[k];
+    if (v != null) return v;
+  }
+  // Fall back to a case-insensitive sweep.
+  final lowered = {
+    for (final key in keys) key.toLowerCase(),
+  };
+  for (final entry in json.entries) {
+    if (lowered.contains(entry.key.toLowerCase()) && entry.value != null) {
+      return entry.value;
+    }
+  }
+  return null;
+}
+
+int? _readInt(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toInt();
+  return int.tryParse(v.toString());
+}
+
+bool? _readBool(Object? v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v.toString().trim().toLowerCase();
+  if (s == 'true' || s == '1') return true;
+  if (s == 'false' || s == '0') return false;
+  return null;
+}
+
 /// Coerces a nested JSON value into a `List`. Handles a real list or a
 /// JSON-encoded string; returns an empty list when missing or undecodable.
 List<dynamic> _readList(Object? v) {
@@ -198,6 +238,33 @@ class RouteTripPassenger {
 
   final int? otp;
 
+  // ── Server-computed ETA (backend Ask 1) ────────────────────────────────────
+  // Authoritative minutes-to-this-stop, computed server-side (OSRM). Preferred
+  // over the client's own polyline/speed estimate because it is traffic-aware and
+  // — critically — available when the tracking screen is CLOSED, where the client
+  // cannot compute an ETA at all (it needs the map's route polyline).
+  //
+  // Null when the backend can't compute one; callers fall back to the client
+  // estimate, then to a static headline.
+  final int? etaMinutesToStop;
+
+  /// When the server computed [etaMinutesToStop]. Lets the client detect a stale
+  /// ETA instead of rendering a frozen number.
+  final String? etaCalculatedAtUtc;
+
+  /// `osrm` | `google` | `haversine` | `planned` — diagnostic only.
+  final String? etaSource;
+
+  // ── Explicit arrival signal (backend Ask 2) ────────────────────────────────
+  /// True from the moment the cab reaches this passenger's stop until they board
+  /// or are marked no-show.
+  ///
+  /// Replaces the previous string-guessing against undocumented
+  /// `paxTrackingStatus` values ('Arrived'/'Reached'/'Cab-Reached'). Note this is
+  /// NOT the same as `cabReachedTime` being set — see the class docs on
+  /// [TripPassenger.isDropped].
+  final bool? hasCabArrivedAtStop;
+
   const RouteTripPassenger({
     this.empId,
     this.employeeID,
@@ -236,6 +303,10 @@ class RouteTripPassenger {
     this.reachedHomeLng,
     this.paxTrackingStatus,
     this.otp,
+    this.etaMinutesToStop,
+    this.etaCalculatedAtUtc,
+    this.etaSource,
+    this.hasCabArrivedAtStop,
   });
 
   factory RouteTripPassenger.fromJson(Map<String, dynamic> json) {
@@ -280,6 +351,19 @@ class RouteTripPassenger {
       reachedHomeLng: _readDouble(json['reachedHomeLng']),
       paxTrackingStatus: json['paxTrackingStatus']?.toString(),
       otp: (json['otp'] as num?)?.toInt(),
+      // Server-computed ETA + arrival flag. Read via [_readAny] so a
+      // camelCase/PascalCase mismatch between client and backend surfaces as a
+      // working feature rather than a silent null.
+      etaMinutesToStop: _readInt(
+        _readAny(json, const ['etaMinutesToStop', 'etaMinutes']),
+      ),
+      etaCalculatedAtUtc:
+          _readAny(json, const ['etaCalculatedAtUtc', 'etaCalculatedAt'])
+              ?.toString(),
+      etaSource: _readAny(json, const ['etaSource'])?.toString(),
+      hasCabArrivedAtStop: _readBool(
+        _readAny(json, const ['hasCabArrivedAtStop', 'cabArrivedAtStop']),
+      ),
     );
   }
 
@@ -324,6 +408,47 @@ class RouteTripPassenger {
       };
 }
 
+/// Trip-level lifecycle change pushed by the backend (Ask 3).
+///
+/// Delivered on its own hub event rather than on `ReceiveRouteLocation` for a
+/// specific reason: **when a trip completes, GPS pushes stop**, so a terminal
+/// state could never arrive on the location channel. That is exactly the case
+/// that used to leave an ongoing notification pinned forever.
+class TripStatusChangePayload {
+  final int? dsId;
+  final int? tripStatusCode;
+  final String? tripStatusName;
+  final String? changedAtUtc;
+
+  /// True for completed/cancelled — consumers must tear down live tracking UI.
+  final bool isTerminal;
+
+  const TripStatusChangePayload({
+    this.dsId,
+    this.tripStatusCode,
+    this.tripStatusName,
+    this.changedAtUtc,
+    this.isTerminal = false,
+  });
+
+  factory TripStatusChangePayload.fromJson(Map<String, dynamic> json) {
+    return TripStatusChangePayload(
+      dsId: _readInt(_readAny(json, const ['dsId'])),
+      tripStatusCode: _readInt(_readAny(json, const ['tripStatusCode'])),
+      tripStatusName:
+          _readAny(json, const ['tripStatusName'])?.toString(),
+      changedAtUtc:
+          _readAny(json, const ['changedAtUtc', 'changedAt'])?.toString(),
+      isTerminal:
+          _readBool(_readAny(json, const ['isTerminal'])) ?? false,
+    );
+  }
+
+  @override
+  String toString() => 'TripStatusChangePayload(dsId=$dsId, '
+      'status=$tripStatusName($tripStatusCode), isTerminal=$isTerminal)';
+}
+
 /// Reusable SignalR service for real-time vehicle route tracking.
 class RouteTrackingSignalRService {
   static const String _hubUrl = ApiConstants.routeTrackingHubUrl;
@@ -331,6 +456,7 @@ class RouteTrackingSignalRService {
   static const String _joinMethod = 'JoinRouteTrackingGroup';
   static const String _leaveMethod = 'LeaveRouteTrackingGroup';
   static const String _receiveEvent = 'ReceiveRouteLocation';
+  static const String _statusChangeEvent = 'ReceiveTripStatusChange';
 
   HubConnection? _connection;
 
@@ -352,6 +478,7 @@ class RouteTrackingSignalRService {
   ];
 
   final List<void Function(RouteLocationPayload)> _locationListeners = [];
+  final List<void Function(TripStatusChangePayload)> _statusListeners = [];
 
   // ── Logging helpers ─────────────────────────────────────────────────────────
 
@@ -439,6 +566,17 @@ class RouteTrackingSignalRService {
   void removeLocationListener(void Function(RouteLocationPayload) listener) {
     _locationListeners.remove(listener);
     _log('🔇 Listener removed (total=${_locationListeners.length})');
+  }
+
+  /// Subscribes to trip lifecycle changes (started / completed / cancelled).
+  void addStatusListener(void Function(TripStatusChangePayload) listener) {
+    _statusListeners.add(listener);
+    _log('👂 Status listener added  (total=${_statusListeners.length})');
+  }
+
+  void removeStatusListener(void Function(TripStatusChangePayload) listener) {
+    _statusListeners.remove(listener);
+    _log('🔇 Status listener removed (total=${_statusListeners.length})');
   }
 
   Future<void> connect({required String accessToken}) async {
@@ -813,5 +951,83 @@ class RouteTrackingSignalRService {
     });
 
     _log('✅ $_receiveEvent handler registered');
+
+    _registerStatusChangeHandler();
+  }
+
+  /// Registers the trip-lifecycle handler ([_statusChangeEvent]).
+  ///
+  /// Registered unconditionally: `HubConnection.on` for an event the server never
+  /// sends is harmless (the callback simply never fires), so this is safe against
+  /// a backend that hasn't deployed Ask 3 yet.
+  void _registerStatusChangeHandler() {
+    _connection!.on(_statusChangeEvent, (args) {
+      if (args == null || args.isEmpty) {
+        _logError(
+          operation: '$_statusChangeEvent — null/empty args',
+          url: '$_hubUrl → $_statusChangeEvent',
+          errorMessage: 'null/empty args received',
+        );
+        return;
+      }
+
+      try {
+        final raw = args[0];
+        final Map<String, dynamic> jsonMap;
+        if (raw is Map<String, dynamic>) {
+          jsonMap = raw;
+        } else if (raw is Map) {
+          jsonMap = Map<String, dynamic>.from(raw);
+        } else if (raw is String) {
+          jsonMap = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+        } else {
+          _logError(
+            operation: '$_statusChangeEvent — unexpected payload type',
+            url: '$_hubUrl → $_statusChangeEvent',
+            errorMessage: 'unexpected type: ${raw.runtimeType}',
+            responseBody: {'raw': raw.toString()},
+          );
+          return;
+        }
+
+        final payload = TripStatusChangePayload.fromJson(jsonMap);
+
+        // Loud diagnostic: if the backend field names differ from what we parse,
+        // every field lands null while the raw JSON clearly shows values. Logging
+        // both makes that mismatch obvious instead of looking like a client bug.
+        if (payload.tripStatusName == null && payload.dsId == null) {
+          _logError(
+            operation: '$_statusChangeEvent — parsed to all-null; '
+                'FIELD NAME MISMATCH? expected keys: dsId, tripStatusCode, '
+                'tripStatusName, changedAtUtc, isTerminal',
+            url: '$_hubUrl → $_statusChangeEvent',
+            errorMessage: 'all fields null — check backend field names',
+            responseBody: jsonMap,
+          );
+        }
+
+        _logSuccess(
+          operation: '🚦 TRIP STATUS CHANGE'
+              '  dsId=${payload.dsId}'
+              '  status=${payload.tripStatusName ?? payload.tripStatusCode}'
+              '  terminal=${payload.isTerminal}',
+          url: '$_hubUrl → $_statusChangeEvent',
+          responseBody: jsonMap,
+        );
+
+        for (final listener in List.of(_statusListeners)) {
+          listener(payload);
+        }
+      } catch (e) {
+        _logError(
+          operation: '$_statusChangeEvent parse error',
+          url: '$_hubUrl → $_statusChangeEvent',
+          errorMessage: 'Parse error: $e',
+          responseBody: {'raw': args.toString()},
+        );
+      }
+    });
+
+    _log('✅ $_statusChangeEvent handler registered');
   }
 }

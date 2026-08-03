@@ -13,6 +13,7 @@ import 'package:commutr_main/ride_tracking/config/tracking_config.dart';
 import 'package:commutr_main/ride_tracking/model/ride_timeline.dart';
 import 'package:commutr_main/ride_tracking/service/dummy_tracking_service.dart';
 import 'package:commutr_main/ride_tracking/service/ivr_call_repo.dart';
+import 'package:commutr_main/ride_tracking/service/live_trip_controller.dart';
 import 'package:commutr_main/ride_tracking/service/route_tracking_signalr_service.dart';
 import 'package:commutr_main/features/trip_chat/presentation/trip_group_chat_screen.dart';
 import 'package:commutr_main/trip_summary/trip_directions_service.dart';
@@ -410,6 +411,9 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     }
     _rebuildRoutePolylines(_plannedPoints, cabOverride: newLatLng);
     unawaited(_refreshActiveLegPolyline(cab: newLatLng));
+    // Mirror the freshly-computed ETA / timeline into the ongoing notification.
+    // Safe on this hot path — the service throttles + change-detects internally.
+    _pushLiveTripNotification();
     // Prefer the server-reported heading (miscellaneous.bearing) so the car icon
     // points where the device says it's heading, falling back to the computed
     // bearing from consecutive positions when the payload omits it.
@@ -1035,6 +1039,61 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     } else {
       _etaMinutes = minutes;
     }
+  }
+
+  /// Feeds the current live-trip state to [LiveTripController], which owns the
+  /// ongoing Android notification.
+  ///
+  /// Fire-and-forget and fully self-guarding: the controller/notification service
+  /// change-detect and throttle internally, so this is safe to call from the hot
+  /// SignalR path and from the 200 ms tick. It passes the SAME state the map and
+  /// bottom sheet render from ([_timeline], [_etaMinutes], [_latestStatus]) so the
+  /// notification can never disagree with the screen.
+  ///
+  /// The controller — not this screen — decides what happens when the screen
+  /// closes; see [LiveTripController.detachScreen].
+  void _pushLiveTripNotification() {
+    // Dummy mode drives synthetic GPS; don't pin a fake trip in the user's
+    // notification shade.
+    if (TrackingConfig.useDummyTracking) return;
+
+    final tripId = widget.tripId;
+    final empId = widget.empId;
+    // Without both ids the notification can't be tapped through to this screen
+    // and the controller can't join a SignalR group, so there's nothing to track.
+    if (tripId == null || empId == null) return;
+
+    final status = _latestStatus;
+
+    // Pull the server-computed ETA and explicit arrival flag for THIS user off the
+    // latest SignalR payload (backend Asks 1 & 2). The server ETA is traffic-aware
+    // and authoritative, so prefer it over the client's polyline/speed estimate;
+    // fall back to [_etaMinutes] when the backend didn't supply one.
+    int? serverEta;
+    bool? hasCabArrived;
+    final live = _lastPayload;
+    if (live != null) {
+      for (final p in live.passengers) {
+        if (p.empId != empId) continue;
+        serverEta = p.etaMinutesToStop;
+        hasCabArrived = p.hasCabArrivedAtStop;
+        break;
+      }
+    }
+
+    unawaited(LiveTripController.instance.updateFromScreen(
+      session: LiveTripSession(
+        tripId: tripId,
+        empId: empId,
+        // The hub group is keyed on dsId, which the backend may report
+        // differently from tripId — mirror _connectSignalR's fallback exactly.
+        dsId: status?.dsId ?? tripId,
+      ),
+      timeline: _timeline,
+      etaMinutes: serverEta ?? _etaMinutes,
+      status: status,
+      hasCabArrived: hasCabArrived,
+    ));
   }
 
   /// Whether [stop] is the live-ETA destination (matches orange active-leg target).
@@ -2055,6 +2114,12 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
     // Pull fresh passenger data from the API on a throttled cadence (no loader).
     _maybeSilentRefresh();
 
+    // Also refresh the ongoing notification here, not just on the SignalR path:
+    // trips with `shouldUseSignalR == false` never hit _onSignalRLocation, so
+    // this tick is their only update source. The service's own throttle keeps
+    // this from posting at the 200 ms tick cadence.
+    _pushLiveTripNotification();
+
     final payload = _lastPayload;
     if (payload == null || payload.passengers.isEmpty) return;
 
@@ -2155,12 +2220,26 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
       _dummy = null;
     }
     // Clean up SignalR: leave the group and close the connection.
+    //
+    // This MUST happen before handing over to [LiveTripController] below: the
+    // controller opens its own connection to the same hub, and starting it while
+    // this one is still joined would briefly double the server's push load for
+    // this trip.
     if (_signalREnabled) {
       final dsId = widget.tripId;
       if (dsId != null) _signalR.leaveTrackingGroup(dsId);
       _signalR.removeLocationListener(_onSignalRLocation);
       _signalR.disconnect();
     }
+
+    // Hand the live feed over to [LiveTripController] rather than cancelling.
+    //
+    // The controller opens its own SignalR connection and starts the foreground
+    // service so the notification keeps updating without this screen. If the trip
+    // has already finished it tears everything down instead. Either way the
+    // decision belongs to the controller, not here — this screen no longer owns
+    // the notification's lifetime.
+    unawaited(LiveTripController.instance.detachScreen());
     super.dispose();
   }
 

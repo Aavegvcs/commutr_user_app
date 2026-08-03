@@ -104,6 +104,9 @@ class TrackingStatusResponse {
   final String? vendorEmailId;
   final int? vehicleId;
   final String? vehicleNo;
+  /// Human-readable vehicle model, e.g. "Honda City" (backend Ask 4).
+  /// Nullable: older backends don't send it and the UI falls back to [vehicleNo].
+  final String? vehicleModelName;
   final int? vehicleType;
   final int? fuelType;
   final bool isActive;
@@ -162,6 +165,7 @@ class TrackingStatusResponse {
     this.vendorEmailId,
     this.vehicleId,
     this.vehicleNo,
+    this.vehicleModelName,
     this.vehicleType,
     this.fuelType,
     this.isActive = true,
@@ -230,6 +234,7 @@ class TrackingStatusResponse {
       vendorEmailId: vendorEmailId,
       vehicleId: vehicleId,
       vehicleNo: vehicleNo,
+      vehicleModelName: vehicleModelName,
       vehicleType: vehicleType,
       fuelType: fuelType,
       isActive: isActive,
@@ -293,6 +298,7 @@ class TrackingStatusResponse {
       vendorEmailId: vendorEmailId,
       vehicleId: vehicleId,
       vehicleNo: vehicleNo,
+      vehicleModelName: vehicleModelName,
       vehicleType: vehicleType,
       fuelType: fuelType,
       isActive: isActive,
@@ -363,6 +369,7 @@ class TrackingStatusResponse {
       vendorEmailId: vendorEmailId,
       vehicleId: vehicleId,
       vehicleNo: vehicleNo,
+      vehicleModelName: vehicleModelName,
       vehicleType: vehicleType,
       fuelType: fuelType,
       isActive: isActive,
@@ -449,6 +456,10 @@ class TrackingStatusResponse {
       vendorEmailId: json['vendorEmailId']?.toString(),
       vehicleId: (json['vehicleId'] as num?)?.toInt(),
       vehicleNo: json['vehicleNo']?.toString(),
+      vehicleModelName: (json['vehicleModelName'] ??
+              json['VehicleModelName'] ??
+              json['vehicleModel'])
+          ?.toString(),
       vehicleType: (json['vehicleType'] as num?)?.toInt(),
       fuelType: (json['fuelType'] as num?)?.toInt(),
       isActive: readBool(json['isActive']),
@@ -581,6 +592,91 @@ class TripPassenger {
     this.paxTrackingStatus,
     this.empOffice,
   });
+
+  /// Returns a copy with the given fields replaced; omitted fields are kept.
+  ///
+  /// Note this cannot null-out a field — passing null means "keep the existing
+  /// value", which is exactly the semantics live-tracking merges want (a SignalR
+  /// payload omitting a field must not erase what the REST status already knew).
+  TripPassenger copyWith({
+    int? empId,
+    String? employeeID,
+    String? firstname,
+    String? lastName,
+    String? gender,
+    String? mobileno,
+    int? empLocCode,
+    int? tripType,
+    int? paxOrder,
+    String? address,
+    double? plannedLat,
+    double? plannedLng,
+    bool? noShow,
+    int? noShowReasonId,
+    bool? orsDeviation,
+    bool? scheduled,
+    bool? paxAdded,
+    String? paxType,
+    double? empDistance,
+    double? empDirectDistance,
+    double? empCost,
+    String? plannedScheduleTime,
+    int? etaDeviationMinutes,
+    String? empSigninTime,
+    double? empSigninLat,
+    double? empSigninLng,
+    String? empSignOutTime,
+    double? empSignOutLat,
+    double? empSignOutLng,
+    String? cabReachedTime,
+    double? cabReachedLat,
+    double? cabReachedLng,
+    String? reachedHomeTime,
+    double? reachedHomeLat,
+    double? reachedHomeLng,
+    String? paxTrackingStatus,
+    String? empOffice,
+  }) {
+    return TripPassenger(
+      empId: empId ?? this.empId,
+      employeeID: employeeID ?? this.employeeID,
+      firstname: firstname ?? this.firstname,
+      lastName: lastName ?? this.lastName,
+      gender: gender ?? this.gender,
+      mobileno: mobileno ?? this.mobileno,
+      empLocCode: empLocCode ?? this.empLocCode,
+      tripType: tripType ?? this.tripType,
+      paxOrder: paxOrder ?? this.paxOrder,
+      address: address ?? this.address,
+      plannedLat: plannedLat ?? this.plannedLat,
+      plannedLng: plannedLng ?? this.plannedLng,
+      noShow: noShow ?? this.noShow,
+      noShowReasonId: noShowReasonId ?? this.noShowReasonId,
+      orsDeviation: orsDeviation ?? this.orsDeviation,
+      scheduled: scheduled ?? this.scheduled,
+      paxAdded: paxAdded ?? this.paxAdded,
+      paxType: paxType ?? this.paxType,
+      empDistance: empDistance ?? this.empDistance,
+      empDirectDistance: empDirectDistance ?? this.empDirectDistance,
+      empCost: empCost ?? this.empCost,
+      plannedScheduleTime: plannedScheduleTime ?? this.plannedScheduleTime,
+      etaDeviationMinutes: etaDeviationMinutes ?? this.etaDeviationMinutes,
+      empSigninTime: empSigninTime ?? this.empSigninTime,
+      empSigninLat: empSigninLat ?? this.empSigninLat,
+      empSigninLng: empSigninLng ?? this.empSigninLng,
+      empSignOutTime: empSignOutTime ?? this.empSignOutTime,
+      empSignOutLat: empSignOutLat ?? this.empSignOutLat,
+      empSignOutLng: empSignOutLng ?? this.empSignOutLng,
+      cabReachedTime: cabReachedTime ?? this.cabReachedTime,
+      cabReachedLat: cabReachedLat ?? this.cabReachedLat,
+      cabReachedLng: cabReachedLng ?? this.cabReachedLng,
+      reachedHomeTime: reachedHomeTime ?? this.reachedHomeTime,
+      reachedHomeLat: reachedHomeLat ?? this.reachedHomeLat,
+      reachedHomeLng: reachedHomeLng ?? this.reachedHomeLng,
+      paxTrackingStatus: paxTrackingStatus ?? this.paxTrackingStatus,
+      empOffice: empOffice ?? this.empOffice,
+    );
+  }
 
   factory TripPassenger.fromJson(Map<String, dynamic> json) {
     double? readDouble(Object? v) {
