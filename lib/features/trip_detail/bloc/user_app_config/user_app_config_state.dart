@@ -40,6 +40,10 @@ class UserAppConfigLoaded extends UserAppConfigState {
         config.tripUiConfig.isDeboardOtpFieldAllowed,
         config.tripUiConfig.isTripSummaryAllowed,
         config.commonUiConfig.isUserUpdateProfile,
+        // Without this, a payload where ONLY the icon campaign changed would
+        // compare equal to the previous state and BlocListener would not fire,
+        // so the launcher icon would never update.
+        config.commonUiConfig.appIcon,
       ];
 }
 

@@ -121,11 +121,37 @@ class AppTripUiConfig {
 class CommonUiConfig {
   final bool isUserUpdateProfile;
 
-  const CommonUiConfig({required this.isUserUpdateProfile});
+  /// Backend-selected launcher icon campaign, e.g. `"default"` or
+  /// `"independence_day"`.
+  ///
+  /// Deliberately a raw [String] rather than an enum: this model is a plain
+  /// DTO and must not depend on the icon layer. Mapping to a concrete icon —
+  /// and ignoring campaigns the installed build has no assets for — is
+  /// `DynamicAppIconConfigMapper`'s job.
+  ///
+  /// `null` when the key is absent, which means "no instruction" — the app
+  /// leaves the current icon alone. That keeps a partial or older payload from
+  /// silently resetting a live campaign icon.
+  final String? appIcon;
+
+  const CommonUiConfig({
+    required this.isUserUpdateProfile,
+    this.appIcon,
+  });
 
   factory CommonUiConfig.fromJson(Map<String, dynamic> json) {
+    // Key casing is accepted both ways, matching how this file already handles
+    // `IsCreateScheduleAllowed`. The backend has not shipped this field yet,
+    // so its final casing is not settled.
+    final rawAppIcon = json['AppIcon'] ?? json['appIcon'];
+
     return CommonUiConfig(
       isUserUpdateProfile: json['IsUserUpdateProfile'] as bool? ?? false,
+      // Guard the cast: a non-string (number, bool, object) must not throw and
+      // take the whole config parse down with it.
+      appIcon: rawAppIcon is String && rawAppIcon.trim().isNotEmpty
+          ? rawAppIcon.trim()
+          : null,
     );
   }
 }

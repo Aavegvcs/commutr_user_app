@@ -30,6 +30,8 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:commutr_main/core/network/api_client.dart';
 import 'package:commutr_main/core/network/api_constants.dart';
+import 'package:commutr_main/core/services/dynamic_app_icon/dynamic_app_icon_coordinator.dart';
+import 'package:commutr_main/core/services/dynamic_app_icon/dynamic_app_icon_service.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 
 import '../../app.dart';
@@ -61,6 +63,20 @@ const String appApiClientKey = 'appApiClient';
 
 void setupDependencies() {
   sl.registerLazySingleton<AuthLocalStorage>(() => AuthLocalStorage());
+
+  // Launcher icon switching. Stateless and dependency-free; registered lazily,
+  // so nothing runs at startup.
+  sl.registerLazySingleton<DynamicAppIconService>(
+    () => DynamicAppIconService(),
+  );
+
+  // Applies the backend-configured launcher icon
+  // (UserAppConfiguration.commonUiConfig.appIcon). A singleton because it
+  // memoises the last requested icon across config re-fetches and holds a
+  // lifecycle observer while a swap is queued.
+  sl.registerLazySingleton<DynamicAppIconCoordinator>(
+    () => DynamicAppIconCoordinator(sl()),
+  );
 
   void onLogout() {
     clearBearerTokenFromApiClients();
