@@ -63,6 +63,7 @@ dependencies:
   shorebird_code_push: ^2.0.6
   intl: ^0.20.3
   mobile_scanner: ^6.0.2
+  dynamic_app_icon_flutter_plus: ^2.2.1
 
 dev_dependencies:
   flutter_test:

@@ -17,6 +17,7 @@ import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_e
 import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_state.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:commutr_main/core/di/injection.dart';
+import 'package:commutr_main/core/services/dynamic_app_icon/dynamic_app_icon_coordinator.dart';
 import 'package:commutr_main/core/utils/error_message.dart';
 import 'package:commutr_main/core/storage/auth_local_storage.dart';
 import 'package:commutr_main/features/auth/presentation/screens/mobile_no_verification.dart';
@@ -1573,8 +1574,9 @@ class _WelcomeState extends State<_WelcomeView> {
     //   • Cancel: gated by the UserAppConfiguration Cancel gate and the per-trip
     //     `isTripCancellationButtonShow` flag.
     // Both may appear at once (mirrors the schedule-card button model).
-    final bool isCancelTripByUserAfterTAT = appControlState is AppControlLoaded &&
-        appControlState.settings.isCancelTripByUserAfterTAT;
+    final bool isCancelTripByUserAfterTAT =
+        appControlState is AppControlLoaded &&
+            appControlState.settings.isCancelTripByUserAfterTAT;
     final bool showTripNoShowButton = _gateTripNoShow &&
         isCancelTripByUserAfterTAT &&
         (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false);
@@ -1735,6 +1737,16 @@ class _WelcomeState extends State<_WelcomeView> {
             listener: (context, state) {
               if (state is UserAppConfigLoaded) {
                 _reloadHomeDataForUserAppConfig();
+
+                // Backend-driven launcher icon. Fire-and-forget: the
+                // coordinator resolves the campaign, ignores unknown values and
+                // logs its own failures, so this can never affect the home
+                // screen. The actual swap is deferred until the app is
+                // backgrounded to avoid OEM launchers ejecting the user.
+                // sl<DynamicAppIconCoordinator>()
+                //     .applyFromConfig(state.config.commonUiConfig.appIcon);
+                sl<DynamicAppIconCoordinator>()
+                    .applyFromConfig('independence_day');
               }
             },
           ),
@@ -3917,9 +3929,8 @@ class _WelcomeState extends State<_WelcomeView> {
     //     ButtonUiConfig (override ignored).
     //   • isCancelScheduleByUserAfterTAT `true`  → a No-Show leg suppresses
     //     every action button.
-    final bool hideAllActions = !sideCancelled &&
-        isCancelScheduleByUserAfterTAT &&
-        sideNoShow;
+    final bool hideAllActions =
+        !sideCancelled && isCancelScheduleByUserAfterTAT && sideNoShow;
 
     final ButtonUiConfig uiConfig =
         item.buttonUiConfig ?? const ButtonUiConfig();

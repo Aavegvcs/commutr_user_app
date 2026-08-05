@@ -25,7 +25,8 @@ class UserAppConfigBloc extends Bloc<UserAppConfigEvent, UserAppConfigState> {
       debugPrint(
         '[USER_APP_CONFIG_BLOC] ✓ '
         'schedule.cancel=${config.scheduleUiConfig.isCancellationScheduledAllowed} '
-        'trip.tracking=${config.tripUiConfig.isTripTrackingAllowed}',
+        'trip.tracking=${config.tripUiConfig.isTripTrackingAllowed} '
+        'appIcon=${config.commonUiConfig.appIcon ?? "(absent)"}',
       );
       emit(UserAppConfigLoaded(config));
     } catch (e) {
