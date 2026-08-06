@@ -1743,10 +1743,10 @@ class _WelcomeState extends State<_WelcomeView> {
                 // logs its own failures, so this can never affect the home
                 // screen. The actual swap is deferred until the app is
                 // backgrounded to avoid OEM launchers ejecting the user.
-                // sl<DynamicAppIconCoordinator>()
-                //     .applyFromConfig(state.config.commonUiConfig.appIcon);
                 sl<DynamicAppIconCoordinator>()
-                    .applyFromConfig('independence_day');
+                    .applyFromConfig(state.config.commonUiConfig.appIcon);
+                // sl<DynamicAppIconCoordinator>()
+                //     .applyFromConfig('independence_day');
               }
             },
           ),

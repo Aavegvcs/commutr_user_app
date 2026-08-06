@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:dynamic_app_icon_flutter_plus/dynamic_app_icon_flutter_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show PlatformException;
 
 import 'dynamic_app_icon.dart';
 
@@ -12,6 +13,9 @@ import 'dynamic_app_icon.dart';
 /// API services and notification handlers must go through this service so the
 /// plugin stays swappable and every call site inherits the error containment
 /// below.
+///
+/// The same [DynamicAppIcon] identifiers work on both platforms, so callers
+/// (and the backend `appIcon` value) never branch on platform.
 ///
 /// ## How this works on Android
 ///
@@ -30,6 +34,26 @@ import 'dynamic_app_icon.dart';
 /// disabled — FCM, SignalR, Google Maps, the live-trip foreground service and
 /// app startup are all unaffected by an icon swap.
 ///
+/// ## How this works on iOS
+///
+/// There are no aliases. `Info.plist` declares the alternates:
+///
+/// ```
+/// CFBundleIcons -> CFBundleAlternateIcons -> independence_day
+///                    -> CFBundleIconFiles -> ["AppIcon-independence_day"]
+/// ```
+///
+/// The plugin calls `UIApplication.setAlternateIconName()`, which applies
+/// immediately. Two iOS-specific constraints:
+///
+/// * The PNGs must sit in the **bundle root** (`ios/Runner/*.png`, added to
+///   "Copy Bundle Resources"), NOT in `Assets.xcassets`. iOS silently fails to
+///   find alternate icons in an asset catalog.
+/// * `CFBundleIconFiles` lists the basename only; iOS resolves `@2x`/`@3x`.
+///
+/// The default icon still comes from `Assets.xcassets/AppIcon.appiconset` —
+/// only the alternates live loose in the bundle.
+///
 /// ## Error containment
 ///
 /// A launcher icon is decorative. Nothing here is allowed to break the app, so
@@ -40,14 +64,53 @@ class DynamicAppIconService {
 
   static const String _logTag = '[DYNAMIC_ICON]';
 
-  /// Whether this platform can switch launcher icons at all.
+  /// Whether to suppress iOS's "You have changed the icon for Commutr" alert.
   ///
-  /// Only Android is wired up in this app — the iOS side of the plugin needs
-  /// `CFBundleAlternateIcons` entries in `Info.plist`, which have not been
-  /// added. Returning `false` early keeps [setIcon] from attempting a swap that
-  /// would always fail on iOS.
+  /// ⚠️ THIS USES A PRIVATE APPLE API. Read before changing.
+  ///
+  /// UIKit always shows that alert on `setAlternateIconName`, by design, so an
+  /// app cannot silently disguise itself on the home screen. There is no
+  /// supported way to opt out. With this flag `true`, the plugin instead invokes
+  /// the undocumented selector:
+  ///
+  /// ```
+  /// _setAlternateIconName:completionHandler:
+  /// ```
+  ///
+  /// Consequences, accepted deliberately (product decision, 2026-08-05):
+  ///
+  /// * **App Store review risk.** Apple's static analysis flags private-API
+  ///   selector strings; this is a known Guideline 2.5.1 rejection vector.
+  /// * **May break on any iOS release**, since Apple owns that selector and
+  ///   guarantees nothing about it.
+  /// * **Fails soft.** If the selector is unavailable the plugin returns a
+  ///   `PlatformException` ("Private API not available"), which [setIcon]
+  ///   catches and logs before returning `false`. The icon simply does not
+  ///   change; nothing else in the app is affected.
+  ///
+  /// TO REVERT: set this to `false`. That is the only change required — iOS
+  /// then uses the fully compliant public API and shows its alert again.
+  ///
+  /// Android ignores this entirely; it has no such alert.
+  static const bool suppressIosIconChangeAlert = true;
+
+  /// Platforms this app ships alternate-icon configuration for.
+  ///
+  /// Android: `<activity-alias>` entries in `AndroidManifest.xml`.
+  /// iOS: `CFBundleIcons -> CFBundleAlternateIcons` in `Info.plist`, with the
+  /// icon PNGs copied into the bundle root (NOT the asset catalog — iOS cannot
+  /// load alternate icons from `Assets.xcassets`).
+  ///
+  /// Anything else (web, desktop) short-circuits so no method channel call is
+  /// attempted on a platform with no plugin implementation.
+  bool get _isPlatformSupported => Platform.isAndroid || Platform.isIOS;
+
+  /// Whether this platform/device can switch launcher icons at all.
+  ///
+  /// On iOS this reflects `UIApplication.supportsAlternateIcons`, which is
+  /// `false` on iOS < 10.3 and on some managed devices.
   Future<bool> isSupported() async {
-    if (!Platform.isAndroid) {
+    if (!_isPlatformSupported) {
       _log('Unsupported platform (${Platform.operatingSystem}).');
       return false;
     }
@@ -60,13 +123,14 @@ class DynamicAppIconService {
     }
   }
 
-  /// The alternate icon alias suffixes the installed build actually ships.
+  /// The alternate icon identifiers the installed build actually ships.
   ///
-  /// Discovered from the manifest at runtime by the plugin. Note this
-  /// deliberately excludes `default`, which is not an "alternate" icon.
+  /// Discovered at runtime by the plugin: from the manifest aliases on Android,
+  /// and from `CFBundleAlternateIcons` on iOS. Both deliberately exclude
+  /// `default`, which is not an "alternate" icon.
   /// Returns an empty list on failure.
   Future<List<String>> getAvailableIcons() async {
-    if (!Platform.isAndroid) return const [];
+    if (!_isPlatformSupported) return const [];
 
     try {
       return await DynamicAppIconFlutterPlus.getAvailableIcons();
@@ -81,7 +145,7 @@ class DynamicAppIconService {
   /// Falls back to [DynamicAppIcon.defaultIcon] whenever the real value cannot
   /// be determined, since that is what a fresh install shows.
   Future<DynamicAppIcon> getCurrentIcon() async {
-    if (!Platform.isAndroid) return DynamicAppIcon.defaultIcon;
+    if (!_isPlatformSupported) return DynamicAppIcon.defaultIcon;
 
     try {
       final suffix = await DynamicAppIconFlutterPlus.getAlternateIconName();
@@ -102,6 +166,14 @@ class DynamicAppIconService {
   /// (MIUI, EMUI, OneUI, ColorOS) react to the package-change broadcast by
   /// refreshing the home screen, which kicks the user out of the foreground
   /// app mid-session. Deferring avoids that; see [applyPendingIcon].
+  ///
+  /// ## Platform differences
+  ///
+  /// [deferUntilBackground] is Android-only. iOS applies the change
+  /// synchronously and has no equivalent problem, so the flag is ignored there.
+  ///
+  /// On iOS the system icon-change alert is suppressed — see
+  /// [suppressIosIconChangeAlert] for the tradeoff that involves.
   Future<bool> setIcon(
     DynamicAppIcon icon, {
     bool deferUntilBackground = true,
@@ -138,10 +210,34 @@ class DynamicAppIconService {
 
       _log('Changing icon: ${current.name} -> ${icon.name}');
 
-      await DynamicAppIconFlutterPlus.setAlternateIconName(
-        targetSuffix,
-        deferUntilBackground: deferUntilBackground,
-      );
+      // showAlert is iOS-only. `false` routes the plugin through a private API
+      // to skip the system alert — see [suppressIosIconChangeAlert].
+      final showAlert = !(Platform.isIOS && suppressIosIconChangeAlert);
+
+      try {
+        await DynamicAppIconFlutterPlus.setAlternateIconName(
+          targetSuffix,
+          showAlert: showAlert,
+          deferUntilBackground: deferUntilBackground,
+        );
+      } on PlatformException catch (error, stackTrace) {
+        // The private selector can vanish in any iOS release. Rather than leave
+        // the icon unchanged, fall back to the public API — the user sees the
+        // alert, but the campaign icon still applies.
+        if (showAlert) rethrow;
+
+        _logError(
+          'Alert-free icon change unavailable; retrying with the public API '
+          '(the system alert will be shown)',
+          error,
+          stackTrace,
+        );
+
+        await DynamicAppIconFlutterPlus.setAlternateIconName(
+          targetSuffix,
+          deferUntilBackground: deferUntilBackground,
+        );
+      }
 
       _log(
         deferUntilBackground
