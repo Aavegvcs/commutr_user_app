@@ -14,9 +14,16 @@ class TripSummaryWelcomeScreen extends StatefulWidget {
     super.key,
     required this.item,
     this.fromTeamCab = false,
+    this.isQrBoarding = false,
   });
 
   final TripHomeItem item;
+
+  /// QR boarding mode (`BoardingType == 3`), passed down from the caller because
+  /// [UserAppConfigBloc] is scoped to the Welcome subtree and is not visible on
+  /// this pushed route. Defaults to `false`, so the Sequence label keeps its
+  /// existing behaviour wherever the flag is not supplied.
+  final bool isQrBoarding;
 
   /// When opened from the Team Cab screen, we additionally fetch and render the
   /// full cab-tracking details (driver / vehicle / OTP / timings / passengers)
@@ -31,6 +38,7 @@ class TripSummaryWelcomeScreen extends StatefulWidget {
 class _TripSummaryWelcomeScreenState extends State<TripSummaryWelcomeScreen> {
   TripHomeItem get item => widget.item;
   bool get fromTeamCab => widget.fromTeamCab;
+  bool get isQrBoarding => widget.isQrBoarding;
 
   // Cab-tracking detail fetched when [fromTeamCab] — drives both the new
   // details section and the enrichment of the top cards (addresses / vehicle /
@@ -184,7 +192,11 @@ class _TripSummaryWelcomeScreenState extends State<TripSummaryWelcomeScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   children: [
-                    _MapCard(item: renderItem, plannedOnly: plannedOnly),
+                    _MapCard(
+                      item: renderItem,
+                      plannedOnly: plannedOnly,
+                      isQrBoarding: isQrBoarding,
+                    ),
                     const SizedBox(height: 16),
                     _TripDetailCard(item: renderItem),
                     if (fromTeamCab) ...[
@@ -300,7 +312,11 @@ String? _plannedPickupLabel(TripHomeItem item) {
 // ─── Map Card ────────────────────────────────────────────────────────────────
 
 class _MapCard extends StatelessWidget {
-  const _MapCard({required this.item, this.plannedOnly = false});
+  const _MapCard({
+    required this.item,
+    this.plannedOnly = false,
+    this.isQrBoarding = false,
+  });
 
   final TripHomeItem item;
 
@@ -308,12 +324,20 @@ class _MapCard extends StatelessWidget {
   /// and a "PLANNED ROUTE" badge is shown instead of "TRIP COMPLETED".
   final bool plannedOnly;
 
+  /// QR boarding mode (`BoardingType == 3`) — hides the Sequence label only.
+  final bool isQrBoarding;
+
   @override
   Widget build(BuildContext context) {
     final isLogin = item.isLogin;
     final shiftSource = isLogin ? item.pickShift : item.dropShift;
     final shiftTime = _formatShiftTime(shiftSource) ?? shiftSource ?? '--:--';
-    final seqLabel = (item.paxOrder != null && item.paxCount != null)
+    // Sequence / PA order is meaningless under QR boarding (BoardingType == 3):
+    // a null label makes the existing `if (seqLabel != null)` branch below skip
+    // the row entirely. Every other boarding type is unaffected.
+    final seqLabel = (!isQrBoarding &&
+            item.paxOrder != null &&
+            item.paxCount != null)
         ? 'Sequence ${item.paxOrder}/${item.paxCount}'
         : null;
     final timeLabel = isLogin ? 'LOGIN TIME' : 'LOGOUT TIME';

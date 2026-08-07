@@ -134,16 +134,58 @@ class CommonUiConfig {
   /// silently resetting a live campaign icon.
   final String? appIcon;
 
+  /// Whether the Area dropdown is offered when picking an address.
+  final bool isAreaDdlEnabled;
+
+  /// Whether the Zone dropdown is offered when picking an address.
+  final bool isZoneDdlEnabled;
+
+  /// Boarding verification mode selected for this location (e.g. OTP vs QR).
+  /// Kept as a raw code — mapping it to a behaviour is the feature layer's job.
+  final int? boardingType;
+
+  /// De-boarding counterpart of [boardingType].
+  final int? deboardingType;
+
+  /// [boardingType] code for QR-based boarding: the passenger scans the cab's
+  /// QR instead of reading out a Boarding/Deboard OTP, so no OTP field and no
+  /// Board/Deboard CTA apply — a "Scan QR" action replaces them.
+  static const int boardingTypeQr = 3;
+
   const CommonUiConfig({
     required this.isUserUpdateProfile,
     this.appIcon,
+    this.isAreaDdlEnabled = false,
+    this.isZoneDdlEnabled = false,
+    this.boardingType,
+    this.deboardingType,
   });
+
+  /// Whether this location boards by QR scan rather than OTP. `false` when the
+  /// field is absent (`null`), which keeps the existing OTP behaviour.
+  bool get isQrBoarding => boardingType == boardingTypeQr;
 
   factory CommonUiConfig.fromJson(Map<String, dynamic> json) {
     // Key casing is accepted both ways, matching how this file already handles
     // `IsCreateScheduleAllowed`. The backend has not shipped this field yet,
     // so its final casing is not settled.
     final rawAppIcon = json['AppIcon'] ?? json['appIcon'];
+
+    bool readBool(Object? v) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final lower = v.toLowerCase();
+        return lower == 'true' || lower == '1';
+      }
+      return false;
+    }
+
+    int? readInt(Object? v) {
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v.trim());
+      return null;
+    }
 
     return CommonUiConfig(
       isUserUpdateProfile: json['IsUserUpdateProfile'] as bool? ?? false,
@@ -152,6 +194,16 @@ class CommonUiConfig {
       appIcon: rawAppIcon is String && rawAppIcon.trim().isNotEmpty
           ? rawAppIcon.trim()
           : null,
+      isAreaDdlEnabled:
+          readBool(json['IsAreaDDLEnabled'] ?? json['isAreaDDLEnabled']),
+      // NOTE: the backend spells the zone key with a lowercase "l"
+      // ("IsZoneDDlEnabled"); all three plausible casings are accepted so a
+      // later spelling fix on the server does not silently disable the field.
+      isZoneDdlEnabled: readBool(json['IsZoneDDlEnabled'] ??
+          json['IsZoneDDLEnabled'] ??
+          json['isZoneDDlEnabled']),
+      boardingType: readInt(json['BoardingType'] ?? json['boardingType']),
+      deboardingType: readInt(json['DeboardingType'] ?? json['deboardingType']),
     );
   }
 }

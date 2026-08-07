@@ -22,6 +22,7 @@ import 'package:commutr_main/features/trip_detail/bloc/cancel_trip/cancel_trip_b
 import 'package:commutr_main/features/trip_detail/bloc/trip_history_bloc.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/cab_tracking/user_cab_tracking_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/trip_history_repo.dart';
+import 'package:commutr_main/features/scan_qr_boarded/data/repository/qr_board_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/trip_start/board_trip_repo.dart';
 import 'package:commutr_main/features/trip_detail/data/repository/trip_start/cancel_trip_home_repo.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
@@ -190,6 +191,10 @@ void setupDependencies() {
   );
 
   sl.registerFactory<BoardTripBloc>(() => BoardTripBloc(sl()));
+
+  sl.registerLazySingleton<QrBoardRepo>(
+    () => QrBoardRepo(sl(instanceName: appApiClientKey)),
+  );
 
   sl.registerLazySingleton<UserCabTrackingRepo>(
     () => UserCabTrackingRepo(sl(instanceName: appApiClientKey)),

@@ -44,6 +44,10 @@ class UserAppConfigLoaded extends UserAppConfigState {
         // compare equal to the previous state and BlocListener would not fire,
         // so the launcher icon would never update.
         config.commonUiConfig.appIcon,
+        config.commonUiConfig.isAreaDdlEnabled,
+        config.commonUiConfig.isZoneDdlEnabled,
+        config.commonUiConfig.boardingType,
+        config.commonUiConfig.deboardingType,
       ];
 }
 

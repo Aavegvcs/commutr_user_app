@@ -174,6 +174,7 @@ class TripHomeItem {
   final String? cancelorNoshow;
   final int? deBoardOtp;
   final int? isCancelTripByUserAfterTat;
+  final int? transportType;
   final TripButtonUiConfig? tripButtonUiConfig;
   final List<TripHomePax>? passengers;
 
@@ -208,6 +209,7 @@ class TripHomeItem {
     this.cancelorNoshow,
     this.deBoardOtp,
     this.isCancelTripByUserAfterTat,
+    this.transportType,
     this.tripButtonUiConfig,
     this.passengers,
   });
@@ -271,6 +273,7 @@ class TripHomeItem {
       deBoardOtp: (json['DeBoardOTP'] as num?)?.toInt(),
       isCancelTripByUserAfterTat:
           (json['IsCancelTripByUserAfterTAT'] as num?)?.toInt(),
+      transportType: (json['TransportType'] as num?)?.toInt(),
       tripButtonUiConfig: json['tripButtonUiConfig'] is Map
           ? TripButtonUiConfig.fromJson(
               Map<String, dynamic>.from(json['tripButtonUiConfig'] as Map),
@@ -284,6 +287,17 @@ class TripHomeItem {
 
   /// True for PICK/Login, false for DROP/Logout.
   bool get isPickTrip => isPickTripType(tripType);
+
+  /// [transportType] code for a SHUTTLE trip — a fixed-route service rather than
+  /// a door-to-door cab.
+  static const int transportTypeShuttle = 2;
+
+  /// Whether this trip is served by a shuttle (`TransportType == 2`).
+  ///
+  /// Shuttle trips have no trip group chat (riders are never shown who else is
+  /// on the line) and are tracked on the dedicated shuttle tracking screen.
+  /// `false` when the field is absent, so cab behaviour stays the default.
+  bool get isShuttle => transportType == transportTypeShuttle;
 
   /// Passengers sorted by ascending [paxOrder] (P1 → P2 → P3 …).
   List<TripHomePax> get passengersSortedByPaxOrder {

@@ -52,6 +52,8 @@ import 'package:commutr_main/features/trip_detail/model/trip_schedule_flow_args.
 import 'package:commutr_main/profile/bloc/profile_bloc.dart';
 import 'package:commutr_main/profile/bloc/profile_event.dart';
 import 'package:commutr_main/profile/bloc/profile_state.dart';
+import 'package:commutr_main/features/scan_qr_boarded/presentation/widget/qr_board_result_dialog.dart';
+import 'package:commutr_main/features/scan_qr_boarded/scan_qr_boarded.dart';
 import 'package:commutr_main/profile/presentation/screen/profile.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_bloc.dart';
 import 'package:commutr_main/ride_tracking/bloc/cab_tracking_event.dart';
@@ -59,6 +61,7 @@ import 'package:commutr_main/ride_tracking/config/tracking_config.dart';
 import 'package:commutr_main/ride_tracking/service/dummy_tracking_service.dart';
 import 'package:commutr_main/ride_tracking/ride_tracking.dart';
 import 'package:commutr_main/ride_tracking/service/ivr_call_repo.dart';
+import 'package:commutr_main/ride_tracking/shuttle/shutte_ride_tracking.dart';
 import 'package:commutr_main/trip_summary/trip_summary.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -211,6 +214,17 @@ class _WelcomeState extends State<_WelcomeView> {
     // BlocListener does not replay the current state; fetch if roster already loaded.
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _ensureTripHistoryFetched());
+    // Same non-replay caveat applies to the gating configs: seed the retained
+    // copies from whatever has already loaded, so a config that settled before
+    // this screen mounted still survives the first re-fetch.
+    final appControl = context.read<AppControlBloc>().state;
+    if (appControl is AppControlLoaded) {
+      _lastAppControlSettings = appControl.settings;
+    }
+    final userConfig = context.read<UserAppConfigBloc>().state;
+    if (userConfig is UserAppConfigLoaded) {
+      _lastUserAppConfig = userConfig.config;
+    }
     _startPolling();
   }
 
@@ -327,20 +341,33 @@ class _WelcomeState extends State<_WelcomeView> {
     }
   }
 
+  /// Last successfully-loaded AppControl settings, retained across a re-fetch
+  /// for the same reason as [_lastUserAppConfig]: a refresh re-dispatches
+  /// `FetchAppControlSettings`, and without this every `AppControlLoaded` check
+  /// below would go false for the Loading window — dropping the Board/Deboard
+  /// and No-Show CTAs off the retained cards and then putting them back.
+  AppControlSettings? _lastAppControlSettings;
+
+  /// The loaded per-location AppControl settings, falling back to the retained
+  /// copy while a re-fetch is in flight. Null only when none has ever loaded, in
+  /// which case callers keep their existing `false` defaults.
+  AppControlSettings? get _appControlSettings {
+    final s = context.read<AppControlBloc>().state;
+    if (s is AppControlLoaded) {
+      return s.settings;
+    }
+    return _lastAppControlSettings;
+  }
+
   /// Current per-location hybrid-schedule flag from the loaded AppControl
   /// settings (defaults to `false` until/unless settings are loaded).
-  bool get _hybridScheduleEnabled {
-    final s = context.read<AppControlBloc>().state;
-    return s is AppControlLoaded && s.settings.hybridScheduleEnabled;
-  }
+  bool get _hybridScheduleEnabled =>
+      _appControlSettings?.hybridScheduleEnabled ?? false;
 
   /// Current per-location flag gating the "Both" (Login + Logout) toggle on the
   /// trip-details screen (defaults to `false` until/unless settings are loaded).
-  bool get _isScheduleFillForLoginAndLogoutBoth {
-    final s = context.read<AppControlBloc>().state;
-    return s is AppControlLoaded &&
-        s.settings.isScheduleFillForLoginAndLogoutBoth;
-  }
+  bool get _isScheduleFillForLoginAndLogoutBoth =>
+      _appControlSettings?.isScheduleFillForLoginAndLogoutBoth ?? false;
 
   // ---------------------------------------------------------------------------
   // UserAppConfiguration — highest-priority per-location feature gate.
@@ -359,10 +386,59 @@ class _WelcomeState extends State<_WelcomeView> {
   // ever hides on an explicit loaded `false`.
   // ---------------------------------------------------------------------------
 
-  /// The loaded per-location UI-gating config, or `null` when not yet loaded.
+  /// Last successfully-loaded gating config, retained across a re-fetch.
+  ///
+  /// A refresh re-dispatches `FetchUserAppConfig`, which emits
+  /// `UserAppConfigLoading` before the new response lands. Without this, every
+  /// gate below would see a null config for that window and fall back to its
+  /// `?? true` default — painting OTP fields (and other gated CTAs) onto the
+  /// retained cards for a few frames until the response arrived and removed them
+  /// again. Holding the previous config keeps the cards rendering at their
+  /// last-known gates until the new ones are actually available.
+  UserAppConfiguration? _lastUserAppConfig;
+
+  /// The loaded per-location UI-gating config, or `null` when none has ever
+  /// loaded.
+  ///
+  /// Falls back to [_lastUserAppConfig] while a re-fetch is in flight, so the
+  /// gates never flicker through their defaults mid-refresh. On a genuine first
+  /// load there is nothing retained, so this is still null and
+  /// [_tripGatingConfigPending] holds the shimmer as before.
   UserAppConfiguration? get _userAppConfig {
     final s = context.read<UserAppConfigBloc>().state;
-    return s is UserAppConfigLoaded ? s.config : null;
+    if (s is UserAppConfigLoaded) {
+      return s.config;
+    }
+    return _lastUserAppConfig;
+  }
+
+  /// Whether the trip card's *gating* responses are still in flight.
+  ///
+  /// A trip card's contents depend on more than `GetTripHomePage`: AppControl
+  /// drives the Board/Deboard + No-Show CTAs and UserAppConfiguration drives the
+  /// OTP / Seq / Scan-QR branches. Both are fetched off the roster's `locCode`,
+  /// so while any of the three is unresolved the card would render with default
+  /// gates and then visibly re-arrange. Shimmering until they settle avoids that.
+  ///
+  /// Only pending states count. A config that ERRORED is treated as settled, so
+  /// the shimmer can never outlive a failed fetch — the card then renders with
+  /// the documented `?? true` gate defaults, exactly as it did before.
+  bool get _tripGatingConfigPending {
+    final roster = context.read<RosterBloc>().state;
+    // Config fetches are dispatched only on RosterLoaded. If the roster itself
+    // failed they will never arrive, so nothing is "pending" — don't hang.
+    if (roster is! RosterLoaded) {
+      return roster is RosterLoading || roster is RosterInitial;
+    }
+    // Both fetches bail out on locCode == 0 (see _maybeFetchAppControlSettings),
+    // so with no locCode the config can never arrive — nothing is pending.
+    if (roster.details.locCode == 0) return false;
+    final appControl = context.read<AppControlBloc>().state;
+    final userConfig = context.read<UserAppConfigBloc>().state;
+    return appControl is AppControlLoading ||
+        appControl is AppControlInitial ||
+        userConfig is UserAppConfigLoading ||
+        userConfig is UserAppConfigInitial;
   }
 
   // Schedule feature gates.
@@ -401,6 +477,148 @@ class _WelcomeState extends State<_WelcomeView> {
       _userAppConfig?.tripUiConfig.isDeboardOtpFieldAllowed ?? true;
   bool get _gateTripSummary =>
       _userAppConfig?.tripUiConfig.isTripSummaryAllowed ?? true;
+
+  /// QR boarding mode (`BoardingType == 3`): *boarding* is verified by scanning
+  /// the cab QR, so the OTP-based elements — Boarding OTP field, Deboard OTP
+  /// field and the Board CTA — are hidden and a "Scan QR" action is shown in
+  /// their place. `false` until the config loads (and when the field is absent),
+  /// so the existing OTP behaviour is preserved unchanged.
+  ///
+  /// Deboarding is NOT a QR action: see [_showScanQrFor].
+  bool get _isQrBoarding =>
+      _userAppConfig?.commonUiConfig.isQrBoarding ?? false;
+
+  /// Whether the "Scan QR" CTA should be shown for [item].
+  ///
+  /// Requires QR boarding mode ([_isQrBoarding]) AND that the passenger has not
+  /// boarded yet. Under QR boarding the card shows, in order:
+  ///   • not boarded -> "Scan QR" (no Deboard button)
+  ///   • boarded     -> the normal "Deboard" button (the scan is done)
+  ///
+  /// Note this gates only the Scan QR CTA. The OTP-suppression branches keyed
+  /// off [_isQrBoarding] stay as they are — a boarded QR passenger still has no
+  /// OTP to show.
+  bool _showScanQrFor(TripHomeItem item) => _isQrBoarding && !item.isBoarded;
+
+  /// Opens the QR scanner used to board/deboard when [_isQrBoarding].
+  ///
+  /// The scanner posts the scanned code to `/qr-board` itself and pops back
+  /// here with a [QrBoardResult] for both outcomes. The success/error popup is
+  /// shown on this screen (the scanner route is gone by then), and on success
+  /// the trip list is refetched (`GetTripHomePage`) so the card picks up the
+  /// new boarded state.
+  Future<void> _openScanQr(TripHomeItem item) async {
+    final result = await Navigator.of(context).push<QrBoardResult>(
+      MaterialPageRoute<QrBoardResult>(
+        builder: (_) => ScanQr(dsId: item.tripId, empId: item.empId),
+      ),
+    );
+
+    // Null when the user backed out without completing an attempt.
+    if (result == null || !mounted) return;
+
+    if (result.success) {
+      context.read<TripHomeBloc>().add(const FetchTripHome());
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (_) => QrBoardResultDialog(
+        message: result.message,
+        success: result.success,
+      ),
+    );
+  }
+
+  /// Whether the AppControl per-location flag allows the Board / Deboard CTA at
+  /// all. `false` until the settings load, so the buttons stay hidden rather
+  /// than flashing in and out.
+  bool get _boardDeboardEnabled =>
+      _appControlSettings?.boardDebaordEnabledForUser ?? false;
+
+  /// Whether the QR-boarding "Deboard" CTA applies to [item]: QR mode and the
+  /// passenger has boarded but not yet deboarded. The counterpart of
+  /// [_showScanQrFor] — exactly one of the two is ever true.
+  ///
+  /// Also gated by the AppControl `boardDebaordEnabledForUser` flag: with
+  /// board/deboard turned off for the location there is no Deboard button,
+  /// under QR boarding as anywhere else.
+  bool _showQrDeboardFor(TripHomeItem item) =>
+      _isQrBoarding && item.isBoardedNotDeboarded && _boardDeboardEnabled;
+
+  /// Compact "Deboard" CTA for the collapsed card under QR boarding, sized to
+  /// match the compact "Scan QR" button it replaces once the passenger boards.
+  /// The expanded card renders its own full-width Deboard button inline.
+  Widget _buildCompactDeboardButton(TripHomeItem item) {
+    return GestureDetector(
+      onTap: () => _onDeboardTrip(item),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFB40D1A),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: const Text(
+          'Deboard',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The "Scan QR" CTA shown instead of the OTP fields / Board button when
+  /// [_showScanQrFor] allows it. [compact] is the collapsed-card variant, which sits
+  /// inline next to Track Vehicle rather than filling the card width.
+  Widget _buildScanQrButton(TripHomeItem item, {bool compact = false}) {
+    final child = Row(
+      mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.qr_code_scanner,
+          size: compact ? 16 : 18,
+          color: Colors.white,
+        ),
+        SizedBox(width: compact ? 6 : 8),
+        Text(
+          'Scan QR',
+          style: TextStyle(
+            fontSize: compact ? 13 : 16,
+            fontWeight: compact ? FontWeight.w600 : FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
+      ],
+    );
+
+    return GestureDetector(
+      onTap: () => _openScanQr(item),
+      child: compact
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A5C38),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: child,
+            )
+          : Container(
+              height: 48,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A5C38),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: child,
+            ),
+    );
+  }
 
   void _maybeDispatchTripHistoryFetch(int empId) {
     if (_tripHistoryFetchDispatched) return;
@@ -1210,6 +1428,7 @@ class _WelcomeState extends State<_WelcomeView> {
     required int? tripId,
     String? userName,
     String? boardingOtp,
+    bool isShuttle = false,
   }) {
     if (empId == null || tripId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1226,14 +1445,26 @@ class _WelcomeState extends State<_WelcomeView> {
         builder: (_) => BlocProvider(
           create: (_) => sl<CabTrackingBloc>()
             ..add(FetchCabTracking(empId: empId, tripId: tripId)),
-          child: RideTrackingScreen(
-            userName: userName,
-            tripId: tripId,
-            empId: empId,
-            boardingOtp: boardingOtp,
-            gateChat: _gateTripChat,
-            gateIvrCall: _gateTripIvrCall,
-          ),
+          // Shuttle trips (TransportType == 2) are a fixed-route service, so they
+          // get the dedicated shuttle screen (stop timetable, no boarding OTP, no
+          // passenger list) instead of the door-to-door cab tracking screen. Both
+          // read the same CabTrackingBloc provided above.
+          child: isShuttle
+              ? ShuttleRideTrackingScreen(
+                  userName: userName,
+                  tripId: tripId,
+                  empId: empId,
+                  gateChat: _gateTripChat,
+                  gateIvrCall: _gateTripIvrCall,
+                )
+              : RideTrackingScreen(
+                  userName: userName,
+                  tripId: tripId,
+                  empId: empId,
+                  boardingOtp: boardingOtp,
+                  gateChat: _gateTripChat,
+                  gateIvrCall: _gateTripIvrCall,
+                ),
         ),
       ),
     );
@@ -1564,9 +1795,9 @@ class _WelcomeState extends State<_WelcomeView> {
     final bool showDeboard = item.isBoardedNotDeboarded;
     // The Board/Deboard CTA is additionally gated by the per-location
     // AppControl setting (boardDebaordEnabledForUser).
-    final appControlState = context.read<AppControlBloc>().state;
-    final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
-        appControlState.settings.boardDebaordEnabledForUser;
+    final appControlSettings = _appControlSettings;
+    final bool boardDeboardEnabled =
+        appControlSettings?.boardDebaordEnabledForUser ?? false;
     // The active-trip card shows independent No-Show and Cancel action buttons.
     //   • No-Show: only relevant after TAT — gated by the per-location AppControl
     //     flag (isCancelTripByUserAfterTAT), the UserAppConfiguration No-Show
@@ -1575,8 +1806,7 @@ class _WelcomeState extends State<_WelcomeView> {
     //     `isTripCancellationButtonShow` flag.
     // Both may appear at once (mirrors the schedule-card button model).
     final bool isCancelTripByUserAfterTAT =
-        appControlState is AppControlLoaded &&
-            appControlState.settings.isCancelTripByUserAfterTAT;
+        appControlSettings?.isCancelTripByUserAfterTAT ?? false;
     final bool showTripNoShowButton = _gateTripNoShow &&
         isCancelTripByUserAfterTAT &&
         (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false);
@@ -1616,7 +1846,9 @@ class _WelcomeState extends State<_WelcomeView> {
               ),
               const SizedBox(width: 10),
             ],
-            if (_gateTripChat) ...[
+            // Shuttle trips (TransportType == 2) have no group chat: a rider is
+            // shown the line, never who else is on it.
+            if (_gateTripChat && !item.isShuttle) ...[
               _buildTripCircleAction(
                 onTap: () => _openTripGroupChat(item),
                 icon: Icons.chat_bubble_outline,
@@ -1655,7 +1887,19 @@ class _WelcomeState extends State<_WelcomeView> {
               ),
           ],
         ),
-        if (boardDeboardEnabled &&
+        // QR boarding (BoardingType == 3): boarding happens by scanning the cab
+        // QR, so the "Scan QR" CTA replaces the Board button while the passenger
+        // is not yet boarded. Once boarded, this falls through to the branch
+        // below, which renders the normal Deboard button (`showDeboard` is
+        // `isBoardedNotDeboarded`) — deboarding is not a QR action.
+        //
+        // Both the Board and the Deboard CTA are gated by the AppControl flag
+        // `boardDebaordEnabledForUser`: when the location has board/deboard
+        // turned off, neither button is shown — QR boarding included.
+        if (_showScanQrFor(item)) ...[
+          const SizedBox(height: 10),
+          _buildScanQrButton(item),
+        ] else if (boardDeboardEnabled &&
             (item.canShowBoardButton || showDeboard)) ...[
           const SizedBox(height: 10),
           GestureDetector(
@@ -1731,11 +1975,25 @@ class _WelcomeState extends State<_WelcomeView> {
               }
             },
           ),
+          // Retain each loaded AppControl payload so a re-fetch's Loading window
+          // keeps the previous gates rather than dropping to their `false`
+          // defaults — see [_lastAppControlSettings].
+          BlocListener<AppControlBloc, AppControlState>(
+            listener: (context, state) {
+              if (state is AppControlLoaded) {
+                _lastAppControlSettings = state.settings;
+              }
+            },
+          ),
           // When the per-location UI-gating config finishes loading, reload the
           // home data so the gated UI re-evaluates against the fresh config.
           BlocListener<UserAppConfigBloc, UserAppConfigState>(
             listener: (context, state) {
               if (state is UserAppConfigLoaded) {
+                // Retain it so the next re-fetch's Loading window keeps reading
+                // these gates instead of falling back to `?? true` and briefly
+                // painting OTP fields onto the cards.
+                _lastUserAppConfig = state.config;
                 _reloadHomeDataForUserAppConfig();
 
                 // Backend-driven launcher icon. Fire-and-forget: the
@@ -2590,8 +2848,11 @@ class _WelcomeState extends State<_WelcomeView> {
             _tripHistoryDetailChip(Icons.schedule_outlined, 'Shift', shiftTime),
             _tripHistoryDetailChip(
                 Icons.directions_car_outlined, 'Vehicle', vehicle),
-            _tripHistoryDetailChip(
-                Icons.format_list_numbered, 'Sequence', sequence),
+            // Sequence / PA order is meaningless under QR boarding
+            // (BoardingType == 3), so the chip is dropped in that mode only.
+            if (!_isQrBoarding)
+              _tripHistoryDetailChip(
+                  Icons.format_list_numbered, 'Sequence', sequence),
             _tripHistoryDetailChip(
                 Icons.swap_vert_circle_outlined, 'Type', tripTypeLabel),
             _tripHistoryDetailChip(Icons.info_outline, 'Status', statusLabel),
@@ -2950,43 +3211,55 @@ class _WelcomeState extends State<_WelcomeView> {
     // (gated by boardDebaordEnabledForUser) appears/hides correctly.
     return BlocBuilder<AppControlBloc, AppControlState>(
       builder: (context, _) {
-        return BlocBuilder<TripHomeBloc, TripHomeState>(
-          builder: (context, tripState) {
-            return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
-              builder: (context, scheduleState) {
-                return RefreshIndicator(
-                  // Re-fetch only the roster; the BlocListener<RosterBloc> chain
-                  // re-runs the rest (AppControl + UserAppConfig → TripHome +
-                  // ScheduleHome). The returned Future keeps this single spinner
-                  // up until the trips + schedules have finished reloading.
-                  onRefresh: _refreshHomeData,
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.only(bottom: 200),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          // child: Center(
-                          //   child: Text(
-                          //     'Schedules',
-                          //     style: TextStyle(
-                          //       fontSize: 18,
-                          //       fontWeight: FontWeight.w600,
-                          //       color: Color(0xFF222222),
-                          //     ),
-                          //   ),
-                          // ),
-                        ),
-                        _buildHomeTripAndScheduleBody(
-                          context,
-                          tripState,
-                          scheduleState,
-                        ),
-                      ],
-                    ),
-                  ),
+        // UserAppConfig + Roster are also watched so the trip-card shimmer
+        // clears the moment the last gating response lands (and so the gated
+        // OTP / Seq / Scan-QR branches repaint with the real config).
+        return BlocBuilder<UserAppConfigBloc, UserAppConfigState>(
+          builder: (context, __) {
+            return BlocBuilder<RosterBloc, RosterState>(
+              builder: (context, ___) {
+                return BlocBuilder<TripHomeBloc, TripHomeState>(
+                  builder: (context, tripState) {
+                    return BlocBuilder<ScheduleHomeBloc, ScheduleHomeState>(
+                      builder: (context, scheduleState) {
+                        return RefreshIndicator(
+                          // Re-fetch only the roster; the BlocListener<RosterBloc>
+                          // chain re-runs the rest (AppControl + UserAppConfig →
+                          // TripHome + ScheduleHome). The returned Future keeps
+                          // this single spinner up until the trips + schedules
+                          // have finished reloading.
+                          onRefresh: _refreshHomeData,
+                          child: SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(bottom: 200),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  // child: Center(
+                                  //   child: Text(
+                                  //     'Schedules',
+                                  //     style: TextStyle(
+                                  //       fontSize: 18,
+                                  //       fontWeight: FontWeight.w600,
+                                  //       color: Color(0xFF222222),
+                                  //     ),
+                                  //   ),
+                                  // ),
+                                ),
+                                _buildHomeTripAndScheduleBody(
+                                  context,
+                                  tripState,
+                                  scheduleState,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
                 );
               },
             );
@@ -3049,19 +3322,47 @@ class _WelcomeState extends State<_WelcomeView> {
         ? scheduleState.groups
         : (_isRefreshing ? _lastScheduleGroups : null);
 
-    // Only treat a section as "loading" (i.e. show its loader) when we have no
-    // cached groups to display in its place.
-    final tripLoading = tripLoadingRaw && tripGroups == null;
-    final scheduleLoading = scheduleLoadingRaw && scheduleGroups == null;
+    // Both card types read the same AppControl / UserAppConfiguration gates for
+    // their Boarding/Deboard OTP fields, Seq label and Scan-QR CTA. Those gates
+    // fall back to `?? true` while unloaded, so painting a card before the config
+    // lands shows an OTP field that then vanishes the moment it arrives — the
+    // flicker. Hold the skeleton until the gating responses have settled.
+    //
+    // Deliberately NOT combined with `groups == null`: the trips/schedules
+    // responses usually win the race against the config, so gating on "no data
+    // yet" would let a card through while the config was still in flight. Pending
+    // config suppresses the card even when its own data is already here.
+    //
+    // Two exemptions keep the skeleton from outliving anything:
+    //   • `!_isRefreshing` — on pull-to-refresh the retained cards stay put under
+    //     the single RefreshIndicator instead of collapsing to a skeleton.
+    //   • a section's own FAILURE wins, so a retry card is never hidden behind a
+    //     skeleton that is only waiting on a gating response.
+    final tripFailed = tripGroups == null && tripState is TripHomeError;
+    final scheduleFailed =
+        scheduleGroups == null && scheduleState is ScheduleHomeError;
+    final configPending = _tripGatingConfigPending && !_isRefreshing;
+
+    // Only treat a section as "loading" (i.e. show its skeleton) when we have no
+    // cached groups to display in its place, or its gating config is still due.
+    final tripLoading = (tripLoadingRaw && tripGroups == null) ||
+        (configPending && !tripFailed);
+    final scheduleLoading = (scheduleLoadingRaw && scheduleGroups == null) ||
+        (configPending && !scheduleFailed);
 
     if (tripLoading && scheduleLoading) {
-      return _buildSectionLoader();
+      return const Padding(
+        padding: EdgeInsets.only(top: 4),
+        child: _TripListShimmer(),
+      );
     }
 
     final children = <Widget>[];
 
     if (tripLoading) {
-      children.add(_buildSectionLoader(compact: true));
+      children.add(_buildSubsectionLabel('Active Trips'));
+      children.add(const _TripListShimmer(count: 1));
+      children.add(const SizedBox(height: 16));
     } else if (tripGroups == null && tripState is TripHomeError) {
       children.add(
         _buildSchedulesEmptyState(
@@ -3097,7 +3398,8 @@ class _WelcomeState extends State<_WelcomeView> {
     }
 
     if (scheduleLoading) {
-      children.add(_buildSectionLoader(compact: true));
+      children.add(_buildSubsectionLabel('Scheduled'));
+      children.add(const _TripListShimmer(count: 1));
     } else if (scheduleGroups == null && scheduleState is ScheduleHomeError) {
       children.add(
         _buildSchedulesEmptyState(
@@ -3713,10 +4015,8 @@ class _WelcomeState extends State<_WelcomeView> {
     // UserAppConfiguration highest-priority gate: when
     // isCancelledScheduledAllowedAfterTAT is `false` the after-TAT behaviour is
     // fully disabled, ignoring the AppControl/TAT flag entirely.
-    final appControlState = context.read<AppControlBloc>().state;
     final bool cancelScheduleAfterTAT = _gateScheduleCancelAfterTAT &&
-        appControlState is AppControlLoaded &&
-        appControlState.settings.isCancelScheduleByUserAfterTAT;
+        (_appControlSettings?.isCancelScheduleByUserAfterTAT ?? false);
     bool hasText(String? v) => v != null && v.trim().isNotEmpty;
 
     // Counter that is unique across every group so each schedule card gets its
@@ -3869,8 +4169,6 @@ class _WelcomeState extends State<_WelcomeView> {
     // (noshow first, then cancelled), regardless of the AppControl
     // isCancelScheduleByUserAfterTAT flag (`true` OR `false`). When neither is
     // present the label comes straight from tripStatusName.
-    final appControlState = context.read<AppControlBloc>().state;
-
     bool isNotEmpty(String? v) => v != null && v.trim().isNotEmpty;
 
     final String? tripStatusName = item.tripStatusName;
@@ -3919,8 +4217,7 @@ class _WelcomeState extends State<_WelcomeView> {
     // Per-location AppControl flag (isCancelScheduleByUserAfterTAT), read raw
     // (independent of the UserAppConfiguration after-TAT gate).
     final bool isCancelScheduleByUserAfterTAT =
-        appControlState is AppControlLoaded &&
-            appControlState.settings.isCancelScheduleByUserAfterTAT;
+        _appControlSettings?.isCancelScheduleByUserAfterTAT ?? false;
     // When this side is Cancelled (Login/LogoutCancelled non-empty), the action
     // buttons are always driven purely by ButtonUiConfig — the Cancelled /
     // No-Show "hide all actions" override is ignored for this card.
@@ -4183,7 +4480,9 @@ class _WelcomeState extends State<_WelcomeView> {
                 ),
               ],
               // ─── Boarding OTP (hidden when "Scheduled") ───────────────────
-              if (!isScheduled) ...[
+              // Also hidden under QR boarding (BoardingType == 3), which has no
+              // OTP — the "Scan QR" CTA below replaces it.
+              if (!isScheduled && !_isQrBoarding) ...[
                 const SizedBox(height: 14),
                 Container(
                   width: double.infinity,
@@ -4366,46 +4665,51 @@ class _WelcomeState extends State<_WelcomeView> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Boarding OTP',
-                            style: TextStyle(
-                              fontSize: 9,
-                              color: Color(0xFF282828),
-                              fontWeight: FontWeight.w700,
+                    // No OTP under QR boarding (BoardingType == 3); a Spacer
+                    // keeps Track Vehicle right-aligned.
+                    if (_isQrBoarding)
+                      const Spacer()
+                    else
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Boarding OTP',
+                              style: TextStyle(
+                                fontSize: 9,
+                                color: Color(0xFF282828),
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: otpDigits
-                                .map(
-                                  (digit) => Container(
-                                    margin: const EdgeInsets.only(right: 6),
-                                    width: 23,
-                                    height: 23,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFE6F3ED),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      digit,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF002D1C),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: otpDigits
+                                  .map(
+                                    (digit) => Container(
+                                      margin: const EdgeInsets.only(right: 6),
+                                      width: 23,
+                                      height: 23,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFE6F3ED),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        digit,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF002D1C),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ],
+                                  )
+                                  .toList(),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                     if (showTrackButton)
                       Transform.translate(
                         offset: const Offset(0.0, 10.0),
@@ -4493,10 +4797,8 @@ class _WelcomeState extends State<_WelcomeView> {
     //     `isTripCancellationButtonShow` flag.
     // Both may appear at once (mirrors the schedule-card button model). When
     // absent, the config/gate defaults hide each button.
-    final appControlStateForCancel = context.read<AppControlBloc>().state;
     final bool isCancelTripByUserAfterTAT =
-        appControlStateForCancel is AppControlLoaded &&
-            appControlStateForCancel.settings.isCancelTripByUserAfterTAT;
+        _appControlSettings?.isCancelTripByUserAfterTAT ?? false;
     final bool showTripNoShowButton = _gateTripNoShow &&
         isCancelTripByUserAfterTAT &&
         (item.tripButtonUiConfig?.isTripNoShowButtonShow ?? false);
@@ -4535,9 +4837,14 @@ class _WelcomeState extends State<_WelcomeView> {
     final vehicleLabel = (item.vehicleInfo?.trim().isNotEmpty ?? false)
         ? item.vehicleInfo!.trim()
         : 'Not assigned';
-    final seqLabel = (item.paxOrder != null && item.paxCount != null)
-        ? 'Seq: ${item.paxOrder}/${item.paxCount}'
-        : null;
+    // Sequence / PA order is meaningless under QR boarding (BoardingType == 3):
+    // a null label makes the existing `if (seqLabel != null)` branch below skip
+    // the row for every trip status (Printed included). Other boarding types are
+    // unaffected.
+    final seqLabel =
+        (!_isQrBoarding && item.paxOrder != null && item.paxCount != null)
+            ? 'Seq: ${item.paxOrder}/${item.paxCount}'
+            : null;
     final ivr = item.userAppIvrNumber?.trim();
 
     final bool isPrinted =
@@ -4550,9 +4857,7 @@ class _WelcomeState extends State<_WelcomeView> {
     //   - boardDebaordEnabledForUser == false -> show as soon as requested.
     //   - boardDebaordEnabledForUser == true  -> show only after the user has
     //     both boarded and deboarded.
-    final appControlState = context.read<AppControlBloc>().state;
-    final bool boardDeboardEnabled = appControlState is AppControlLoaded &&
-        appControlState.settings.boardDebaordEnabledForUser;
+    final bool boardDeboardEnabled = _boardDeboardEnabled;
     // UserAppConfiguration highest-priority gate: hide Safe Home Reach entirely
     // when isTripSafeHomeReach is `false`, ignoring the conditions below.
     final bool showSafeHomeReachButton = _gateTripSafeHomeReach &&
@@ -4586,6 +4891,8 @@ class _WelcomeState extends State<_WelcomeView> {
               tripId: item.tripId,
               userName: item.userName,
               boardingOtp: item.otp,
+              // TransportType == 2 -> the dedicated shuttle tracking screen.
+              isShuttle: item.isShuttle,
             );
 
     return Container(
@@ -4895,7 +5202,10 @@ class _WelcomeState extends State<_WelcomeView> {
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => TripSummaryWelcomeScreen(item: item),
+                        builder: (_) => TripSummaryWelcomeScreen(
+                          item: item,
+                          isQrBoarding: _isQrBoarding,
+                        ),
                       ),
                     ),
                     child: Container(
@@ -4968,7 +5278,10 @@ class _WelcomeState extends State<_WelcomeView> {
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => TripSummaryWelcomeScreen(item: item),
+                        builder: (_) => TripSummaryWelcomeScreen(
+                          item: item,
+                          isQrBoarding: _isQrBoarding,
+                        ),
                       ),
                     ),
                     child: Container(
@@ -5092,7 +5405,11 @@ class _WelcomeState extends State<_WelcomeView> {
                 // When the trip is "Started", show the Boarding OTP together
                 // with the Deboard OTP. In all other (non fully-deboarded)
                 // states, show the single relevant OTP field.
-                if (!isFullyDeboarded) ...[
+                //
+                // QR boarding (BoardingType == 3) has no OTP at all, so the
+                // whole block is skipped — the "Scan QR" CTA in the action row
+                // replaces it.
+                if (!isFullyDeboarded && !_isQrBoarding) ...[
                   const SizedBox(height: 14),
                   if (item.isStarted)
                     Row(
@@ -5355,67 +5672,26 @@ class _WelcomeState extends State<_WelcomeView> {
                 !isPrinted &&
                 !isCancelledOrNoShow) ...[
               // ─── Collapsed: Boarding OTP + Track Vehicle ─
+              // QR boarding (BoardingType == 3) shows "Scan QR" in place of the
+              // OTP digits, alongside Track Vehicle. Once the passenger has
+              // boarded the CTA becomes "Deboard" (mirroring the expanded card),
+              // since deboarding is not a QR action. There is still no OTP to
+              // show under QR boarding in either state.
               const SizedBox(height: 12),
               Container(height: 1, color: const Color(0xFFE8E8E8)),
               const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.only(left: 30.0),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    // UserAppConfiguration highest-priority gate: when this is
-                    // the Deboard OTP field (isBoardedNotDeboarded) hide it if
-                    // isDeboardOtpFieldAllowed is `false`; a Spacer keeps the
-                    // Track Vehicle button right-aligned.
-                    if (!item.isBoardedNotDeboarded || _gateDeboardOtpField)
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.isBoardedNotDeboarded
-                                  ? 'Deboard OTP'
-                                  : 'Boarding OTP',
-                              style: const TextStyle(
-                                fontSize: 9,
-                                color: Color(0xFF282828),
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Row(
-                              children: otpDigits
-                                  .map(
-                                    (digit) => Container(
-                                      margin: const EdgeInsets.only(right: 6),
-                                      width: 23,
-                                      height: 23,
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFE6F3ED),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        digit,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF002D1C),
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
+              if (_isQrBoarding)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      if (_showScanQrFor(item))
+                        _buildScanQrButton(item, compact: true)
+                      else if (_showQrDeboardFor(item))
+                        _buildCompactDeboardButton(item),
                       const Spacer(),
-                    if (_gateTripTracking && !isFullyDeboarded)
-                      Transform.translate(
-                        offset: const Offset(0.0, 10.0),
-                        child: GestureDetector(
+                      if (_gateTripTracking && !isFullyDeboarded)
+                        GestureDetector(
                           onTap: trackVehicleAction,
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -5442,10 +5718,99 @@ class _WelcomeState extends State<_WelcomeView> {
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(left: 30.0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // UserAppConfiguration highest-priority gate: when this is
+                      // the Deboard OTP field (isBoardedNotDeboarded) hide it if
+                      // isDeboardOtpFieldAllowed is `false`; a Spacer keeps the
+                      // Track Vehicle button right-aligned.
+                      if (!item.isBoardedNotDeboarded || _gateDeboardOtpField)
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.isBoardedNotDeboarded
+                                    ? 'Deboard OTP'
+                                    : 'Boarding OTP',
+                                style: const TextStyle(
+                                  fontSize: 9,
+                                  color: Color(0xFF282828),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: otpDigits
+                                    .map(
+                                      (digit) => Container(
+                                        margin: const EdgeInsets.only(right: 6),
+                                        width: 23,
+                                        height: 23,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFE6F3ED),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: Text(
+                                          digit,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF002D1C),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        const Spacer(),
+                      if (_gateTripTracking && !isFullyDeboarded)
+                        Transform.translate(
+                          offset: const Offset(0.0, 10.0),
+                          child: GestureDetector(
+                            onTap: trackVehicleAction,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: tagBgColor,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.my_location,
+                                      size: 16, color: accentColor),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Track Vehicle',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: accentColor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
               const SizedBox(height: 8),
             ],
           ],
@@ -9289,6 +9654,218 @@ class _SosHoldButtonState extends State<_SosHoldButton>
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Trip card shimmer (loading skeleton) ────────────────────────────────────
+
+/// Drives a left-to-right shimmer sweep over its [child].
+///
+/// The child is painted as the shimmer *mask*: every opaque pixel it draws is
+/// replaced by the moving gradient, so the skeleton shapes below only need to
+/// describe their geometry — their colour is irrelevant.
+class _Shimmer extends StatefulWidget {
+  const _Shimmer({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_Shimmer> createState() => _ShimmerState();
+}
+
+class _ShimmerState extends State<_Shimmer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..repeat();
+
+  static const Color _base = Color(0xFFE8EAE9);
+  static const Color _highlight = Color(0xFFF6F8F7);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        // Sweep the gradient from fully off-screen left to fully off-screen
+        // right so the highlight enters and exits cleanly.
+        final t = _controller.value * 2 - 1;
+        return ShaderMask(
+          blendMode: BlendMode.srcIn,
+          shaderCallback: (bounds) => LinearGradient(
+            begin: Alignment(t - 0.3, 0),
+            end: Alignment(t + 0.3, 0),
+            colors: const [_base, _highlight, _base],
+            stops: const [0.0, 0.5, 1.0],
+          ).createShader(bounds),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+/// A single solid block in a skeleton layout. Colour is supplied by [_Shimmer]'s
+/// mask, so only the geometry matters here.
+class _SkeletonBox extends StatelessWidget {
+  const _SkeletonBox({
+    required this.height,
+    this.width,
+    this.radius = 6,
+  });
+
+  final double height;
+  final double? width;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(radius),
+      ),
+    );
+  }
+}
+
+/// Placeholder mirroring the collapsed `_buildTripCard` layout — accent rail,
+/// trip-type tag + status pill, route rows and the pickup/vehicle strip — so the
+/// swap to real content does not jump.
+class _TripCardShimmer extends StatelessWidget {
+  const _TripCardShimmer();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: const Border(
+          left: BorderSide(color: Color(0xFFE0E3E2), width: 4),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        child: _Shimmer(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Trip type tag + status pill.
+              const Row(
+                children: [
+                  _SkeletonBox(width: 74, height: 22, radius: 11),
+                  Spacer(),
+                  _SkeletonBox(width: 92, height: 22, radius: 11),
+                ],
+              ),
+              const SizedBox(height: 18),
+              // Route: pickup / drop lines.
+              const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _SkeletonBox(width: 19, height: 74, radius: 10),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SkeletonBox(width: 54, height: 9),
+                        SizedBox(height: 8),
+                        _SkeletonBox(height: 13),
+                        SizedBox(height: 22),
+                        _SkeletonBox(width: 44, height: 9),
+                        SizedBox(height: 8),
+                        _SkeletonBox(height: 13),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(height: 1, color: Colors.white),
+              const SizedBox(height: 14),
+              // Planned pickup / vehicle strip.
+              const Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SkeletonBox(width: 78, height: 9),
+                        SizedBox(height: 8),
+                        _SkeletonBox(width: 58, height: 13),
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SkeletonBox(width: 60, height: 9),
+                        SizedBox(height: 8),
+                        _SkeletonBox(width: 88, height: 13),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // Primary CTA row.
+              const Row(
+                children: [
+                  Expanded(child: _SkeletonBox(height: 40, radius: 8)),
+                  SizedBox(width: 10),
+                  _SkeletonBox(width: 40, height: 40, radius: 8),
+                  SizedBox(width: 10),
+                  _SkeletonBox(width: 40, height: 40, radius: 8),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Stack of [_TripCardShimmer]s shown in place of the trips list while the first
+/// load (trips + the configs that gate their contents) is still in flight.
+class _TripListShimmer extends StatelessWidget {
+  const _TripListShimmer({this.count = 2});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (var i = 0; i < count; i++) ...[
+          const _TripCardShimmer(),
+          if (i != count - 1) const SizedBox(height: 12),
+        ],
+      ],
     );
   }
 }
